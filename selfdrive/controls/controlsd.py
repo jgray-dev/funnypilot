@@ -67,12 +67,6 @@ class Controls(ControlsExt):
     self.curvature = 0.0
     self.desired_curvature = 0.0
 
-    # FunnyPilot: Policy interpolation buffer (5Hz -> 20Hz)
-    self.policy_curvature_buffer = [0.0, 0.0]  # [previous, current] policy outputs
-    self.policy_update_counter = 0
-    self.interpolate_policy = False
-    self.last_model_mono_time = 0
-
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
 
@@ -158,29 +152,7 @@ class Controls(ControlsExt):
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    raw_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
-
-    # FunnyPilot: Policy interpolation - smooth 5Hz policy outputs to 20Hz
-    # Check if we should interpolate based on software delay
-    software_delay = float(self.params.get("LagdToggleDelay", encoding='utf-8')) if not self.params.get_bool("LagdToggle") else 0.2
-    self.interpolate_policy = software_delay >= 0.2  # Need at least 0.2s for proper interpolation
-
-    # Detect new policy output (modelV2 updates at 5Hz = every 4 control cycles at 20Hz)
-    if self.sm.logMonoTime['modelV2'] != self.last_model_mono_time:
-      self.last_model_mono_time = self.sm.logMonoTime['modelV2']
-      self.policy_curvature_buffer[0] = self.policy_curvature_buffer[1]  # Previous
-      self.policy_curvature_buffer[1] = raw_desired_curvature  # Current
-      self.policy_update_counter = 0
-
-    # Interpolate between policy outputs if enabled
-    if self.interpolate_policy and CC.latActive:
-      # Linear interpolation over 4 cycles (200ms at 20Hz = 5Hz policy rate)
-      alpha = min(self.policy_update_counter / 4.0, 1.0)
-      new_desired_curvature = self.policy_curvature_buffer[0] * (1.0 - alpha) + self.policy_curvature_buffer[1] * alpha
-      self.policy_update_counter += 1
-    else:
-      new_desired_curvature = raw_desired_curvature
-
+    new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
