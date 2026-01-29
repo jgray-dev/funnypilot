@@ -41,15 +41,37 @@ class Controls(ControlsExt):
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.CP_SP)
 
-    self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
-                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'liveDelay'] + self.sm_services_ext,
-                                  poll='selfdriveState')
+    self.sm = messaging.SubMaster(
+      [
+        'liveDelay',
+        'liveParameters',
+        'liveTorqueParameters',
+        'modelV2',
+        'selfdriveState',
+        'liveCalibration',
+        'livePose',
+        'longitudinalPlan',
+        'carState',
+        'carOutput',
+        'driverMonitoringState',
+        'onroadEvents',
+        'driverAssistance',
+        'liveDelay',
+      ]
+      + self.sm_services_ext,
+      poll='selfdriveState',
+    )
     self.pm = messaging.PubMaster(['carControl', 'controlsState'] + self.pm_services_ext)
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+
+    # FunnyPilot: Policy interpolation buffer (5Hz -> 20Hz)
+    self.policy_curvature_buffer = [0.0, 0.0]  # [previous, current] policy outputs
+    self.policy_update_counter = 0
+    self.interpolate_policy = False
+    self.last_model_mono_time = 0
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -88,8 +110,9 @@ class Controls(ControlsExt):
     if self.CP.lateralTuning.which() == 'torque':
       torque_params = self.sm['liveTorqueParameters']
       if self.sm.all_checks(['liveTorqueParameters']) and torque_params.useParams:
-        self.LaC.update_live_torque_params(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered,
-                                           torque_params.frictionCoefficientFiltered)
+        self.LaC.update_live_torque_params(
+          torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered, torque_params.frictionCoefficientFiltered
+        )
 
         self.LaC.extension.update_limits()
 
@@ -109,10 +132,12 @@ class Controls(ControlsExt):
     # Get which state to use for active lateral control
     _lat_active = self.get_lat_active(self.sm)
 
-    CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
-                   (not standstill or self.CP.steerAtStandstill)
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
-                    (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
+    CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and (not standstill or self.CP.steerAtStandstill)
+    CC.longActive = (
+      CC.enabled
+      and not any(e.overrideLongitudinal for e in self.sm['onroadEvents'])
+      and (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
+    )
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -133,14 +158,36 @@ class Controls(ControlsExt):
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+    raw_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+
+    # FunnyPilot: Policy interpolation - smooth 5Hz policy outputs to 20Hz
+    # Check if we should interpolate based on software delay
+    software_delay = float(self.params.get("LagdToggleDelay", encoding='utf-8')) if not self.params.get_bool("LagdToggle") else 0.2
+    self.interpolate_policy = software_delay >= 0.2  # Need at least 0.2s for proper interpolation
+
+    # Detect new policy output (modelV2 updates at 5Hz = every 4 control cycles at 20Hz)
+    if self.sm.logMonoTime['modelV2'] != self.last_model_mono_time:
+      self.last_model_mono_time = self.sm.logMonoTime['modelV2']
+      self.policy_curvature_buffer[0] = self.policy_curvature_buffer[1]  # Previous
+      self.policy_curvature_buffer[1] = raw_desired_curvature  # Current
+      self.policy_update_counter = 0
+
+    # Interpolate between policy outputs if enabled
+    if self.interpolate_policy and CC.latActive:
+      # Linear interpolation over 4 cycles (200ms at 20Hz = 5Hz policy rate)
+      alpha = min(self.policy_update_counter / 4.0, 1.0)
+      new_desired_curvature = self.policy_curvature_buffer[0] * (1.0 - alpha) + self.policy_curvature_buffer[1] * alpha
+      self.policy_update_counter += 1
+    else:
+      new_desired_curvature = raw_desired_curvature
+
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
-    steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
-                                                       self.steer_limited_by_safety, self.desired_curvature,
-                                                       self.calibrated_pose, curvature_limited, lat_delay)
+    steer, steeringAngleDeg, lac_log = self.LaC.update(
+      CC.latActive, CS, self.VM, lp, self.steer_limited_by_safety, self.desired_curvature, self.calibrated_pose, curvature_limited, lat_delay
+    )
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
     # Ensure no NaNs/Infs
@@ -186,8 +233,7 @@ class Controls(ControlsExt):
     if self.sm['selfdriveState'].active:
       CO = self.sm['carOutput']
       if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
-        self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
-                                              STEER_ANGLE_SATURATION_THRESHOLD
+        self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > STEER_ANGLE_SATURATION_THRESHOLD
       else:
         self.steer_limited_by_safety = abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
 
@@ -207,8 +253,7 @@ class Controls(ControlsExt):
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
-                         (self.sm['selfdriveState'].state == State.softDisabling))
+    cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.0) or (self.sm['selfdriveState'].state == State.softDisabling))
 
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
