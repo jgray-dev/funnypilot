@@ -43,9 +43,14 @@ class DeviceStatus(Widget):
     self._version_text = self._get_version_text()
 
   def _get_version_text(self) -> str:
-    brand = "sunnypilot"
-    description = ui_state.params.get("UpdaterCurrentDescription")
-    return f"{brand} {description}" if description else brand
+    brand = "FunnyPilot"
+    # Read version from FUNNYPILOT_VERSION file
+    try:
+      with open("/data/openpilot/FUNNYPILOT_VERSION", "r") as f:
+        version = f.read().strip()
+      return f"{brand} {version}"
+    except:
+      return brand
 
   def _update_state(self):
     # TODO: refresh function that can be called periodically, not at 60 fps, so we can update version
@@ -61,20 +66,33 @@ class DeviceStatus(Widget):
   def _render(self, _):
     # draw status
     status_rect = rl.Rectangle(self._rect.x, self._rect.y, self._rect.width, 40)
-    gui_label(status_rect, self._system_status, font_size=HEAD_BUTTON_FONT_SIZE, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.BOLD, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+    gui_label(
+      status_rect,
+      self._system_status,
+      font_size=HEAD_BUTTON_FONT_SIZE,
+      color=DEFAULT_TEXT_COLOR,
+      font_weight=FontWeight.BOLD,
+      alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
+    )
 
     # draw network status
     network_rect = rl.Rectangle(self._rect.x, self._rect.y + 60, self._rect.width, 40)
-    gui_label(network_rect, self._network_status, font_size=40, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.MEDIUM, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+    gui_label(
+      network_rect, self._network_status, font_size=40, color=DEFAULT_TEXT_COLOR, font_weight=FontWeight.MEDIUM, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER
+    )
 
     # draw version
     version_font_size = 30
     version_rect = rl.Rectangle(self._rect.x, self._rect.y + 140, self._rect.width + 20, 40)
     wrapped_text = '\n'.join(wrap_text(self._version_text, version_font_size, version_rect.width))
-    gui_label(version_rect, wrapped_text, font_size=version_font_size, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.MEDIUM, alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
+    gui_label(
+      version_rect,
+      wrapped_text,
+      font_size=version_font_size,
+      color=DEFAULT_TEXT_COLOR,
+      font_weight=FontWeight.MEDIUM,
+      alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT,
+    )
 
 
 class MiciHomeLayout(Widget):
@@ -109,7 +127,7 @@ class MiciHomeLayout(Widget):
     self._cell_high_txt = gui_app.texture("icons_mici/settings/network/cell_strength_high.png", 55, 35)
     self._cell_full_txt = gui_app.texture("icons_mici/settings/network/cell_strength_full.png", 55, 35)
 
-    self._openpilot_label = MiciLabel("sunnypilot", font_size=90, color=rl.Color(255, 255, 255, int(255 * 0.9)), font_weight=FontWeight.AUDIOWIDE)
+    self._openpilot_label = MiciLabel("FunnyPilot", font_size=90, color=rl.Color(255, 255, 255, int(255 * 0.9)), font_weight=FontWeight.AUDIOWIDE)
     self._version_label = MiciLabel("", font_size=36, font_weight=FontWeight.ROMAN)
     self._large_version_label = MiciLabel("", font_size=64, color=rl.GRAY, font_weight=FontWeight.ROMAN)
     self._date_label = MiciLabel("", font_size=36, color=rl.GRAY, font_weight=FontWeight.ROMAN)
@@ -218,48 +236,50 @@ class MiciHomeLayout(Widget):
     last_x = self.rect.x + HOME_PADDING
 
     # Draw settings icon in bottom left corner
-    rl.draw_texture(self._settings_txt, int(last_x), int(self._rect.y + self.rect.height - self._settings_txt.height / 2 - Y_CENTER),
-                    rl.Color(255, 255, 255, int(255 * 0.9)))
+    rl.draw_texture(
+      self._settings_txt, int(last_x), int(self._rect.y + self.rect.height - self._settings_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, int(255 * 0.9))
+    )
     last_x = last_x + self._settings_txt.width + ITEM_SPACING
 
     # draw network
     if self._net_type == NetworkType.wifi:
       # There is no 1
-      draw_net_txt = {0: self._wifi_none_txt,
-                      2: self._wifi_low_txt,
-                      3: self._wifi_medium_txt,
-                      4: self._wifi_full_txt,
-                      5: self._wifi_full_txt}.get(self._net_strength, self._wifi_low_txt)
-      rl.draw_texture(draw_net_txt, int(last_x),
-                      int(self._rect.y + self.rect.height - draw_net_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, int(255 * 0.9)))
+      draw_net_txt = {0: self._wifi_none_txt, 2: self._wifi_low_txt, 3: self._wifi_medium_txt, 4: self._wifi_full_txt, 5: self._wifi_full_txt}.get(
+        self._net_strength, self._wifi_low_txt
+      )
+      rl.draw_texture(
+        draw_net_txt, int(last_x), int(self._rect.y + self.rect.height - draw_net_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, int(255 * 0.9))
+      )
       last_x += draw_net_txt.width + ITEM_SPACING
 
     elif self._net_type in (NetworkType.cell2G, NetworkType.cell3G, NetworkType.cell4G, NetworkType.cell5G):
-      draw_net_txt = {0: self._cell_none_txt,
-                      2: self._cell_low_txt,
-                      3: self._cell_medium_txt,
-                      4: self._cell_high_txt,
-                      5: self._cell_full_txt}.get(self._net_strength, self._cell_none_txt)
-      rl.draw_texture(draw_net_txt, int(last_x),
-                      int(self._rect.y + self.rect.height - draw_net_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, int(255 * 0.9)))
+      draw_net_txt = {0: self._cell_none_txt, 2: self._cell_low_txt, 3: self._cell_medium_txt, 4: self._cell_high_txt, 5: self._cell_full_txt}.get(
+        self._net_strength, self._cell_none_txt
+      )
+      rl.draw_texture(
+        draw_net_txt, int(last_x), int(self._rect.y + self.rect.height - draw_net_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, int(255 * 0.9))
+      )
       last_x += draw_net_txt.width + ITEM_SPACING
 
     else:
       # No network
       # Offset by difference in height between slashless and slash icons to make center align match
-      rl.draw_texture(self._wifi_slash_txt, int(last_x), int(self._rect.y + self.rect.height - self._wifi_slash_txt.height / 2 -
-                                                             (self._wifi_slash_txt.height - self._wifi_none_txt.height) / 2 - Y_CENTER),
-                      rl.Color(255, 255, 255, 255))
+      rl.draw_texture(
+        self._wifi_slash_txt,
+        int(last_x),
+        int(self._rect.y + self.rect.height - self._wifi_slash_txt.height / 2 - (self._wifi_slash_txt.height - self._wifi_none_txt.height) / 2 - Y_CENTER),
+        rl.Color(255, 255, 255, 255),
+      )
       last_x += self._wifi_slash_txt.width + ITEM_SPACING
 
     # draw experimental icon
     if self._experimental_mode:
-      rl.draw_texture(self._experimental_txt, int(last_x),
-                      int(self._rect.y + self.rect.height - self._experimental_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, 255))
+      rl.draw_texture(
+        self._experimental_txt, int(last_x), int(self._rect.y + self.rect.height - self._experimental_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, 255)
+      )
       last_x += self._experimental_txt.width + ITEM_SPACING
 
     # draw microphone icon when recording audio is enabled
     if ui_state.recording_audio:
-      rl.draw_texture(self._mic_txt, int(last_x),
-                      int(self._rect.y + self.rect.height - self._mic_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, 255))
+      rl.draw_texture(self._mic_txt, int(last_x), int(self._rect.y + self.rect.height - self._mic_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, 255))
       last_x += self._mic_txt.width + ITEM_SPACING

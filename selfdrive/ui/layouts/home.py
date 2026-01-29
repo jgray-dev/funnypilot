@@ -104,24 +104,18 @@ class HomeLayout(Widget):
       self._render_alerts_view()
 
   def _update_state(self):
-    self.header_rect = rl.Rectangle(
-      self._rect.x + CONTENT_MARGIN, self._rect.y + CONTENT_MARGIN, self._rect.width - 2 * CONTENT_MARGIN, HEADER_HEIGHT
-    )
+    self.header_rect = rl.Rectangle(self._rect.x + CONTENT_MARGIN, self._rect.y + CONTENT_MARGIN, self._rect.width - 2 * CONTENT_MARGIN, HEADER_HEIGHT)
 
     content_y = self._rect.y + CONTENT_MARGIN + HEADER_HEIGHT + SPACING
     content_height = self._rect.height - CONTENT_MARGIN - HEADER_HEIGHT - SPACING - CONTENT_MARGIN
 
-    self.content_rect = rl.Rectangle(
-      self._rect.x + CONTENT_MARGIN, content_y, self._rect.width - 2 * CONTENT_MARGIN, content_height
-    )
+    self.content_rect = rl.Rectangle(self._rect.x + CONTENT_MARGIN, content_y, self._rect.width - 2 * CONTENT_MARGIN, content_height)
 
     left_width = self.content_rect.width - RIGHT_COLUMN_WIDTH - SPACING
 
     self.left_column_rect = rl.Rectangle(self.content_rect.x, self.content_rect.y, left_width, self.content_rect.height)
 
-    self.right_column_rect = rl.Rectangle(
-      self.content_rect.x + left_width + SPACING, self.content_rect.y, RIGHT_COLUMN_WIDTH, self.content_rect.height
-    )
+    self.right_column_rect = rl.Rectangle(self.content_rect.x + left_width + SPACING, self.content_rect.y, RIGHT_COLUMN_WIDTH, self.content_rect.height)
 
     self.update_notif_rect.x = self.header_rect.x
     self.update_notif_rect.y = self.header_rect.y + (self.header_rect.height - 60) // 2
@@ -175,8 +169,9 @@ class HomeLayout(Widget):
     if self.update_available or self.alert_count > 0:
       version_text_width -= SPACING * 1.5
 
-    version_rect = rl.Rectangle(self.header_rect.x + self.header_rect.width - version_text_width, self.header_rect.y,
-                                version_text_width, self.header_rect.height)
+    version_rect = rl.Rectangle(
+      self.header_rect.x + self.header_rect.width - version_text_width, self.header_rect.y, version_text_width, self.header_rect.height
+    )
     gui_label(version_rect, self._version_text, 48, rl.WHITE, alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
   def _render_home_content(self):
@@ -194,9 +189,7 @@ class HomeLayout(Widget):
 
   def _render_right_column(self):
     exp_height = 125
-    exp_rect = rl.Rectangle(
-      self.right_column_rect.x, self.right_column_rect.y, self.right_column_rect.width, exp_height
-    )
+    exp_rect = rl.Rectangle(self.right_column_rect.x, self.right_column_rect.y, self.right_column_rect.width, exp_height)
     self._exp_mode_button.render(exp_rect)
 
     setup_rect = rl.Rectangle(
@@ -227,6 +220,11 @@ class HomeLayout(Widget):
     self._prev_alerts_present = alerts_present
 
   def _get_version_text(self) -> str:
-    brand = "sunnypilot"
-    description = self.params.get("UpdaterCurrentDescription")
-    return f"{brand} {description}" if description else brand
+    brand = "FunnyPilot"
+    # Read version from FUNNYPILOT_VERSION file
+    try:
+      with open("/data/openpilot/FUNNYPILOT_VERSION", "r") as f:
+        version = f.read().strip()
+      return f"{brand} {version}"
+    except:
+      return brand
