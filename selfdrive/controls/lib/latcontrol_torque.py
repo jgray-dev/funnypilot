@@ -34,6 +34,7 @@ JERK_GAIN = 0.3
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 VERSION = 1
 
+
 class LatControlTorque(LatControl):
   def __init__(self, CP, CP_SP, CI, dt):
     super().__init__(CP, CP_SP, CI, dt)
@@ -57,8 +58,7 @@ class LatControlTorque(LatControl):
     self.update_limits()
 
   def update_limits(self):
-    self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
-                        self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
+    self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params), self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     # Override torque params from extension
@@ -103,16 +103,40 @@ class LatControlTorque(LatControl):
 
       # Lateral acceleration torque controller extension updates
       # Overrides pid_log.error and output_torque
-      pid_log, output_torque = self.extension.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
-                                                     future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
-                                                     desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
+      pid_log, output_torque = self.extension.update(
+        CS,
+        VM,
+        self.pid,
+        params,
+        ff,
+        pid_log,
+        setpoint,
+        measurement,
+        calibrated_pose,
+        roll_compensation,
+        future_desired_lateral_accel,
+        measurement,
+        lateral_accel_deadzone,
+        gravity_adjusted_future_lateral_accel,
+        desired_curvature,
+        measured_curvature,
+        steer_limited_by_safety,
+        output_torque,
+      )
+
+      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-10mph
+      # 0mph = 0% torque, 10mph+ = 100% torque (linear between)
+      speed_mph = CS.vEgo * 2.23694  # m/s to mph
+      if speed_mph < 10.0:
+        torque_scale = max(0.0, speed_mph / 10.0)  # Linear scaling 0.0 to 1.0
+        output_torque *= torque_scale
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)
       pid_log.i = float(self.pid.i)
       pid_log.d = float(self.pid.d)
       pid_log.f = float(self.pid.f)
-      pid_log.output = float(-output_torque) # TODO: log lat accel?
+      pid_log.output = float(-output_torque)  # TODO: log lat accel?
       pid_log.actualLateralAccel = float(measurement)
       pid_log.desiredLateralAccel = float(setpoint)
       pid_log.desiredLateralJerk = float(desired_lateral_jerk)

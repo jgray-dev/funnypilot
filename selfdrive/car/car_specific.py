@@ -29,9 +29,9 @@ class CarSpecificEvents:
 
     if self.CP.brand == 'chrysler':
       # Low speed steer alert hysteresis logic
-      if self.CP.minSteerSpeed > 0. and CS.vEgo < (self.CP.minSteerSpeed + 0.5):
+      if self.CP.minSteerSpeed > 0.0 and CS.vEgo < (self.CP.minSteerSpeed + 0.5):
         self.low_speed_alert = True
-      elif CS.vEgo > (self.CP.minSteerSpeed + 1.):
+      elif CS.vEgo > (self.CP.minSteerSpeed + 1.0):
         self.low_speed_alert = False
       if self.low_speed_alert:
         events.add(EventName.belowSteerSpeed)
@@ -44,10 +44,10 @@ class CarSpecificEvents:
         # we engage when pcm is active (rising edge)
         if CS.cruiseState.enabled and not CS_prev.cruiseState.enabled:
           events.add(EventName.pcmEnable)
-        elif not CS.cruiseState.enabled and (CC.actuators.accel >= 0. or not self.CP.openpilotLongitudinalControl):
+        elif not CS.cruiseState.enabled and (CC.actuators.accel >= 0.0 or not self.CP.openpilotLongitudinalControl):
           # it can happen that car cruise disables while comma system is enabled: need to
           # keep braking if needed or if the speed is very low
-          if CS.vEgo < self.CP.minEnableSpeed + 2.:
+          if CS.vEgo < self.CP.minEnableSpeed + 2.0:
             # non loud alert if cruise disables below 25mph as expected (+ a little margin)
             events.add(EventName.speedTooLow)
           else:
@@ -73,8 +73,7 @@ class CarSpecificEvents:
     elif self.CP.brand == 'gm':
       # Enabling at a standstill with brake is allowed
       # TODO: verify 17 Volt can enable for the first time at a stop and allow for all GMs
-      if CS.vEgo < self.CP.minEnableSpeed and not (CS.standstill and CS.brake >= 20 and
-                                                   self.CP.networkLocation == NetworkLocation.fwdCamera):
+      if CS.vEgo < self.CP.minEnableSpeed and not (CS.standstill and CS.brake >= 20 and self.CP.networkLocation == NetworkLocation.fwdCamera):
         events.add(EventName.belowEngageSpeed)
       if CS.cruiseState.standstill:
         events.add(EventName.resumeRequired)
@@ -104,8 +103,9 @@ class CarSpecificEvents:
 
     if CS.doorOpen:
       events.add(EventName.doorOpen)
-    if CS.seatbeltUnlatched:
-      events.add(EventName.seatbeltNotLatched)
+    # FunnyPilot: Disable seatbelt requirement - user prefers openpilot assistance when removing layers
+    # if CS.seatbeltUnlatched:
+    #   events.add(EventName.seatbeltNotLatched)
     if CS.gearShifter != GearShifter.drive and CS.gearShifter not in CI.DRIVABLE_GEARS:
       events.add(EventName.wrongGear)
     if CS.gearShifter == GearShifter.reverse:
