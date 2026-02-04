@@ -1,1 +1,25 @@
-0.9.4
+0.9.5
+
+CHANGELOG:
+==========
+v0.9.5 - Branch Reset & Improvements
+- HARD RESET from v0.9.4 (last known working codebase)
+- Smooth stop: Extended from 10mph to 20mph range, 5% torque per mph
+- Driver monitoring: Doubled all timeout values for less aggressive alerts
+
+BRANCHING POLICY (v0.9.5+):
+===========================
+All future versions MUST be created as new branches from the last stable version.
+To create a new version:
+  1. git checkout funnypilot-0.9.X  (current stable)
+  2. git checkout -b funnypilot-0.9.Y  (new version)
+  3. Make changes and commit
+  4. git push funnypilot funnypilot-0.9.Y
+  5. Update FUNNYPILOT_VERSION with new version number
+
+Previous versions:
+- v0.9.4: Fix calibration corruption issue
+- v0.9.3: HOTFIX - Revert policy interpolation
+- v0.9.2: Add policy model interpolation
+- v0.9.1: Add smooth stopping and safety improvements
+- v0.9.0: Clean fork from sunnypilot dev

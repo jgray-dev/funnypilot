@@ -124,11 +124,11 @@ class LatControlTorque(LatControl):
         output_torque,
       )
 
-      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-10mph
-      # 0mph = 0% torque, 10mph+ = 100% torque (linear between)
+      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-20mph
+      # 0mph = 0% torque, 20mph+ = 100% torque (5% per mph)
       speed_mph = CS.vEgo * 2.23694  # m/s to mph
-      if speed_mph < 10.0:
-        torque_scale = max(0.0, speed_mph / 10.0)  # Linear scaling 0.0 to 1.0
+      if speed_mph < 20.0:
+        torque_scale = max(0.0, speed_mph / 20.0)  # Linear scaling 0.0 to 1.0 (5% per mph)
         output_torque *= torque_scale
 
       pid_log.active = True
