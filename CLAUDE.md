@@ -15,9 +15,40 @@ All versions must be separate branches: `funnypilot-0.9.X`
 In each new branch, modify the CHANGELOG.md file to correspond to what was last modified in the version of the branch.
 Additionally, edit CLAUDE.md Key Files section to describe what changes and logic were implemented in what files.
 
+## Version Push Scripts
+
+Each version has a `PUSH<version>.sh` script (e.g., `PUSH096h.sh`) that pushes that specific version to the device.
+
+**Usage:**
+```bash
+./PUSH096h.sh
+```
+
+The script will:
+1. Verify you're on the correct branch
+2. Check for uncommitted changes
+3. Test SSH connection to the device
+4. Push code to the funnypilot remote
+5. Update device to the branch
+6. Verify FUNNYPILOT_VERSION matches
+7. Restart openpilot services
+
+**Creating a new push script for a new version:**
+```bash
+cp PUSH096h.sh PUSH<newversion>.sh
+# Edit the script to update BRANCH variable to the new branch name
+chmod +x PUSH<newversion>.sh
+```
+
 ## Key Files
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
+
+### v0.9.6h Changes (HOTFIX)
+
+- `selfdrive/ui/layouts/home.py` - Fixed version display to show both FunnyPilot and upstream sunnypilot versions
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Smart gas gating for speed limit reductions (coast to new speed BEFORE hitting the limit, accounts for offset, 2s buffer)
+- `selfdrive/controls/lib/latcontrol_torque.py` - Extended lane change torque ramping from 2.0s to 3.5s, gentler initial torque (40% instead of 50%)
 
 ### v0.9.6 Changes
 

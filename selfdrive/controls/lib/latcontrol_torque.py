@@ -54,8 +54,8 @@ class LatControlTorque(LatControl):
     # FunnyPilot: Lane change torque ramping state
     self.lane_change_torque_scale = 1.0
     self.lane_change_start_time = 0.0
-    self.lane_change_ramp_duration = 2.0  # 2 seconds
-    self.lane_change_min_scale = 0.5  # Start at 50%
+    self.lane_change_ramp_duration = 3.5  # 3.5 seconds (was 2.0) - v0.9.6h: More gradual highway lane changes
+    self.lane_change_min_scale = 0.4  # Start at 40% (was 50%) - Even gentler initial torque
     self.prev_lane_change_state = 0
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):

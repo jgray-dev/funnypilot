@@ -227,6 +227,22 @@ class HomeLayout(Widget):
     self._prev_alerts_present = alerts_present
 
   def _get_version_text(self) -> str:
-    brand = "sunnypilot"
-    description = self.params.get("UpdaterCurrentDescription")
-    return f"{brand} {description}" if description else brand
+    # FunnyPilot: Show both FunnyPilot version and upstream sunnypilot version
+    funnypilot_version = ""
+    try:
+      with open("/data/openpilot/FUNNYPILOT_VERSION", "r") as f:
+        funnypilot_version = f.read().strip()
+    except:
+      pass
+
+    # Get upstream sunnypilot version
+    upstream_description = self.params.get("UpdaterCurrentDescription")
+
+    if funnypilot_version and upstream_description:
+      return f"FunnyPilot {funnypilot_version} (sunnypilot {upstream_description})"
+    elif funnypilot_version:
+      return f"FunnyPilot {funnypilot_version}"
+    elif upstream_description:
+      return f"sunnypilot {upstream_description}"
+    else:
+      return "FunnyPilot"
