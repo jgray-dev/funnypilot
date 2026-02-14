@@ -1,3 +1,17 @@
+FunnyPilot v0.9.6 (2026-02-14)
+========================
+
+### Changes
+* Smooth Stop: Threshold reduced from 20mph to 15mph for earlier torque reduction
+* Driver Monitoring: Further relaxed to 3x original timeouts (90s passive, 33s active)
+* Longitudinal Acceleration: Capped at 70% for gentler throttle response
+* Lane Change: Gradual torque ramping (50% → 100% over 2s) for smoother maneuvers
+* Lead Vehicle Tracking: 5-frame moving average smoothing to reduce jitter
+* Smart Cruise Control: Early gas gating with coast priority
+  - SCC-V: Earlier detection (0.8 → 1.0 lat acc), gentler decel [0.0, -0.3, -0.6]
+  - SCC-M: Gentler jerk (-0.3), max decel (-0.6), earlier offset (2.0s)
+* Base: Rebased to sunnypilot dev 59ec39249 (v2026.02.14-4151)
+
 sunnypilot Version 2025.003.000 (20xx-xx-xx)
 ========================
 

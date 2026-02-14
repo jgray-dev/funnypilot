@@ -62,6 +62,11 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
 
+    # FunnyPilot: Additional smoothing buffers
+    self.vLead_buffer = deque(maxlen=5)  # 5 frames @ 20Hz = 0.25s
+    self.aLead_buffer = deque(maxlen=5)
+    self.dRel_buffer = deque(maxlen=3)  # 3 frames = 0.15s
+
   def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
@@ -77,6 +82,16 @@ class Track:
     self.vLeadK = float(self.kf.x[SPEED][0])
     self.aLeadK = float(self.kf.x[ACCEL][0])
 
+    # FunnyPilot: Apply moving average smoothing
+    self.vLead_buffer.append(self.vLeadK)
+    self.aLead_buffer.append(self.aLeadK)
+    self.dRel_buffer.append(d_rel)
+
+    # Calculate smoothed values
+    self.vLead_smooth = sum(self.vLead_buffer) / len(self.vLead_buffer) if len(self.vLead_buffer) >= 3 else self.vLeadK
+    self.aLead_smooth = sum(self.aLead_buffer) / len(self.aLead_buffer) if len(self.aLead_buffer) >= 3 else self.aLeadK
+    self.dRel_smooth = sum(self.dRel_buffer) / len(self.dRel_buffer) if len(self.dRel_buffer) >= 2 else d_rel
+
     # Learn if constant acceleration
     if abs(self.aLeadK) < 0.5:
       self.aLeadTau.x = _LEAD_ACCEL_TAU
@@ -86,13 +101,14 @@ class Track:
     self.cnt += 1
 
   def get_RadarState(self, model_prob: float = 0.0):
+    # FunnyPilot: Use smoothed values to reduce jitter
     return {
-      "dRel": float(self.dRel),
+      "dRel": float(self.dRel_smooth),
       "yRel": float(self.yRel),
       "vRel": float(self.vRel),
-      "vLead": float(self.vLead),
-      "vLeadK": float(self.vLeadK),
-      "aLeadK": float(self.aLeadK),
+      "vLead": float(self.vLead_smooth),
+      "vLeadK": float(self.vLead_smooth),
+      "aLeadK": float(self.aLead_smooth),
       "aLeadTau": float(self.aLeadTau.x),
       "status": True,
       "fcw": self.is_potential_fcw(model_prob),

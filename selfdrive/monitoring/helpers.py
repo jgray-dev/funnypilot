@@ -25,20 +25,20 @@ class DRIVER_MONITOR_SETTINGS:
   def __init__(self, device_type):
     self._DT_DMON = DT_DMON
     # ref (page15-16): https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:42018X1947&rid=2
-    # FunnyPilot: Doubled all timeouts for less aggressive monitoring
-    self._AWARENESS_TIME = 60.0  # passive wheeltouch total timeout (was 30.0)
-    self._AWARENESS_PRE_TIME_TILL_TERMINAL = 30.0  # was 15.0
-    self._AWARENESS_PROMPT_TIME_TILL_TERMINAL = 12.0  # was 6.0
-    self._DISTRACTED_TIME = 22.0  # active monitoring total timeout (was 11.0)
-    self._DISTRACTED_PRE_TIME_TILL_TERMINAL = 16.0  # was 8.0
-    self._DISTRACTED_PROMPT_TIME_TILL_TERMINAL = 12.0  # was 6.0
+    # FunnyPilot: Further relaxed driver monitoring (3x original values)
+    self._AWARENESS_TIME = 90.0  # passive wheeltouch total timeout (3x original 30.0)
+    self._AWARENESS_PRE_TIME_TILL_TERMINAL = 45.0  # 3x original 15.0
+    self._AWARENESS_PROMPT_TIME_TILL_TERMINAL = 18.0  # 3x original 6.0
+    self._DISTRACTED_TIME = 33.0  # active monitoring total timeout (3x original 11.0)
+    self._DISTRACTED_PRE_TIME_TILL_TERMINAL = 24.0  # 3x original 8.0
+    self._DISTRACTED_PROMPT_TIME_TILL_TERMINAL = 18.0  # 3x original 6.0
 
     self._FACE_THRESHOLD = 0.7
     self._EYE_THRESHOLD = 0.65
     self._SG_THRESHOLD = 0.9
-    self._BLINK_THRESHOLD = 0.925  # FunnyPilot: Less aggressive (was 0.865)
+    self._BLINK_THRESHOLD = 0.95  # FunnyPilot: Further relaxed for less aggressive detection
 
-    self._PHONE_THRESH = 0.85 if device_type == 'mici' else 0.5  # FunnyPilot: Less aggressive for drinking/eating
+    self._PHONE_THRESH = 0.90 if device_type == 'mici' else 0.6  # FunnyPilot: Higher threshold
     self._PHONE_THRESH2 = 15.0
     self._PHONE_MAX_OFFSET = 0.06
     self._PHONE_MIN_OFFSET = 0.025

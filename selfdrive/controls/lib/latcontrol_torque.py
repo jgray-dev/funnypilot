@@ -51,6 +51,13 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
+    # FunnyPilot: Lane change torque ramping state
+    self.lane_change_torque_scale = 1.0
+    self.lane_change_start_time = 0.0
+    self.lane_change_ramp_duration = 2.0  # 2 seconds
+    self.lane_change_min_scale = 0.5  # Start at 50%
+    self.prev_lane_change_state = 0
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
     self.torque_params.latAccelOffset = latAccelOffset
@@ -124,11 +131,30 @@ class LatControlTorque(LatControl):
         output_torque,
       )
 
-      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-20mph
-      # 0mph = 0% torque, 20mph+ = 100% torque (5% per mph)
+      # FunnyPilot: Lane change torque ramping
+      # Detect lane change from curvature + steering angle as proxy
+      import time
+      lane_change_active = abs(desired_curvature) > 0.01 and abs(CS.steeringAngleDeg) > 10
+
+      if lane_change_active and self.prev_lane_change_state == 0:
+        self.lane_change_start_time = time.monotonic()
+        self.prev_lane_change_state = 1
+
+      if lane_change_active:
+        elapsed = time.monotonic() - self.lane_change_start_time
+        ramp_progress = min(elapsed / self.lane_change_ramp_duration, 1.0)
+        self.lane_change_torque_scale = self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
+      else:
+        self.lane_change_torque_scale = 1.0
+        self.prev_lane_change_state = 0
+
+      output_torque *= self.lane_change_torque_scale
+
+      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
+      # 0mph = 0% torque, 15mph+ = 100% torque (6.67% per mph)
       speed_mph = CS.vEgo * 2.23694  # m/s to mph
-      if speed_mph < 20.0:
-        torque_scale = max(0.0, speed_mph / 20.0)  # Linear scaling 0.0 to 1.0 (5% per mph)
+      if speed_mph < 15.0:
+        torque_scale = max(0.0, speed_mph / 15.0)  # Linear scaling 0.0 to 1.0 (6.67% per mph)
         output_torque *= torque_scale
 
       pid_log.active = True
