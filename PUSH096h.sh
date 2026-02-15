@@ -52,7 +52,7 @@ git push funnypilot "$BRANCH:$BRANCH" --force
 
 echo ""
 echo "Step 3: Updating device to $BRANCH..."
-ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git checkout $BRANCH && git reset --hard origin/$BRANCH"
+ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH"
 
 echo ""
 echo "Step 4: Verifying FUNNYPILOT_VERSION..."
