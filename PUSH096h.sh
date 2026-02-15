@@ -69,7 +69,7 @@ fi
 
 echo ""
 echo "Step 5: Restarting openpilot services..."
-ssh "$DEVICE_USER@$DEVICE_IP" "sudo systemctl restart manager"
+ssh "$DEVICE_USER@$DEVICE_IP" "sudo systemctl restart comma"
 
 echo ""
 echo "========================================="
