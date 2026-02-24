@@ -49,11 +49,8 @@ class UIStateSP:
     else:
       self.sunnylink_state.stop()
 
-  def onroad_brightness_handle_alerts(self, _ui_state, alert):
-    if _ui_state.sm.recv_frame["carState"] < _ui_state.started_frame:
-      return
-
-    has_alert = _ui_state.started and self.onroad_brightness != OnroadBrightness.AUTO and alert is not None
+  def onroad_brightness_handle_alerts(self, started: bool, alert):
+    has_alert = started and self.onroad_brightness != OnroadBrightness.AUTO and alert is not None
 
     self.update_onroad_brightness(has_alert)
     if has_alert:
@@ -165,16 +162,14 @@ class DeviceSP:
       # For AUTO (Default) and Manual modes (while timer running), use standard brightness
       return cur_brightness
 
-    # 0: Auto (Default), 1: Auto (Dark), 2: Screen Off
+    # 0: Auto (Default), 1: Auto (Dark)
     if _ui_state.onroad_brightness == OnroadBrightness.AUTO:
       return cur_brightness
-    if _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK:
+    elif _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK:
       return cur_brightness
-    if _ui_state.onroad_brightness == OnroadBrightness.SCREEN_OFF:
-      return 0.0
 
-    # 3-22: 5% - 100%
-    return float((_ui_state.onroad_brightness - 2) * 5)
+    # 2-21: 5% - 100%
+    return float((_ui_state.onroad_brightness - 1) * 5)
 
   @staticmethod
   def set_min_onroad_brightness(_ui_state, min_brightness: int) -> int:

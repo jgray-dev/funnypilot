@@ -1,4 +1,4 @@
-from openpilot.common.parameterized import parameterized
+from parameterized import parameterized
 
 from cereal import car, log
 from opendbc.car.car_helpers import interfaces

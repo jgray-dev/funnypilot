@@ -1,4 +1,4 @@
-#include "board/drivers/drivers.h"
+#include "uart_declarations.h"
 
 // ***************************** Definitions *****************************
 

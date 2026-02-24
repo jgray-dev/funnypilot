@@ -1,6 +1,6 @@
 import pytest
 import itertools
-from openpilot.common.parameterized import parameterized_class
+from parameterized import parameterized_class
 
 from cereal import log
 
@@ -42,5 +42,4 @@ class TestFollowingDistance:
     simulation_steady_state = run_following_distance_simulation(v_lead, e2e=self.e2e, personality=self.personality)
     correct_steady_state = desired_follow_distance(v_lead, v_lead, get_T_FOLLOW(self.personality))
     err_ratio = 0.2 if self.e2e else 0.1
-    abs_err_margin = 0.5 if v_lead > 0.0 else 1.15
-    assert simulation_steady_state == pytest.approx(correct_steady_state, abs=err_ratio * correct_steady_state + abs_err_margin)
+    assert simulation_steady_state == pytest.approx(correct_steady_state, abs=err_ratio * correct_steady_state + .5)

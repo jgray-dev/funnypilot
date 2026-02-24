@@ -41,3 +41,5 @@ fi
 export UV_PROJECT_ENVIRONMENT="$BASEDIR/.venv"
 uv sync --all-extras --inexact
 source "$PYTHONPATH/.venv/bin/activate"
+
+$BASEDIR/opendbc/safety/tests/misra/install.sh

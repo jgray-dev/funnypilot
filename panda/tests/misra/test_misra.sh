@@ -10,7 +10,12 @@ YELLOW="\e[1;33m"
 RED="\e[1;31m"
 NC='\033[0m'
 
-: "${CPPCHECK_DIR:=$(python3 -c "import cppcheck; print(cppcheck.DIR)")}"
+: "${CPPCHECK_DIR:=$DIR/cppcheck/}"
+
+# install cppcheck if missing
+if [ -z "${SKIP_CPPCHECK_INSTALL}" ]; then
+  $DIR/install.sh
+fi
 
 # ensure checked in coverage table is up to date
 cd $DIR

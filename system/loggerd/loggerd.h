@@ -125,10 +125,10 @@ const EncoderInfo stream_driver_encoder_info = {
 const EncoderInfo qcam_encoder_info = {
   .publish_name = "qRoadEncodeData",
   .filename = "qcamera.ts",
-  .include_audio = Params().getBool("RecordAudio"),
+  .get_settings = [](int){return EncoderSettings::QcamEncoderSettings();},
   .frame_width = 526,
   .frame_height = 330,
-  .get_settings = [](int){return EncoderSettings::QcamEncoderSettings();},
+  .include_audio = Params().getBool("RecordAudio"),
   INIT_ENCODE_FUNCTIONS(QRoadEncode),
 };
 

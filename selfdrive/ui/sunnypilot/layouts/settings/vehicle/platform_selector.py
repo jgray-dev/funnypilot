@@ -95,9 +95,10 @@ class PlatformSelector(Button):
       offroad_msg = tr("This setting will take effect immediately.") if ui_state.is_offroad else \
                     tr("This setting will take effect once the device enters offroad state.")
 
+      confirm_dialog = ConfirmDialog(offroad_msg, tr("Confirm"))
+
       callback = partial(self._confirm_platform, dialog.selection_ref)
-      confirm_dialog = ConfirmDialog(offroad_msg, tr("Confirm"), callback=callback)
-      gui_app.push_widget(confirm_dialog)
+      gui_app.set_modal_overlay(confirm_dialog, callback=callback)
 
   def _confirm_platform(self, platform_name, res):
     if res == DialogResult.CONFIRM:
@@ -119,7 +120,7 @@ class PlatformSelector(Button):
     )
     callback = partial(self._on_platform_selected, dialog)
     dialog.on_exit = callback
-    gui_app.push_widget(dialog)
+    gui_app.set_modal_overlay(dialog, callback=callback)
 
   def refresh(self):
     self.color = style.YELLOW

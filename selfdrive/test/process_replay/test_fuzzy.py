@@ -2,7 +2,7 @@ import copy
 import os
 from hypothesis import given, HealthCheck, Phase, settings
 import hypothesis.strategies as st
-from openpilot.common.parameterized import parameterized
+from parameterized import parameterized
 
 from cereal import log
 from opendbc.car.toyota.values import CAR as TOYOTA

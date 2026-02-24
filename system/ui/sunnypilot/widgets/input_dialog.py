@@ -39,5 +39,4 @@ class InputDialogSP:
       if self.callback:
         self.callback(result, text)
 
-    self.keyboard.set_callback(internal_callback)
-    gui_app.push_widget(self.keyboard)
+    gui_app.set_modal_overlay(self.keyboard, internal_callback)

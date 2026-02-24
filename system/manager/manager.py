@@ -22,8 +22,6 @@ from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware.hw import Paths
 from openpilot.system.hardware import PC
 
-from openpilot.sunnypilot.system.params_migration import run_migration
-
 
 def manager_init() -> None:
   save_bootlog()
@@ -50,9 +48,6 @@ def manager_init() -> None:
 
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True)
-
-  if not PC:
-    run_migration(params)
 
   # set unset params to their default value
   for k in params.all_keys():

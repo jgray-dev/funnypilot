@@ -1418,6 +1418,7 @@ static const char* const __pyx_f[] = {
   "msgq_repo/msgq/visionipc/visionipc_pyx.pyx",
   "<stringsource>",
   "../../usr/local/venv/lib/python3.12/site-packages/numpy/__init__.cython-30.pxd",
+  "msgq_repo/msgq/visionipc/visionipc_pyx.pxd",
   "cpython/type.pxd",
 };
 /* #### Code section: utility_code_proto_before_types ### */
@@ -1832,6 +1833,7 @@ static CYTHON_INLINE __pyx_t_long_double_complex __pyx_t_long_double_complex_fro
 /* #### Code section: type_declarations ### */
 
 /*--- Type declarations ---*/
+struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext;
 struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionBuf;
 struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer;
 struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient;
@@ -1854,8 +1856,22 @@ enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType {
   __pyx_e_4msgq_9visionipc_13visionipc_pyx_VISION_STREAM_MAP
 };
 
-/* "msgq/visionipc/visionipc_pyx.pxd":6
- * from .visionipc cimport VisionBuf as cppVisionBuf
+/* "msgq/visionipc/visionipc_pyx.pxd":7
+ * from .visionipc cimport cl_device_id, cl_context
+ * 
+ * cdef class CLContext:             # <<<<<<<<<<<<<<
+ *   cdef cl_device_id device_id
+ *   cdef cl_context context
+*/
+struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext {
+  PyObject_HEAD
+  cl_device_id device_id;
+  cl_context context;
+};
+
+
+/* "msgq/visionipc/visionipc_pyx.pxd":11
+ *   cdef cl_context context
  * 
  * cdef class VisionBuf:             # <<<<<<<<<<<<<<
  *   cdef cppVisionBuf * buf
@@ -3641,6 +3657,7 @@ static const char __pyx_k_IntEnum[] = "IntEnum";
 static const char __pyx_k_IntFlag[] = "IntFlag";
 static const char __pyx_k_asarray[] = "asarray";
 static const char __pyx_k_connect[] = "connect";
+static const char __pyx_k_context[] = "context";
 static const char __pyx_k_disable[] = "disable";
 static const char __pyx_k_fortran[] = "fortran";
 static const char __pyx_k_m7_PXXY[] = "\200!\330\004\010\210\007\320\017)\250\021\250$\250m\2707\300(\310&\320PX\320XY";
@@ -3660,6 +3677,7 @@ static const char __pyx_k_qualname[] = "__qualname__";
 static const char __pyx_k_register[] = "register";
 static const char __pyx_k_set_name[] = "__set_name__";
 static const char __pyx_k_setstate[] = "__setstate__";
+static const char __pyx_k_CLContext[] = "CLContext";
 static const char __pyx_k_TypeError[] = "TypeError";
 static const char __pyx_k_VisionBuf[] = "VisionBuf";
 static const char __pyx_k_enumerate[] = "enumerate";
@@ -3818,7 +3836,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_8st
 static void __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_10__dealloc__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_12__reduce_cython__(CYTHON_UNUSED struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_14__setstate_cython__(CYTHON_UNUSED struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer *__pyx_v_self, CYTHON_UNUSED PyObject *__pyx_v___pyx_state); /* proto */
-static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self, std::string __pyx_v_name, enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType __pyx_v_stream, bool __pyx_v_conflate); /* proto */
+static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self, std::string __pyx_v_name, enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType __pyx_v_stream, bool __pyx_v_conflate, struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *__pyx_v_context); /* proto */
 static void __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_2__dealloc__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5width___get__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6height___get__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self); /* proto */
@@ -3836,6 +3854,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8is
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10available_streams(std::string __pyx_v_name, bool __pyx_v_block); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_12__reduce_cython__(CYTHON_UNUSED struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self); /* proto */
 static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_14__setstate_cython__(CYTHON_UNUSED struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self, CYTHON_UNUSED PyObject *__pyx_v___pyx_state); /* proto */
+static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_CLContext(PyTypeObject *t, PyObject *a, PyObject *k); /*proto*/
 static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_VisionBuf(PyTypeObject *t, PyObject *a, PyObject *k); /*proto*/
 static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer(PyTypeObject *t, PyObject *a, PyObject *k); /*proto*/
 static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient(PyTypeObject *t, PyObject *a, PyObject *k); /*proto*/
@@ -3897,6 +3916,7 @@ typedef struct {
   PyTypeObject *__pyx_ptype_5numpy_flexible;
   PyTypeObject *__pyx_ptype_5numpy_character;
   PyTypeObject *__pyx_ptype_5numpy_ufunc;
+  PyObject *__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext;
   PyObject *__pyx_type_4msgq_9visionipc_13visionipc_pyx_VisionBuf;
   PyObject *__pyx_type_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer;
   PyObject *__pyx_type_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient;
@@ -3904,6 +3924,7 @@ typedef struct {
   PyObject *__pyx_type___pyx_MemviewEnum;
   PyObject *__pyx_type___pyx_memoryview;
   PyObject *__pyx_type___pyx_memoryviewslice;
+  PyTypeObject *__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext;
   PyTypeObject *__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionBuf;
   PyTypeObject *__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer;
   PyTypeObject *__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient;
@@ -3915,7 +3936,7 @@ typedef struct {
   PyObject *__pyx_slice[1];
   PyObject *__pyx_tuple[5];
   PyObject *__pyx_codeobj_tab[15];
-  PyObject *__pyx_string_tab[196];
+  PyObject *__pyx_string_tab[198];
   PyObject *__pyx_int_0;
   PyObject *__pyx_int_1;
   PyObject *__pyx_int_100;
@@ -3965,197 +3986,199 @@ static __pyx_mstatetype * const __pyx_mstate_global = &__pyx_mstate_global_stati
 #define __pyx_kp_u_All_dimensions_preceding_dimensi __pyx_string_tab[2]
 #define __pyx_n_u_AssertionError __pyx_string_tab[3]
 #define __pyx_kp_u_Buffer_view_does_not_expose_stri __pyx_string_tab[4]
-#define __pyx_kp_u_Can_only_create_a_buffer_that_is __pyx_string_tab[5]
-#define __pyx_kp_u_Cannot_assign_to_read_only_memor __pyx_string_tab[6]
-#define __pyx_kp_u_Cannot_create_writable_memory_vi __pyx_string_tab[7]
-#define __pyx_kp_u_Cannot_index_with_type __pyx_string_tab[8]
-#define __pyx_kp_u_Cannot_transpose_memoryview_with __pyx_string_tab[9]
-#define __pyx_kp_u_Dimension_d_is_not_direct __pyx_string_tab[10]
-#define __pyx_n_u_Ellipsis __pyx_string_tab[11]
-#define __pyx_kp_u_Empty_shape_tuple_for_cython_arr __pyx_string_tab[12]
-#define __pyx_n_u_ImportError __pyx_string_tab[13]
-#define __pyx_kp_u_Incompatible_checksums_0x_x_vs_0 __pyx_string_tab[14]
-#define __pyx_n_u_IndexError __pyx_string_tab[15]
-#define __pyx_kp_u_Index_out_of_bounds_axis_d __pyx_string_tab[16]
-#define __pyx_kp_u_Indirect_dimensions_not_supporte __pyx_string_tab[17]
-#define __pyx_n_u_IntEnum __pyx_string_tab[18]
-#define __pyx_n_u_IntFlag __pyx_string_tab[19]
-#define __pyx_kp_u_Invalid_mode_expected_c_or_fortr __pyx_string_tab[20]
-#define __pyx_kp_u_Invalid_shape_in_axis __pyx_string_tab[21]
-#define __pyx_n_u_MemoryError __pyx_string_tab[22]
-#define __pyx_kp_u_MemoryView_of __pyx_string_tab[23]
-#define __pyx_kp_u_Note_that_Cython_is_deliberately __pyx_string_tab[24]
-#define __pyx_n_b_O __pyx_string_tab[25]
-#define __pyx_kp_u_Out_of_bounds_on_buffer_access_a __pyx_string_tab[26]
-#define __pyx_n_u_PickleError __pyx_string_tab[27]
-#define __pyx_n_u_Sequence __pyx_string_tab[28]
-#define __pyx_kp_u_Step_may_not_be_zero_axis_d __pyx_string_tab[29]
-#define __pyx_kp_b_T __pyx_string_tab[30]
-#define __pyx_n_u_TypeError __pyx_string_tab[31]
-#define __pyx_kp_u_Unable_to_convert_item_to_object __pyx_string_tab[32]
-#define __pyx_n_u_VISION_STREAM_DRIVER __pyx_string_tab[33]
-#define __pyx_n_u_VISION_STREAM_MAP __pyx_string_tab[34]
-#define __pyx_n_u_VISION_STREAM_ROAD __pyx_string_tab[35]
-#define __pyx_n_u_VISION_STREAM_WIDE_ROAD __pyx_string_tab[36]
-#define __pyx_n_u_ValueError __pyx_string_tab[37]
-#define __pyx_n_u_View_MemoryView __pyx_string_tab[38]
-#define __pyx_n_u_VisionBuf __pyx_string_tab[39]
-#define __pyx_n_u_VisionBuf___reduce_cython __pyx_string_tab[40]
-#define __pyx_n_u_VisionBuf___setstate_cython __pyx_string_tab[41]
-#define __pyx_n_u_VisionIpcClient __pyx_string_tab[42]
-#define __pyx_n_u_VisionIpcClient___reduce_cython __pyx_string_tab[43]
-#define __pyx_n_u_VisionIpcClient___setstate_cytho __pyx_string_tab[44]
-#define __pyx_n_u_VisionIpcClient_available_stream __pyx_string_tab[45]
-#define __pyx_n_u_VisionIpcClient_connect __pyx_string_tab[46]
-#define __pyx_n_u_VisionIpcClient_is_connected __pyx_string_tab[47]
-#define __pyx_n_u_VisionIpcClient_recv __pyx_string_tab[48]
-#define __pyx_n_u_VisionIpcServer __pyx_string_tab[49]
-#define __pyx_n_u_VisionIpcServer___reduce_cython __pyx_string_tab[50]
-#define __pyx_n_u_VisionIpcServer___setstate_cytho __pyx_string_tab[51]
-#define __pyx_n_u_VisionIpcServer_create_buffers __pyx_string_tab[52]
-#define __pyx_n_u_VisionIpcServer_create_buffers_w __pyx_string_tab[53]
-#define __pyx_n_u_VisionIpcServer_send __pyx_string_tab[54]
-#define __pyx_n_u_VisionIpcServer_start_listener __pyx_string_tab[55]
-#define __pyx_n_u_VisionStreamType __pyx_string_tab[56]
-#define __pyx_kp_u__10 __pyx_string_tab[57]
-#define __pyx_kp_u__11 __pyx_string_tab[58]
-#define __pyx_kp_u__12 __pyx_string_tab[59]
-#define __pyx_kp_u__2 __pyx_string_tab[60]
-#define __pyx_kp_u__3 __pyx_string_tab[61]
-#define __pyx_kp_u__4 __pyx_string_tab[62]
-#define __pyx_kp_u__5 __pyx_string_tab[63]
-#define __pyx_kp_b__6 __pyx_string_tab[64]
-#define __pyx_kp_b__7 __pyx_string_tab[65]
-#define __pyx_kp_b__8 __pyx_string_tab[66]
-#define __pyx_kp_b__9 __pyx_string_tab[67]
-#define __pyx_n_u_abc __pyx_string_tab[68]
-#define __pyx_kp_u_add_note __pyx_string_tab[69]
-#define __pyx_n_u_allocate_buffer __pyx_string_tab[70]
-#define __pyx_kp_u_and __pyx_string_tab[71]
-#define __pyx_n_u_asarray __pyx_string_tab[72]
-#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[73]
-#define __pyx_kp_u_at_0x __pyx_string_tab[74]
-#define __pyx_n_u_available_streams __pyx_string_tab[75]
-#define __pyx_n_u_base __pyx_string_tab[76]
-#define __pyx_n_u_block __pyx_string_tab[77]
-#define __pyx_n_u_blocking __pyx_string_tab[78]
-#define __pyx_n_u_buf __pyx_string_tab[79]
-#define __pyx_n_u_c __pyx_string_tab[80]
-#define __pyx_n_u_class __pyx_string_tab[81]
-#define __pyx_n_u_class_getitem __pyx_string_tab[82]
-#define __pyx_n_u_cline_in_traceback __pyx_string_tab[83]
-#define __pyx_kp_u_collections_abc __pyx_string_tab[84]
-#define __pyx_n_u_conflate __pyx_string_tab[85]
-#define __pyx_n_u_connect __pyx_string_tab[86]
-#define __pyx_kp_u_contiguous_and_direct __pyx_string_tab[87]
-#define __pyx_kp_u_contiguous_and_indirect __pyx_string_tab[88]
-#define __pyx_n_u_count __pyx_string_tab[89]
-#define __pyx_n_u_create_buffers __pyx_string_tab[90]
-#define __pyx_n_u_create_buffers_with_sizes __pyx_string_tab[91]
-#define __pyx_n_u_data __pyx_string_tab[92]
-#define __pyx_n_u_dict __pyx_string_tab[93]
-#define __pyx_kp_u_disable __pyx_string_tab[94]
-#define __pyx_n_u_dtype_is_object __pyx_string_tab[95]
-#define __pyx_kp_u_enable __pyx_string_tab[96]
-#define __pyx_n_u_encode __pyx_string_tab[97]
-#define __pyx_n_u_enum __pyx_string_tab[98]
-#define __pyx_n_u_enumerate __pyx_string_tab[99]
-#define __pyx_n_u_error __pyx_string_tab[100]
-#define __pyx_n_u_extra __pyx_string_tab[101]
-#define __pyx_n_u_flags __pyx_string_tab[102]
-#define __pyx_n_u_format __pyx_string_tab[103]
-#define __pyx_n_u_fortran __pyx_string_tab[104]
-#define __pyx_n_u_frame_id __pyx_string_tab[105]
-#define __pyx_n_u_func __pyx_string_tab[106]
-#define __pyx_kp_u_gc __pyx_string_tab[107]
-#define __pyx_n_u_get __pyx_string_tab[108]
-#define __pyx_n_u_get_endpoint_name __pyx_string_tab[109]
-#define __pyx_n_u_getstate __pyx_string_tab[110]
-#define __pyx_kp_u_got __pyx_string_tab[111]
-#define __pyx_kp_u_got_differing_extents_in_dimensi __pyx_string_tab[112]
-#define __pyx_n_u_height __pyx_string_tab[113]
-#define __pyx_n_u_id __pyx_string_tab[114]
-#define __pyx_n_u_import __pyx_string_tab[115]
-#define __pyx_n_u_index __pyx_string_tab[116]
-#define __pyx_n_u_initializing __pyx_string_tab[117]
-#define __pyx_n_u_is_connected __pyx_string_tab[118]
-#define __pyx_n_u_is_coroutine __pyx_string_tab[119]
-#define __pyx_kp_u_isenabled __pyx_string_tab[120]
-#define __pyx_n_u_itemsize __pyx_string_tab[121]
-#define __pyx_kp_u_itemsize_0_for_cython_array __pyx_string_tab[122]
-#define __pyx_n_u_join __pyx_string_tab[123]
-#define __pyx_n_u_main __pyx_string_tab[124]
-#define __pyx_n_u_member_names __pyx_string_tab[125]
-#define __pyx_n_u_members __pyx_string_tab[126]
-#define __pyx_n_u_memview __pyx_string_tab[127]
-#define __pyx_n_u_mode __pyx_string_tab[128]
-#define __pyx_n_u_module __pyx_string_tab[129]
-#define __pyx_n_u_module_2 __pyx_string_tab[130]
-#define __pyx_kp_u_msgq_repo_msgq_visionipc_visioni __pyx_string_tab[131]
-#define __pyx_n_u_msgq_visionipc_visionipc_pyx __pyx_string_tab[132]
-#define __pyx_kp_u_msgq_visionipc_visionipc_pyx __pyx_string_tab[133]
-#define __pyx_n_u_name __pyx_string_tab[134]
-#define __pyx_n_u_name_2 __pyx_string_tab[135]
-#define __pyx_n_u_ndim __pyx_string_tab[136]
-#define __pyx_n_u_new __pyx_string_tab[137]
-#define __pyx_kp_u_no_default___reduce___due_to_non __pyx_string_tab[138]
-#define __pyx_n_u_np __pyx_string_tab[139]
-#define __pyx_n_u_num_buffers __pyx_string_tab[140]
-#define __pyx_n_u_numpy __pyx_string_tab[141]
-#define __pyx_kp_u_numpy__core_multiarray_failed_to __pyx_string_tab[142]
-#define __pyx_kp_u_numpy__core_umath_failed_to_impo __pyx_string_tab[143]
-#define __pyx_n_u_obj __pyx_string_tab[144]
-#define __pyx_kp_u_object __pyx_string_tab[145]
-#define __pyx_n_u_pack __pyx_string_tab[146]
-#define __pyx_n_u_pickle __pyx_string_tab[147]
-#define __pyx_n_u_pop __pyx_string_tab[148]
-#define __pyx_n_u_pyx_checksum __pyx_string_tab[149]
-#define __pyx_n_u_pyx_state __pyx_string_tab[150]
-#define __pyx_n_u_pyx_type __pyx_string_tab[151]
-#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[152]
-#define __pyx_n_u_pyx_vtable __pyx_string_tab[153]
-#define __pyx_n_u_qualname __pyx_string_tab[154]
-#define __pyx_n_u_range __pyx_string_tab[155]
-#define __pyx_n_u_recv __pyx_string_tab[156]
-#define __pyx_n_u_reduce __pyx_string_tab[157]
-#define __pyx_n_u_reduce_cython __pyx_string_tab[158]
-#define __pyx_n_u_reduce_ex __pyx_string_tab[159]
-#define __pyx_n_u_register __pyx_string_tab[160]
-#define __pyx_n_u_self __pyx_string_tab[161]
-#define __pyx_kp_u_self_buf_cannot_be_converted_to __pyx_string_tab[162]
-#define __pyx_kp_u_self_server_cannot_be_converted __pyx_string_tab[163]
-#define __pyx_n_u_send __pyx_string_tab[164]
-#define __pyx_n_u_set_name __pyx_string_tab[165]
-#define __pyx_n_u_setstate __pyx_string_tab[166]
-#define __pyx_n_u_setstate_cython __pyx_string_tab[167]
-#define __pyx_n_u_shape __pyx_string_tab[168]
-#define __pyx_n_u_size __pyx_string_tab[169]
-#define __pyx_n_u_spec __pyx_string_tab[170]
-#define __pyx_n_u_start __pyx_string_tab[171]
-#define __pyx_n_u_start_listener __pyx_string_tab[172]
-#define __pyx_n_u_staticmethod __pyx_string_tab[173]
-#define __pyx_n_u_step __pyx_string_tab[174]
-#define __pyx_n_u_stop __pyx_string_tab[175]
-#define __pyx_n_u_stream __pyx_string_tab[176]
-#define __pyx_n_u_stride __pyx_string_tab[177]
-#define __pyx_kp_u_strided_and_direct __pyx_string_tab[178]
-#define __pyx_kp_u_strided_and_direct_or_indirect __pyx_string_tab[179]
-#define __pyx_kp_u_strided_and_indirect __pyx_string_tab[180]
-#define __pyx_kp_u_stringsource __pyx_string_tab[181]
-#define __pyx_n_u_struct __pyx_string_tab[182]
-#define __pyx_n_u_sys __pyx_string_tab[183]
-#define __pyx_n_u_test __pyx_string_tab[184]
-#define __pyx_n_u_timeout_ms __pyx_string_tab[185]
-#define __pyx_n_u_timestamp_eof __pyx_string_tab[186]
-#define __pyx_n_u_timestamp_sof __pyx_string_tab[187]
-#define __pyx_n_u_tp __pyx_string_tab[188]
-#define __pyx_kp_u_unable_to_allocate_array_data __pyx_string_tab[189]
-#define __pyx_kp_u_unable_to_allocate_shape_and_str __pyx_string_tab[190]
-#define __pyx_n_u_unpack __pyx_string_tab[191]
-#define __pyx_n_u_update __pyx_string_tab[192]
-#define __pyx_n_u_uv_offset __pyx_string_tab[193]
-#define __pyx_n_u_width __pyx_string_tab[194]
-#define __pyx_n_u_x __pyx_string_tab[195]
+#define __pyx_n_u_CLContext __pyx_string_tab[5]
+#define __pyx_kp_u_Can_only_create_a_buffer_that_is __pyx_string_tab[6]
+#define __pyx_kp_u_Cannot_assign_to_read_only_memor __pyx_string_tab[7]
+#define __pyx_kp_u_Cannot_create_writable_memory_vi __pyx_string_tab[8]
+#define __pyx_kp_u_Cannot_index_with_type __pyx_string_tab[9]
+#define __pyx_kp_u_Cannot_transpose_memoryview_with __pyx_string_tab[10]
+#define __pyx_kp_u_Dimension_d_is_not_direct __pyx_string_tab[11]
+#define __pyx_n_u_Ellipsis __pyx_string_tab[12]
+#define __pyx_kp_u_Empty_shape_tuple_for_cython_arr __pyx_string_tab[13]
+#define __pyx_n_u_ImportError __pyx_string_tab[14]
+#define __pyx_kp_u_Incompatible_checksums_0x_x_vs_0 __pyx_string_tab[15]
+#define __pyx_n_u_IndexError __pyx_string_tab[16]
+#define __pyx_kp_u_Index_out_of_bounds_axis_d __pyx_string_tab[17]
+#define __pyx_kp_u_Indirect_dimensions_not_supporte __pyx_string_tab[18]
+#define __pyx_n_u_IntEnum __pyx_string_tab[19]
+#define __pyx_n_u_IntFlag __pyx_string_tab[20]
+#define __pyx_kp_u_Invalid_mode_expected_c_or_fortr __pyx_string_tab[21]
+#define __pyx_kp_u_Invalid_shape_in_axis __pyx_string_tab[22]
+#define __pyx_n_u_MemoryError __pyx_string_tab[23]
+#define __pyx_kp_u_MemoryView_of __pyx_string_tab[24]
+#define __pyx_kp_u_Note_that_Cython_is_deliberately __pyx_string_tab[25]
+#define __pyx_n_b_O __pyx_string_tab[26]
+#define __pyx_kp_u_Out_of_bounds_on_buffer_access_a __pyx_string_tab[27]
+#define __pyx_n_u_PickleError __pyx_string_tab[28]
+#define __pyx_n_u_Sequence __pyx_string_tab[29]
+#define __pyx_kp_u_Step_may_not_be_zero_axis_d __pyx_string_tab[30]
+#define __pyx_kp_b_T __pyx_string_tab[31]
+#define __pyx_n_u_TypeError __pyx_string_tab[32]
+#define __pyx_kp_u_Unable_to_convert_item_to_object __pyx_string_tab[33]
+#define __pyx_n_u_VISION_STREAM_DRIVER __pyx_string_tab[34]
+#define __pyx_n_u_VISION_STREAM_MAP __pyx_string_tab[35]
+#define __pyx_n_u_VISION_STREAM_ROAD __pyx_string_tab[36]
+#define __pyx_n_u_VISION_STREAM_WIDE_ROAD __pyx_string_tab[37]
+#define __pyx_n_u_ValueError __pyx_string_tab[38]
+#define __pyx_n_u_View_MemoryView __pyx_string_tab[39]
+#define __pyx_n_u_VisionBuf __pyx_string_tab[40]
+#define __pyx_n_u_VisionBuf___reduce_cython __pyx_string_tab[41]
+#define __pyx_n_u_VisionBuf___setstate_cython __pyx_string_tab[42]
+#define __pyx_n_u_VisionIpcClient __pyx_string_tab[43]
+#define __pyx_n_u_VisionIpcClient___reduce_cython __pyx_string_tab[44]
+#define __pyx_n_u_VisionIpcClient___setstate_cytho __pyx_string_tab[45]
+#define __pyx_n_u_VisionIpcClient_available_stream __pyx_string_tab[46]
+#define __pyx_n_u_VisionIpcClient_connect __pyx_string_tab[47]
+#define __pyx_n_u_VisionIpcClient_is_connected __pyx_string_tab[48]
+#define __pyx_n_u_VisionIpcClient_recv __pyx_string_tab[49]
+#define __pyx_n_u_VisionIpcServer __pyx_string_tab[50]
+#define __pyx_n_u_VisionIpcServer___reduce_cython __pyx_string_tab[51]
+#define __pyx_n_u_VisionIpcServer___setstate_cytho __pyx_string_tab[52]
+#define __pyx_n_u_VisionIpcServer_create_buffers __pyx_string_tab[53]
+#define __pyx_n_u_VisionIpcServer_create_buffers_w __pyx_string_tab[54]
+#define __pyx_n_u_VisionIpcServer_send __pyx_string_tab[55]
+#define __pyx_n_u_VisionIpcServer_start_listener __pyx_string_tab[56]
+#define __pyx_n_u_VisionStreamType __pyx_string_tab[57]
+#define __pyx_kp_u__10 __pyx_string_tab[58]
+#define __pyx_kp_u__11 __pyx_string_tab[59]
+#define __pyx_kp_u__12 __pyx_string_tab[60]
+#define __pyx_kp_u__2 __pyx_string_tab[61]
+#define __pyx_kp_u__3 __pyx_string_tab[62]
+#define __pyx_kp_u__4 __pyx_string_tab[63]
+#define __pyx_kp_u__5 __pyx_string_tab[64]
+#define __pyx_kp_b__6 __pyx_string_tab[65]
+#define __pyx_kp_b__7 __pyx_string_tab[66]
+#define __pyx_kp_b__8 __pyx_string_tab[67]
+#define __pyx_kp_b__9 __pyx_string_tab[68]
+#define __pyx_n_u_abc __pyx_string_tab[69]
+#define __pyx_kp_u_add_note __pyx_string_tab[70]
+#define __pyx_n_u_allocate_buffer __pyx_string_tab[71]
+#define __pyx_kp_u_and __pyx_string_tab[72]
+#define __pyx_n_u_asarray __pyx_string_tab[73]
+#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[74]
+#define __pyx_kp_u_at_0x __pyx_string_tab[75]
+#define __pyx_n_u_available_streams __pyx_string_tab[76]
+#define __pyx_n_u_base __pyx_string_tab[77]
+#define __pyx_n_u_block __pyx_string_tab[78]
+#define __pyx_n_u_blocking __pyx_string_tab[79]
+#define __pyx_n_u_buf __pyx_string_tab[80]
+#define __pyx_n_u_c __pyx_string_tab[81]
+#define __pyx_n_u_class __pyx_string_tab[82]
+#define __pyx_n_u_class_getitem __pyx_string_tab[83]
+#define __pyx_n_u_cline_in_traceback __pyx_string_tab[84]
+#define __pyx_kp_u_collections_abc __pyx_string_tab[85]
+#define __pyx_n_u_conflate __pyx_string_tab[86]
+#define __pyx_n_u_connect __pyx_string_tab[87]
+#define __pyx_n_u_context __pyx_string_tab[88]
+#define __pyx_kp_u_contiguous_and_direct __pyx_string_tab[89]
+#define __pyx_kp_u_contiguous_and_indirect __pyx_string_tab[90]
+#define __pyx_n_u_count __pyx_string_tab[91]
+#define __pyx_n_u_create_buffers __pyx_string_tab[92]
+#define __pyx_n_u_create_buffers_with_sizes __pyx_string_tab[93]
+#define __pyx_n_u_data __pyx_string_tab[94]
+#define __pyx_n_u_dict __pyx_string_tab[95]
+#define __pyx_kp_u_disable __pyx_string_tab[96]
+#define __pyx_n_u_dtype_is_object __pyx_string_tab[97]
+#define __pyx_kp_u_enable __pyx_string_tab[98]
+#define __pyx_n_u_encode __pyx_string_tab[99]
+#define __pyx_n_u_enum __pyx_string_tab[100]
+#define __pyx_n_u_enumerate __pyx_string_tab[101]
+#define __pyx_n_u_error __pyx_string_tab[102]
+#define __pyx_n_u_extra __pyx_string_tab[103]
+#define __pyx_n_u_flags __pyx_string_tab[104]
+#define __pyx_n_u_format __pyx_string_tab[105]
+#define __pyx_n_u_fortran __pyx_string_tab[106]
+#define __pyx_n_u_frame_id __pyx_string_tab[107]
+#define __pyx_n_u_func __pyx_string_tab[108]
+#define __pyx_kp_u_gc __pyx_string_tab[109]
+#define __pyx_n_u_get __pyx_string_tab[110]
+#define __pyx_n_u_get_endpoint_name __pyx_string_tab[111]
+#define __pyx_n_u_getstate __pyx_string_tab[112]
+#define __pyx_kp_u_got __pyx_string_tab[113]
+#define __pyx_kp_u_got_differing_extents_in_dimensi __pyx_string_tab[114]
+#define __pyx_n_u_height __pyx_string_tab[115]
+#define __pyx_n_u_id __pyx_string_tab[116]
+#define __pyx_n_u_import __pyx_string_tab[117]
+#define __pyx_n_u_index __pyx_string_tab[118]
+#define __pyx_n_u_initializing __pyx_string_tab[119]
+#define __pyx_n_u_is_connected __pyx_string_tab[120]
+#define __pyx_n_u_is_coroutine __pyx_string_tab[121]
+#define __pyx_kp_u_isenabled __pyx_string_tab[122]
+#define __pyx_n_u_itemsize __pyx_string_tab[123]
+#define __pyx_kp_u_itemsize_0_for_cython_array __pyx_string_tab[124]
+#define __pyx_n_u_join __pyx_string_tab[125]
+#define __pyx_n_u_main __pyx_string_tab[126]
+#define __pyx_n_u_member_names __pyx_string_tab[127]
+#define __pyx_n_u_members __pyx_string_tab[128]
+#define __pyx_n_u_memview __pyx_string_tab[129]
+#define __pyx_n_u_mode __pyx_string_tab[130]
+#define __pyx_n_u_module __pyx_string_tab[131]
+#define __pyx_n_u_module_2 __pyx_string_tab[132]
+#define __pyx_kp_u_msgq_repo_msgq_visionipc_visioni __pyx_string_tab[133]
+#define __pyx_n_u_msgq_visionipc_visionipc_pyx __pyx_string_tab[134]
+#define __pyx_kp_u_msgq_visionipc_visionipc_pyx __pyx_string_tab[135]
+#define __pyx_n_u_name __pyx_string_tab[136]
+#define __pyx_n_u_name_2 __pyx_string_tab[137]
+#define __pyx_n_u_ndim __pyx_string_tab[138]
+#define __pyx_n_u_new __pyx_string_tab[139]
+#define __pyx_kp_u_no_default___reduce___due_to_non __pyx_string_tab[140]
+#define __pyx_n_u_np __pyx_string_tab[141]
+#define __pyx_n_u_num_buffers __pyx_string_tab[142]
+#define __pyx_n_u_numpy __pyx_string_tab[143]
+#define __pyx_kp_u_numpy__core_multiarray_failed_to __pyx_string_tab[144]
+#define __pyx_kp_u_numpy__core_umath_failed_to_impo __pyx_string_tab[145]
+#define __pyx_n_u_obj __pyx_string_tab[146]
+#define __pyx_kp_u_object __pyx_string_tab[147]
+#define __pyx_n_u_pack __pyx_string_tab[148]
+#define __pyx_n_u_pickle __pyx_string_tab[149]
+#define __pyx_n_u_pop __pyx_string_tab[150]
+#define __pyx_n_u_pyx_checksum __pyx_string_tab[151]
+#define __pyx_n_u_pyx_state __pyx_string_tab[152]
+#define __pyx_n_u_pyx_type __pyx_string_tab[153]
+#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[154]
+#define __pyx_n_u_pyx_vtable __pyx_string_tab[155]
+#define __pyx_n_u_qualname __pyx_string_tab[156]
+#define __pyx_n_u_range __pyx_string_tab[157]
+#define __pyx_n_u_recv __pyx_string_tab[158]
+#define __pyx_n_u_reduce __pyx_string_tab[159]
+#define __pyx_n_u_reduce_cython __pyx_string_tab[160]
+#define __pyx_n_u_reduce_ex __pyx_string_tab[161]
+#define __pyx_n_u_register __pyx_string_tab[162]
+#define __pyx_n_u_self __pyx_string_tab[163]
+#define __pyx_kp_u_self_buf_cannot_be_converted_to __pyx_string_tab[164]
+#define __pyx_kp_u_self_server_cannot_be_converted __pyx_string_tab[165]
+#define __pyx_n_u_send __pyx_string_tab[166]
+#define __pyx_n_u_set_name __pyx_string_tab[167]
+#define __pyx_n_u_setstate __pyx_string_tab[168]
+#define __pyx_n_u_setstate_cython __pyx_string_tab[169]
+#define __pyx_n_u_shape __pyx_string_tab[170]
+#define __pyx_n_u_size __pyx_string_tab[171]
+#define __pyx_n_u_spec __pyx_string_tab[172]
+#define __pyx_n_u_start __pyx_string_tab[173]
+#define __pyx_n_u_start_listener __pyx_string_tab[174]
+#define __pyx_n_u_staticmethod __pyx_string_tab[175]
+#define __pyx_n_u_step __pyx_string_tab[176]
+#define __pyx_n_u_stop __pyx_string_tab[177]
+#define __pyx_n_u_stream __pyx_string_tab[178]
+#define __pyx_n_u_stride __pyx_string_tab[179]
+#define __pyx_kp_u_strided_and_direct __pyx_string_tab[180]
+#define __pyx_kp_u_strided_and_direct_or_indirect __pyx_string_tab[181]
+#define __pyx_kp_u_strided_and_indirect __pyx_string_tab[182]
+#define __pyx_kp_u_stringsource __pyx_string_tab[183]
+#define __pyx_n_u_struct __pyx_string_tab[184]
+#define __pyx_n_u_sys __pyx_string_tab[185]
+#define __pyx_n_u_test __pyx_string_tab[186]
+#define __pyx_n_u_timeout_ms __pyx_string_tab[187]
+#define __pyx_n_u_timestamp_eof __pyx_string_tab[188]
+#define __pyx_n_u_timestamp_sof __pyx_string_tab[189]
+#define __pyx_n_u_tp __pyx_string_tab[190]
+#define __pyx_kp_u_unable_to_allocate_array_data __pyx_string_tab[191]
+#define __pyx_kp_u_unable_to_allocate_shape_and_str __pyx_string_tab[192]
+#define __pyx_n_u_unpack __pyx_string_tab[193]
+#define __pyx_n_u_update __pyx_string_tab[194]
+#define __pyx_n_u_uv_offset __pyx_string_tab[195]
+#define __pyx_n_u_width __pyx_string_tab[196]
+#define __pyx_n_u_x __pyx_string_tab[197]
 /* #### Code section: module_state_clear ### */
 #if CYTHON_USE_MODULE_STATE
 static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
@@ -4192,6 +4215,8 @@ static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
   Py_CLEAR(clear_module_state->__pyx_ptype_5numpy_flexible);
   Py_CLEAR(clear_module_state->__pyx_ptype_5numpy_character);
   Py_CLEAR(clear_module_state->__pyx_ptype_5numpy_ufunc);
+  Py_CLEAR(clear_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext);
+  Py_CLEAR(clear_module_state->__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext);
   Py_CLEAR(clear_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionBuf);
   Py_CLEAR(clear_module_state->__pyx_type_4msgq_9visionipc_13visionipc_pyx_VisionBuf);
   Py_CLEAR(clear_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer);
@@ -4209,7 +4234,7 @@ static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
   for (int i=0; i<1; ++i) { Py_CLEAR(clear_module_state->__pyx_slice[i]); }
   for (int i=0; i<5; ++i) { Py_CLEAR(clear_module_state->__pyx_tuple[i]); }
   for (int i=0; i<15; ++i) { Py_CLEAR(clear_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<196; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<198; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
   Py_CLEAR(clear_module_state->__pyx_int_0);
   Py_CLEAR(clear_module_state->__pyx_int_1);
   Py_CLEAR(clear_module_state->__pyx_int_100);
@@ -4253,6 +4278,8 @@ static CYTHON_SMALL_CODE int __pyx_m_traverse(PyObject *m, visitproc visit, void
   Py_VISIT(traverse_module_state->__pyx_ptype_5numpy_flexible);
   Py_VISIT(traverse_module_state->__pyx_ptype_5numpy_character);
   Py_VISIT(traverse_module_state->__pyx_ptype_5numpy_ufunc);
+  Py_VISIT(traverse_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext);
+  Py_VISIT(traverse_module_state->__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext);
   Py_VISIT(traverse_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionBuf);
   Py_VISIT(traverse_module_state->__pyx_type_4msgq_9visionipc_13visionipc_pyx_VisionBuf);
   Py_VISIT(traverse_module_state->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcServer);
@@ -4270,7 +4297,7 @@ static CYTHON_SMALL_CODE int __pyx_m_traverse(PyObject *m, visitproc visit, void
   for (int i=0; i<1; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_slice[i]); }
   for (int i=0; i<5; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_tuple[i]); }
   for (int i=0; i<15; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<196; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<198; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
   __Pyx_VISIT_CONST(traverse_module_state->__pyx_int_0);
   __Pyx_VISIT_CONST(traverse_module_state->__pyx_int_1);
   __Pyx_VISIT_CONST(traverse_module_state->__pyx_int_100);
@@ -21018,7 +21045,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_9VisionBuf_2__setstat
  *   cdef cppVisionIpcServer * server
  * 
  *   def __init__(self, string name):             # <<<<<<<<<<<<<<
- *     self.server = new cppVisionIpcServer(name)
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)
  * 
 */
 
@@ -21096,17 +21123,17 @@ static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer___init__(
   /* "msgq/visionipc/visionipc_pyx.pyx":71
  * 
  *   def __init__(self, string name):
- *     self.server = new cppVisionIpcServer(name)             # <<<<<<<<<<<<<<
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)             # <<<<<<<<<<<<<<
  * 
  *   def create_buffers(self, VisionStreamType tp, size_t num_buffers, size_t width, size_t height):
 */
-  __pyx_v_self->server = new VisionIpcServer(__pyx_v_name);
+  __pyx_v_self->server = new VisionIpcServer(__pyx_v_name, NULL, NULL);
 
   /* "msgq/visionipc/visionipc_pyx.pyx":70
  *   cdef cppVisionIpcServer * server
  * 
  *   def __init__(self, string name):             # <<<<<<<<<<<<<<
- *     self.server = new cppVisionIpcServer(name)
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)
  * 
 */
 
@@ -21116,7 +21143,7 @@ static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer___init__(
 }
 
 /* "msgq/visionipc/visionipc_pyx.pyx":73
- *     self.server = new cppVisionIpcServer(name)
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)
  * 
  *   def create_buffers(self, VisionStreamType tp, size_t num_buffers, size_t width, size_t height):             # <<<<<<<<<<<<<<
  *     self.server.create_buffers(tp, num_buffers, width, height)
@@ -21247,7 +21274,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_2cr
   __pyx_v_self->server->create_buffers(((enum VisionStreamType)__pyx_v_tp), __pyx_v_num_buffers, __pyx_v_width, __pyx_v_height);
 
   /* "msgq/visionipc/visionipc_pyx.pyx":73
- *     self.server = new cppVisionIpcServer(name)
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)
  * 
  *   def create_buffers(self, VisionStreamType tp, size_t num_buffers, size_t width, size_t height):             # <<<<<<<<<<<<<<
  *     self.server.create_buffers(tp, num_buffers, width, height)
@@ -22036,9 +22063,9 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcServer_14_
 /* "msgq/visionipc/visionipc_pyx.pyx":105
  *   cdef VisionIpcBufExtra extra
  * 
- *   def __cinit__(self, string name, VisionStreamType stream, bool conflate):             # <<<<<<<<<<<<<<
- *     self.client = new cppVisionIpcClient(name, stream, conflate)
- * 
+ *   def __cinit__(self, string name, VisionStreamType stream, bool conflate, CLContext context = None):             # <<<<<<<<<<<<<<
+ *     if context:
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)
 */
 
 /* Python wrapper */
@@ -22047,9 +22074,10 @@ static int __pyx_pw_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_1__cinit_
   std::string __pyx_v_name;
   enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType __pyx_v_stream;
   bool __pyx_v_conflate;
+  struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *__pyx_v_context = 0;
   CYTHON_UNUSED Py_ssize_t __pyx_nargs;
   CYTHON_UNUSED PyObject *const *__pyx_kwvalues;
-  PyObject* values[3] = {0,0,0};
+  PyObject* values[4] = {0,0,0,0};
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
@@ -22063,11 +22091,15 @@ static int __pyx_pw_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_1__cinit_
   #endif
   __pyx_kwvalues = __Pyx_KwValues_VARARGS(__pyx_args, __pyx_nargs);
   {
-    PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_name,&__pyx_mstate_global->__pyx_n_u_stream,&__pyx_mstate_global->__pyx_n_u_conflate,0};
+    PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_name,&__pyx_mstate_global->__pyx_n_u_stream,&__pyx_mstate_global->__pyx_n_u_conflate,&__pyx_mstate_global->__pyx_n_u_context,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_VARARGS(__pyx_kwds) : 0;
     if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 105, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
+        case  4:
+        values[3] = __Pyx_ArgRef_VARARGS(__pyx_args, 3);
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 105, __pyx_L3_error)
+        CYTHON_FALLTHROUGH;
         case  3:
         values[2] = __Pyx_ArgRef_VARARGS(__pyx_args, 2);
         if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 105, __pyx_L3_error)
@@ -22085,26 +22117,36 @@ static int __pyx_pw_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_1__cinit_
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
       if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "__cinit__", 0) < 0) __PYX_ERR(0, 105, __pyx_L3_error)
+      if (!values[3]) values[3] = __Pyx_NewRef((PyObject *)((struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *)Py_None));
       for (Py_ssize_t i = __pyx_nargs; i < 3; i++) {
-        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("__cinit__", 1, 3, 3, i); __PYX_ERR(0, 105, __pyx_L3_error) }
+        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("__cinit__", 0, 3, 4, i); __PYX_ERR(0, 105, __pyx_L3_error) }
       }
-    } else if (unlikely(__pyx_nargs != 3)) {
-      goto __pyx_L5_argtuple_error;
     } else {
-      values[0] = __Pyx_ArgRef_VARARGS(__pyx_args, 0);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 105, __pyx_L3_error)
-      values[1] = __Pyx_ArgRef_VARARGS(__pyx_args, 1);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 105, __pyx_L3_error)
-      values[2] = __Pyx_ArgRef_VARARGS(__pyx_args, 2);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 105, __pyx_L3_error)
+      switch (__pyx_nargs) {
+        case  4:
+        values[3] = __Pyx_ArgRef_VARARGS(__pyx_args, 3);
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 105, __pyx_L3_error)
+        CYTHON_FALLTHROUGH;
+        case  3:
+        values[2] = __Pyx_ArgRef_VARARGS(__pyx_args, 2);
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 105, __pyx_L3_error)
+        values[1] = __Pyx_ArgRef_VARARGS(__pyx_args, 1);
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 105, __pyx_L3_error)
+        values[0] = __Pyx_ArgRef_VARARGS(__pyx_args, 0);
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 105, __pyx_L3_error)
+        break;
+        default: goto __pyx_L5_argtuple_error;
+      }
+      if (!values[3]) values[3] = __Pyx_NewRef((PyObject *)((struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *)Py_None));
     }
     __pyx_v_name = __pyx_convert_string_from_py_6libcpp_6string_std__in_string(values[0]); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 105, __pyx_L3_error)
     __pyx_v_stream = ((enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType)__Pyx_PyLong_As_enum____pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType(values[1])); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 105, __pyx_L3_error)
     __pyx_v_conflate = __Pyx_PyObject_IsTrue(values[2]); if (unlikely((__pyx_v_conflate == ((bool)-1)) && PyErr_Occurred())) __PYX_ERR(0, 105, __pyx_L3_error)
+    __pyx_v_context = ((struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *)values[3]);
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("__cinit__", 1, 3, 3, __pyx_nargs); __PYX_ERR(0, 105, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("__cinit__", 0, 3, 4, __pyx_nargs); __PYX_ERR(0, 105, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -22115,43 +22157,94 @@ static int __pyx_pw_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_1__cinit_
   __Pyx_RefNannyFinishContext();
   return -1;
   __pyx_L4_argument_unpacking_done:;
-  __pyx_r = __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(((struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *)__pyx_v_self), __PYX_STD_MOVE_IF_SUPPORTED(__pyx_v_name), __pyx_v_stream, __pyx_v_conflate);
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_context), __pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext, 1, "context", 0))) __PYX_ERR(0, 105, __pyx_L1_error)
+  __pyx_r = __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(((struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *)__pyx_v_self), __PYX_STD_MOVE_IF_SUPPORTED(__pyx_v_name), __pyx_v_stream, __pyx_v_conflate, __pyx_v_context);
 
   /* function exit code */
+  goto __pyx_L0;
+  __pyx_L1_error:;
+  __pyx_r = -1;
   for (Py_ssize_t __pyx_temp=0; __pyx_temp < (Py_ssize_t)(sizeof(values)/sizeof(values[0])); ++__pyx_temp) {
     Py_XDECREF(values[__pyx_temp]);
   }
+  goto __pyx_L7_cleaned_up;
+  __pyx_L0:;
+  for (Py_ssize_t __pyx_temp=0; __pyx_temp < (Py_ssize_t)(sizeof(values)/sizeof(values[0])); ++__pyx_temp) {
+    Py_XDECREF(values[__pyx_temp]);
+  }
+  __pyx_L7_cleaned_up:;
   __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self, std::string __pyx_v_name, enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType __pyx_v_stream, bool __pyx_v_conflate) {
+static int __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient___cinit__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self, std::string __pyx_v_name, enum __pyx_t_4msgq_9visionipc_13visionipc_pyx_VisionStreamType __pyx_v_stream, bool __pyx_v_conflate, struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext *__pyx_v_context) {
   int __pyx_r;
+  int __pyx_t_1;
+  int __pyx_lineno = 0;
+  const char *__pyx_filename = NULL;
+  int __pyx_clineno = 0;
 
   /* "msgq/visionipc/visionipc_pyx.pyx":106
  * 
- *   def __cinit__(self, string name, VisionStreamType stream, bool conflate):
- *     self.client = new cppVisionIpcClient(name, stream, conflate)             # <<<<<<<<<<<<<<
+ *   def __cinit__(self, string name, VisionStreamType stream, bool conflate, CLContext context = None):
+ *     if context:             # <<<<<<<<<<<<<<
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)
+ *     else:
+*/
+  __pyx_t_1 = __Pyx_PyObject_IsTrue(((PyObject *)__pyx_v_context)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 106, __pyx_L1_error)
+  if (__pyx_t_1) {
+
+    /* "msgq/visionipc/visionipc_pyx.pyx":107
+ *   def __cinit__(self, string name, VisionStreamType stream, bool conflate, CLContext context = None):
+ *     if context:
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)             # <<<<<<<<<<<<<<
+ *     else:
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, NULL, NULL)
+*/
+    __pyx_v_self->client = new VisionIpcClient(__pyx_v_name, ((enum VisionStreamType)__pyx_v_stream), __pyx_v_conflate, __pyx_v_context->device_id, __pyx_v_context->context);
+
+    /* "msgq/visionipc/visionipc_pyx.pyx":106
+ * 
+ *   def __cinit__(self, string name, VisionStreamType stream, bool conflate, CLContext context = None):
+ *     if context:             # <<<<<<<<<<<<<<
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)
+ *     else:
+*/
+    goto __pyx_L3;
+  }
+
+  /* "msgq/visionipc/visionipc_pyx.pyx":109
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)
+ *     else:
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, NULL, NULL)             # <<<<<<<<<<<<<<
  * 
  *   def __dealloc__(self):
 */
-  __pyx_v_self->client = new VisionIpcClient(__pyx_v_name, ((enum VisionStreamType)__pyx_v_stream), __pyx_v_conflate);
+  /*else*/ {
+    __pyx_v_self->client = new VisionIpcClient(__pyx_v_name, ((enum VisionStreamType)__pyx_v_stream), __pyx_v_conflate, NULL, NULL);
+  }
+  __pyx_L3:;
 
   /* "msgq/visionipc/visionipc_pyx.pyx":105
  *   cdef VisionIpcBufExtra extra
  * 
- *   def __cinit__(self, string name, VisionStreamType stream, bool conflate):             # <<<<<<<<<<<<<<
- *     self.client = new cppVisionIpcClient(name, stream, conflate)
- * 
+ *   def __cinit__(self, string name, VisionStreamType stream, bool conflate, CLContext context = None):             # <<<<<<<<<<<<<<
+ *     if context:
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, context.device_id, context.context)
 */
 
   /* function exit code */
   __pyx_r = 0;
+  goto __pyx_L0;
+  __pyx_L1_error:;
+  __Pyx_AddTraceback("msgq.visionipc.visionipc_pyx.VisionIpcClient.__cinit__", __pyx_clineno, __pyx_lineno, __pyx_filename);
+  __pyx_r = -1;
+  __pyx_L0:;
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":108
- *     self.client = new cppVisionIpcClient(name, stream, conflate)
+/* "msgq/visionipc/visionipc_pyx.pyx":111
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, NULL, NULL)
  * 
  *   def __dealloc__(self):             # <<<<<<<<<<<<<<
  *     del self.client
@@ -22173,7 +22266,7 @@ static void __pyx_pw_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_3__deall
 
 static void __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_2__dealloc__(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient *__pyx_v_self) {
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":109
+  /* "msgq/visionipc/visionipc_pyx.pyx":112
  * 
  *   def __dealloc__(self):
  *     del self.client             # <<<<<<<<<<<<<<
@@ -22182,8 +22275,8 @@ static void __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_2__deall
 */
   delete __pyx_v_self->client;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":108
- *     self.client = new cppVisionIpcClient(name, stream, conflate)
+  /* "msgq/visionipc/visionipc_pyx.pyx":111
+ *       self.client = new cppVisionIpcClient(name, stream, conflate, NULL, NULL)
  * 
  *   def __dealloc__(self):             # <<<<<<<<<<<<<<
  *     del self.client
@@ -22193,7 +22286,7 @@ static void __pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_2__deall
   /* function exit code */
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":111
+/* "msgq/visionipc/visionipc_pyx.pyx":114
  *     del self.client
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22227,7 +22320,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5wi
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":113
+  /* "msgq/visionipc/visionipc_pyx.pyx":116
  *   @property
  *   def width(self):
  *     return self.client.buffers[0].width if self.client.num_buffers else None             # <<<<<<<<<<<<<<
@@ -22237,7 +22330,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5wi
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2 = (__pyx_v_self->client->num_buffers != 0);
   if (__pyx_t_2) {
-    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).width); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 113, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).width); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 116, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_t_1 = __pyx_t_3;
     __pyx_t_3 = 0;
@@ -22249,7 +22342,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5wi
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":111
+  /* "msgq/visionipc/visionipc_pyx.pyx":114
  *     del self.client
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22269,7 +22362,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5wi
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":115
+/* "msgq/visionipc/visionipc_pyx.pyx":118
  *     return self.client.buffers[0].width if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22303,7 +22396,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6he
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":117
+  /* "msgq/visionipc/visionipc_pyx.pyx":120
  *   @property
  *   def height(self):
  *     return self.client.buffers[0].height if self.client.num_buffers else None             # <<<<<<<<<<<<<<
@@ -22313,7 +22406,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6he
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2 = (__pyx_v_self->client->num_buffers != 0);
   if (__pyx_t_2) {
-    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).height); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 117, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).height); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 120, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_t_1 = __pyx_t_3;
     __pyx_t_3 = 0;
@@ -22325,7 +22418,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6he
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":115
+  /* "msgq/visionipc/visionipc_pyx.pyx":118
  *     return self.client.buffers[0].width if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22345,7 +22438,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6he
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":119
+/* "msgq/visionipc/visionipc_pyx.pyx":122
  *     return self.client.buffers[0].height if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22379,7 +22472,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6st
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":121
+  /* "msgq/visionipc/visionipc_pyx.pyx":124
  *   @property
  *   def stride(self):
  *     return self.client.buffers[0].stride if self.client.num_buffers else None             # <<<<<<<<<<<<<<
@@ -22389,7 +22482,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6st
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2 = (__pyx_v_self->client->num_buffers != 0);
   if (__pyx_t_2) {
-    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).stride); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 121, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).stride); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 124, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_t_1 = __pyx_t_3;
     __pyx_t_3 = 0;
@@ -22401,7 +22494,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6st
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":119
+  /* "msgq/visionipc/visionipc_pyx.pyx":122
  *     return self.client.buffers[0].height if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22421,7 +22514,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6st
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":123
+/* "msgq/visionipc/visionipc_pyx.pyx":126
  *     return self.client.buffers[0].stride if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22455,7 +22548,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9uv
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":125
+  /* "msgq/visionipc/visionipc_pyx.pyx":128
  *   @property
  *   def uv_offset(self):
  *     return self.client.buffers[0].uv_offset if self.client.num_buffers else None             # <<<<<<<<<<<<<<
@@ -22465,7 +22558,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9uv
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2 = (__pyx_v_self->client->num_buffers != 0);
   if (__pyx_t_2) {
-    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).uv_offset); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 125, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).uv_offset); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 128, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_t_1 = __pyx_t_3;
     __pyx_t_3 = 0;
@@ -22477,7 +22570,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9uv
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":123
+  /* "msgq/visionipc/visionipc_pyx.pyx":126
  *     return self.client.buffers[0].stride if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22497,7 +22590,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9uv
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":127
+/* "msgq/visionipc/visionipc_pyx.pyx":130
  *     return self.client.buffers[0].uv_offset if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22531,7 +22624,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10b
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":129
+  /* "msgq/visionipc/visionipc_pyx.pyx":132
  *   @property
  *   def buffer_len(self):
  *     return self.client.buffers[0].len if self.client.num_buffers else None             # <<<<<<<<<<<<<<
@@ -22541,7 +22634,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10b
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2 = (__pyx_v_self->client->num_buffers != 0);
   if (__pyx_t_2) {
-    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).len); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 129, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_PyLong_FromSize_t((__pyx_v_self->client->buffers[0]).len); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 132, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
     __pyx_t_1 = __pyx_t_3;
     __pyx_t_3 = 0;
@@ -22553,7 +22646,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10b
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":127
+  /* "msgq/visionipc/visionipc_pyx.pyx":130
  *     return self.client.buffers[0].uv_offset if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22573,7 +22666,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10b
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":131
+/* "msgq/visionipc/visionipc_pyx.pyx":134
  *     return self.client.buffers[0].len if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22605,7 +22698,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_11n
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":133
+  /* "msgq/visionipc/visionipc_pyx.pyx":136
  *   @property
  *   def num_buffers(self):
  *     return self.client.num_buffers             # <<<<<<<<<<<<<<
@@ -22613,13 +22706,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_11n
  *   @property
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_self->client->num_buffers); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 133, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_self->client->num_buffers); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 136, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":131
+  /* "msgq/visionipc/visionipc_pyx.pyx":134
  *     return self.client.buffers[0].len if self.client.num_buffers else None
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22638,7 +22731,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_11n
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":135
+/* "msgq/visionipc/visionipc_pyx.pyx":138
  *     return self.client.num_buffers
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22670,7 +22763,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8fr
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":137
+  /* "msgq/visionipc/visionipc_pyx.pyx":140
  *   @property
  *   def frame_id(self):
  *     return self.extra.frame_id             # <<<<<<<<<<<<<<
@@ -22678,13 +22771,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8fr
  *   @property
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyLong_From_uint32_t(__pyx_v_self->extra.frame_id); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 137, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyLong_From_uint32_t(__pyx_v_self->extra.frame_id); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 140, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":135
+  /* "msgq/visionipc/visionipc_pyx.pyx":138
  *     return self.client.num_buffers
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22703,7 +22796,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8fr
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":139
+/* "msgq/visionipc/visionipc_pyx.pyx":142
  *     return self.extra.frame_id
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22735,7 +22828,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":141
+  /* "msgq/visionipc/visionipc_pyx.pyx":144
  *   @property
  *   def timestamp_sof(self):
  *     return self.extra.timestamp_sof             # <<<<<<<<<<<<<<
@@ -22743,13 +22836,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
  *   @property
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyLong_From_uint64_t(__pyx_v_self->extra.timestamp_sof); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 141, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyLong_From_uint64_t(__pyx_v_self->extra.timestamp_sof); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 144, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":139
+  /* "msgq/visionipc/visionipc_pyx.pyx":142
  *     return self.extra.frame_id
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22768,7 +22861,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":143
+/* "msgq/visionipc/visionipc_pyx.pyx":146
  *     return self.extra.timestamp_sof
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22800,7 +22893,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":145
+  /* "msgq/visionipc/visionipc_pyx.pyx":148
  *   @property
  *   def timestamp_eof(self):
  *     return self.extra.timestamp_eof             # <<<<<<<<<<<<<<
@@ -22808,13 +22901,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
  *   @property
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyLong_From_uint64_t(__pyx_v_self->extra.timestamp_eof); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 145, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyLong_From_uint64_t(__pyx_v_self->extra.timestamp_eof); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 148, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":143
+  /* "msgq/visionipc/visionipc_pyx.pyx":146
  *     return self.extra.timestamp_sof
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22833,7 +22926,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_13t
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":147
+/* "msgq/visionipc/visionipc_pyx.pyx":150
  *     return self.extra.timestamp_eof
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22865,7 +22958,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5va
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__get__", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":149
+  /* "msgq/visionipc/visionipc_pyx.pyx":152
  *   @property
  *   def valid(self):
  *     return self.extra.valid             # <<<<<<<<<<<<<<
@@ -22873,13 +22966,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5va
  *   def recv(self, int timeout_ms=100):
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->extra.valid); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 149, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->extra.valid); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 152, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":147
+  /* "msgq/visionipc/visionipc_pyx.pyx":150
  *     return self.extra.timestamp_eof
  * 
  *   @property             # <<<<<<<<<<<<<<
@@ -22898,7 +22991,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5va
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":151
+/* "msgq/visionipc/visionipc_pyx.pyx":154
  *     return self.extra.valid
  * 
  *   def recv(self, int timeout_ms=100):             # <<<<<<<<<<<<<<
@@ -22945,37 +23038,37 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   {
     PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_timeout_ms,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_FASTCALL(__pyx_kwds) : 0;
-    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 151, __pyx_L3_error)
+    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 154, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 151, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 154, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
-      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "recv", 0) < 0) __PYX_ERR(0, 151, __pyx_L3_error)
+      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "recv", 0) < 0) __PYX_ERR(0, 154, __pyx_L3_error)
     } else {
       switch (__pyx_nargs) {
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 151, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 154, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
     }
     if (values[0]) {
-      __pyx_v_timeout_ms = __Pyx_PyLong_As_int(values[0]); if (unlikely((__pyx_v_timeout_ms == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 151, __pyx_L3_error)
+      __pyx_v_timeout_ms = __Pyx_PyLong_As_int(values[0]); if (unlikely((__pyx_v_timeout_ms == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 154, __pyx_L3_error)
     } else {
       __pyx_v_timeout_ms = ((int)0x64);
     }
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("recv", 0, 0, 1, __pyx_nargs); __PYX_ERR(0, 151, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("recv", 0, 0, 1, __pyx_nargs); __PYX_ERR(0, 154, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -23007,7 +23100,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("recv", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":152
+  /* "msgq/visionipc/visionipc_pyx.pyx":155
  * 
  *   def recv(self, int timeout_ms=100):
  *     buf = self.client.recv(&self.extra, timeout_ms)             # <<<<<<<<<<<<<<
@@ -23016,7 +23109,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
 */
   __pyx_v_buf = __pyx_v_self->client->recv((&__pyx_v_self->extra), __pyx_v_timeout_ms);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":153
+  /* "msgq/visionipc/visionipc_pyx.pyx":156
  *   def recv(self, int timeout_ms=100):
  *     buf = self.client.recv(&self.extra, timeout_ms)
  *     if not buf:             # <<<<<<<<<<<<<<
@@ -23026,7 +23119,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
   __pyx_t_1 = (!(__pyx_v_buf != 0));
   if (__pyx_t_1) {
 
-    /* "msgq/visionipc/visionipc_pyx.pyx":154
+    /* "msgq/visionipc/visionipc_pyx.pyx":157
  *     buf = self.client.recv(&self.extra, timeout_ms)
  *     if not buf:
  *       return None             # <<<<<<<<<<<<<<
@@ -23037,7 +23130,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
     __pyx_r = Py_None; __Pyx_INCREF(Py_None);
     goto __pyx_L0;
 
-    /* "msgq/visionipc/visionipc_pyx.pyx":153
+    /* "msgq/visionipc/visionipc_pyx.pyx":156
  *   def recv(self, int timeout_ms=100):
  *     buf = self.client.recv(&self.extra, timeout_ms)
  *     if not buf:             # <<<<<<<<<<<<<<
@@ -23046,7 +23139,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
 */
   }
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":155
+  /* "msgq/visionipc/visionipc_pyx.pyx":158
  *     if not buf:
  *       return None
  *     return VisionBuf.create(buf)             # <<<<<<<<<<<<<<
@@ -23054,13 +23147,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
  *   def connect(self, bool blocking):
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_2 = __pyx_f_4msgq_9visionipc_13visionipc_pyx_9VisionBuf_create(__pyx_v_buf); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 155, __pyx_L1_error)
+  __pyx_t_2 = __pyx_f_4msgq_9visionipc_13visionipc_pyx_9VisionBuf_create(__pyx_v_buf); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 158, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_2);
   __pyx_r = __pyx_t_2;
   __pyx_t_2 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":151
+  /* "msgq/visionipc/visionipc_pyx.pyx":154
  *     return self.extra.valid
  * 
  *   def recv(self, int timeout_ms=100):             # <<<<<<<<<<<<<<
@@ -23079,7 +23172,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_4re
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":157
+/* "msgq/visionipc/visionipc_pyx.pyx":160
  *     return VisionBuf.create(buf)
  * 
  *   def connect(self, bool blocking):             # <<<<<<<<<<<<<<
@@ -23126,32 +23219,32 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   {
     PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_blocking,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_FASTCALL(__pyx_kwds) : 0;
-    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 157, __pyx_L3_error)
+    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 160, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 157, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 160, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
-      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "connect", 0) < 0) __PYX_ERR(0, 157, __pyx_L3_error)
+      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "connect", 0) < 0) __PYX_ERR(0, 160, __pyx_L3_error)
       for (Py_ssize_t i = __pyx_nargs; i < 1; i++) {
-        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("connect", 1, 1, 1, i); __PYX_ERR(0, 157, __pyx_L3_error) }
+        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("connect", 1, 1, 1, i); __PYX_ERR(0, 160, __pyx_L3_error) }
       }
     } else if (unlikely(__pyx_nargs != 1)) {
       goto __pyx_L5_argtuple_error;
     } else {
       values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 157, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 160, __pyx_L3_error)
     }
-    __pyx_v_blocking = __Pyx_PyObject_IsTrue(values[0]); if (unlikely((__pyx_v_blocking == ((bool)-1)) && PyErr_Occurred())) __PYX_ERR(0, 157, __pyx_L3_error)
+    __pyx_v_blocking = __Pyx_PyObject_IsTrue(values[0]); if (unlikely((__pyx_v_blocking == ((bool)-1)) && PyErr_Occurred())) __PYX_ERR(0, 160, __pyx_L3_error)
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("connect", 1, 1, 1, __pyx_nargs); __PYX_ERR(0, 157, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("connect", 1, 1, 1, __pyx_nargs); __PYX_ERR(0, 160, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -23181,7 +23274,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6co
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("connect", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":158
+  /* "msgq/visionipc/visionipc_pyx.pyx":161
  * 
  *   def connect(self, bool blocking):
  *     return self.client.connect(blocking)             # <<<<<<<<<<<<<<
@@ -23189,13 +23282,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6co
  *   def is_connected(self):
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->client->connect(__pyx_v_blocking)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 158, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->client->connect(__pyx_v_blocking)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 161, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":157
+  /* "msgq/visionipc/visionipc_pyx.pyx":160
  *     return VisionBuf.create(buf)
  * 
  *   def connect(self, bool blocking):             # <<<<<<<<<<<<<<
@@ -23214,7 +23307,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_6co
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":160
+/* "msgq/visionipc/visionipc_pyx.pyx":163
  *     return self.client.connect(blocking)
  * 
  *   def is_connected(self):             # <<<<<<<<<<<<<<
@@ -23273,7 +23366,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8is
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("is_connected", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":161
+  /* "msgq/visionipc/visionipc_pyx.pyx":164
  * 
  *   def is_connected(self):
  *     return self.client.is_connected()             # <<<<<<<<<<<<<<
@@ -23281,13 +23374,13 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8is
  *   @staticmethod
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->client->is_connected()); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 161, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyBool_FromLong(__pyx_v_self->client->is_connected()); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 164, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":160
+  /* "msgq/visionipc/visionipc_pyx.pyx":163
  *     return self.client.connect(blocking)
  * 
  *   def is_connected(self):             # <<<<<<<<<<<<<<
@@ -23306,7 +23399,7 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_8is
   return __pyx_r;
 }
 
-/* "msgq/visionipc/visionipc_pyx.pyx":163
+/* "msgq/visionipc/visionipc_pyx.pyx":166
  *     return self.client.is_connected()
  * 
  *   @staticmethod             # <<<<<<<<<<<<<<
@@ -23354,39 +23447,39 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   {
     PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_name,&__pyx_mstate_global->__pyx_n_u_block,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_FASTCALL(__pyx_kwds) : 0;
-    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 163, __pyx_L3_error)
+    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 166, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
         case  2:
         values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 163, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 166, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 163, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 166, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
-      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "available_streams", 0) < 0) __PYX_ERR(0, 163, __pyx_L3_error)
+      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "available_streams", 0) < 0) __PYX_ERR(0, 166, __pyx_L3_error)
       for (Py_ssize_t i = __pyx_nargs; i < 2; i++) {
-        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("available_streams", 1, 2, 2, i); __PYX_ERR(0, 163, __pyx_L3_error) }
+        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("available_streams", 1, 2, 2, i); __PYX_ERR(0, 166, __pyx_L3_error) }
       }
     } else if (unlikely(__pyx_nargs != 2)) {
       goto __pyx_L5_argtuple_error;
     } else {
       values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 163, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 166, __pyx_L3_error)
       values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 163, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 166, __pyx_L3_error)
     }
-    __pyx_v_name = __pyx_convert_string_from_py_6libcpp_6string_std__in_string(values[0]); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 164, __pyx_L3_error)
-    __pyx_v_block = __Pyx_PyObject_IsTrue(values[1]); if (unlikely((__pyx_v_block == ((bool)-1)) && PyErr_Occurred())) __PYX_ERR(0, 164, __pyx_L3_error)
+    __pyx_v_name = __pyx_convert_string_from_py_6libcpp_6string_std__in_string(values[0]); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 167, __pyx_L3_error)
+    __pyx_v_block = __Pyx_PyObject_IsTrue(values[1]); if (unlikely((__pyx_v_block == ((bool)-1)) && PyErr_Occurred())) __PYX_ERR(0, 167, __pyx_L3_error)
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("available_streams", 1, 2, 2, __pyx_nargs); __PYX_ERR(0, 163, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("available_streams", 1, 2, 2, __pyx_nargs); __PYX_ERR(0, 166, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -23416,19 +23509,19 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_10a
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("available_streams", 0);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":165
+  /* "msgq/visionipc/visionipc_pyx.pyx":168
  *   @staticmethod
  *   def available_streams(string name, bool block):
  *     return cppVisionIpcClient.getAvailableStreams(name, block)             # <<<<<<<<<<<<<<
 */
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __pyx_convert_set_to_py_enum__VisionStreamType(VisionIpcClient::getAvailableStreams(__pyx_v_name, __pyx_v_block)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 165, __pyx_L1_error)
+  __pyx_t_1 = __pyx_convert_set_to_py_enum__VisionStreamType(VisionIpcClient::getAvailableStreams(__pyx_v_name, __pyx_v_block)); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 168, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
   goto __pyx_L0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":163
+  /* "msgq/visionipc/visionipc_pyx.pyx":166
  *     return self.client.is_connected()
  * 
  *   @staticmethod             # <<<<<<<<<<<<<<
@@ -23651,6 +23744,132 @@ static PyObject *__pyx_pf_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_14_
   return __pyx_r;
 }
 /* #### Code section: module_exttypes ### */
+
+static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_CLContext(PyTypeObject *t, CYTHON_UNUSED PyObject *a, CYTHON_UNUSED PyObject *k) {
+  PyObject *o;
+  #if CYTHON_COMPILING_IN_LIMITED_API
+  allocfunc alloc_func = (allocfunc)PyType_GetSlot(t, Py_tp_alloc);
+  o = alloc_func(t, 0);
+  #else
+  if (likely(!__Pyx_PyType_HasFeature(t, Py_TPFLAGS_IS_ABSTRACT))) {
+    o = (*t->tp_alloc)(t, 0);
+  } else {
+    o = (PyObject *) PyBaseObject_Type.tp_new(t, __pyx_mstate_global->__pyx_empty_tuple, 0);
+  }
+  if (unlikely(!o)) return 0;
+  #endif
+  return o;
+}
+
+static void __pyx_tp_dealloc_4msgq_9visionipc_13visionipc_pyx_CLContext(PyObject *o) {
+  #if CYTHON_USE_TP_FINALIZE
+  if (unlikely((PY_VERSION_HEX >= 0x03080000 || __Pyx_PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_HAVE_FINALIZE)) && __Pyx_PyObject_GetSlot(o, tp_finalize, destructor)) && (!PyType_IS_GC(Py_TYPE(o)) || !__Pyx_PyObject_GC_IsFinalized(o))) {
+    if (__Pyx_PyObject_GetSlot(o, tp_dealloc, destructor) == __pyx_tp_dealloc_4msgq_9visionipc_13visionipc_pyx_CLContext) {
+      if (PyObject_CallFinalizerFromDealloc(o)) return;
+    }
+  }
+  #endif
+  #if CYTHON_USE_TYPE_SLOTS
+  (*Py_TYPE(o)->tp_free)(o);
+  #else
+  {
+    freefunc tp_free = (freefunc)PyType_GetSlot(Py_TYPE(o), Py_tp_free);
+    if (tp_free) tp_free(o);
+  }
+  #endif
+}
+#if CYTHON_USE_TYPE_SPECS
+static PyType_Slot __pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext_slots[] = {
+  {Py_tp_dealloc, (void *)__pyx_tp_dealloc_4msgq_9visionipc_13visionipc_pyx_CLContext},
+  {Py_tp_new, (void *)__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_CLContext},
+  {0, 0},
+};
+static PyType_Spec __pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext_spec = {
+  "msgq.visionipc.visionipc_pyx.CLContext",
+  sizeof(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext),
+  0,
+  Py_TPFLAGS_DEFAULT|Py_TPFLAGS_HAVE_VERSION_TAG|Py_TPFLAGS_CHECKTYPES|Py_TPFLAGS_HAVE_NEWBUFFER|Py_TPFLAGS_BASETYPE|Py_TPFLAGS_HAVE_FINALIZE,
+  __pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext_slots,
+};
+#else
+
+static PyTypeObject __pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext = {
+  PyVarObject_HEAD_INIT(0, 0)
+  "msgq.visionipc.visionipc_pyx.""CLContext", /*tp_name*/
+  sizeof(struct __pyx_obj_4msgq_9visionipc_13visionipc_pyx_CLContext), /*tp_basicsize*/
+  0, /*tp_itemsize*/
+  __pyx_tp_dealloc_4msgq_9visionipc_13visionipc_pyx_CLContext, /*tp_dealloc*/
+  #if PY_VERSION_HEX < 0x030800b4
+  0, /*tp_print*/
+  #endif
+  #if PY_VERSION_HEX >= 0x030800b4
+  0, /*tp_vectorcall_offset*/
+  #endif
+  0, /*tp_getattr*/
+  0, /*tp_setattr*/
+  0, /*tp_as_async*/
+  0, /*tp_repr*/
+  0, /*tp_as_number*/
+  0, /*tp_as_sequence*/
+  0, /*tp_as_mapping*/
+  0, /*tp_hash*/
+  0, /*tp_call*/
+  0, /*tp_str*/
+  0, /*tp_getattro*/
+  0, /*tp_setattro*/
+  0, /*tp_as_buffer*/
+  Py_TPFLAGS_DEFAULT|Py_TPFLAGS_HAVE_VERSION_TAG|Py_TPFLAGS_CHECKTYPES|Py_TPFLAGS_HAVE_NEWBUFFER|Py_TPFLAGS_BASETYPE|Py_TPFLAGS_HAVE_FINALIZE, /*tp_flags*/
+  0, /*tp_doc*/
+  0, /*tp_traverse*/
+  0, /*tp_clear*/
+  0, /*tp_richcompare*/
+  0, /*tp_weaklistoffset*/
+  0, /*tp_iter*/
+  0, /*tp_iternext*/
+  0, /*tp_methods*/
+  0, /*tp_members*/
+  0, /*tp_getset*/
+  0, /*tp_base*/
+  0, /*tp_dict*/
+  0, /*tp_descr_get*/
+  0, /*tp_descr_set*/
+  #if !CYTHON_USE_TYPE_SPECS
+  0, /*tp_dictoffset*/
+  #endif
+  0, /*tp_init*/
+  0, /*tp_alloc*/
+  __pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_CLContext, /*tp_new*/
+  0, /*tp_free*/
+  0, /*tp_is_gc*/
+  0, /*tp_bases*/
+  0, /*tp_mro*/
+  0, /*tp_cache*/
+  0, /*tp_subclasses*/
+  0, /*tp_weaklist*/
+  0, /*tp_del*/
+  0, /*tp_version_tag*/
+  #if CYTHON_USE_TP_FINALIZE
+  0, /*tp_finalize*/
+  #else
+  NULL, /*tp_finalize*/
+  #endif
+  #if PY_VERSION_HEX >= 0x030800b1 && (!CYTHON_COMPILING_IN_PYPY || PYPY_VERSION_NUM >= 0x07030800)
+  0, /*tp_vectorcall*/
+  #endif
+  #if __PYX_NEED_TP_PRINT_SLOT == 1
+  0, /*tp_print*/
+  #endif
+  #if PY_VERSION_HEX >= 0x030C0000
+  0, /*tp_watched*/
+  #endif
+  #if PY_VERSION_HEX >= 0x030d00A4
+  0, /*tp_versions_used*/
+  #endif
+  #if CYTHON_COMPILING_IN_PYPY && PY_VERSION_HEX >= 0x03090000 && PY_VERSION_HEX < 0x030a0000
+  0, /*tp_pypy_flags*/
+  #endif
+};
+#endif
 static struct __pyx_vtabstruct_4msgq_9visionipc_13visionipc_pyx_VisionBuf __pyx_vtable_4msgq_9visionipc_13visionipc_pyx_VisionBuf;
 
 static PyObject *__pyx_tp_new_4msgq_9visionipc_13visionipc_pyx_VisionBuf(PyTypeObject *t, CYTHON_UNUSED PyObject *a, CYTHON_UNUSED PyObject *k) {
@@ -25138,6 +25357,23 @@ static int __Pyx_modinit_type_init_code(__pyx_mstatetype *__pyx_mstate) {
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__Pyx_modinit_type_init_code", 0);
   /*--- Type init code ---*/
+  #if CYTHON_USE_TYPE_SPECS
+  __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext = (PyTypeObject *) __Pyx_PyType_FromModuleAndSpec(__pyx_m, &__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext_spec, NULL); if (unlikely(!__pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext)) __PYX_ERR(3, 7, __pyx_L1_error)
+  if (__Pyx_fix_up_extension_type_from_spec(&__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext_spec, __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext) < 0) __PYX_ERR(3, 7, __pyx_L1_error)
+  #else
+  __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext = &__pyx_type_4msgq_9visionipc_13visionipc_pyx_CLContext;
+  #endif
+  #if !CYTHON_COMPILING_IN_LIMITED_API
+  #endif
+  #if !CYTHON_USE_TYPE_SPECS
+  if (__Pyx_PyType_Ready(__pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext) < 0) __PYX_ERR(3, 7, __pyx_L1_error)
+  #endif
+  #if !CYTHON_COMPILING_IN_LIMITED_API
+  if ((CYTHON_USE_TYPE_SLOTS && CYTHON_USE_PYTYPE_LOOKUP) && likely(!__pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext->tp_dictoffset && __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext->tp_getattro == PyObject_GenericGetAttr)) {
+    __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext->tp_getattro = PyObject_GenericGetAttr;
+  }
+  #endif
+  if (PyObject_SetAttr(__pyx_m, __pyx_mstate_global->__pyx_n_u_CLContext, (PyObject *) __pyx_mstate->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_CLContext) < 0) __PYX_ERR(3, 7, __pyx_L1_error)
   __pyx_vtabptr_4msgq_9visionipc_13visionipc_pyx_VisionBuf = &__pyx_vtable_4msgq_9visionipc_13visionipc_pyx_VisionBuf;
   __pyx_vtable_4msgq_9visionipc_13visionipc_pyx_VisionBuf.create = (PyObject *(*)(VisionBuf *))__pyx_f_4msgq_9visionipc_13visionipc_pyx_9VisionBuf_create;
   #if CYTHON_USE_TYPE_SPECS
@@ -25327,7 +25563,7 @@ static int __Pyx_modinit_type_import_code(__pyx_mstatetype *__pyx_mstate) {
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("__Pyx_modinit_type_import_code", 0);
   /*--- Type import code ---*/
-  __pyx_t_1 = PyImport_ImportModule(__Pyx_BUILTIN_MODULE_NAME); if (unlikely(!__pyx_t_1)) __PYX_ERR(3, 9, __pyx_L1_error)
+  __pyx_t_1 = PyImport_ImportModule(__Pyx_BUILTIN_MODULE_NAME); if (unlikely(!__pyx_t_1)) __PYX_ERR(4, 9, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_mstate->__pyx_ptype_7cpython_4type_type = __Pyx_ImportType_3_1_4(__pyx_t_1, __Pyx_BUILTIN_MODULE_NAME, "type",
   #if defined(PYPY_VERSION_NUM) && PYPY_VERSION_NUM < 0x050B0000
@@ -25337,7 +25573,7 @@ static int __Pyx_modinit_type_import_code(__pyx_mstatetype *__pyx_mstate) {
   #else
   sizeof(PyHeapTypeObject), __PYX_GET_STRUCT_ALIGNMENT_3_1_4(PyHeapTypeObject),
   #endif
-  __Pyx_ImportType_CheckSize_Warn_3_1_4); if (!__pyx_mstate->__pyx_ptype_7cpython_4type_type) __PYX_ERR(3, 9, __pyx_L1_error)
+  __Pyx_ImportType_CheckSize_Warn_3_1_4); if (!__pyx_mstate->__pyx_ptype_7cpython_4type_type) __PYX_ERR(4, 9, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
   __pyx_t_1 = PyImport_ImportModule("numpy"); if (unlikely(!__pyx_t_1)) __PYX_ERR(2, 228, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
@@ -26577,7 +26813,7 @@ __Pyx_RefNannySetupContext("PyInit_visionipc_pyx", 0);
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
   /* "msgq/visionipc/visionipc_pyx.pyx":73
- *     self.server = new cppVisionIpcServer(name)
+ *     self.server = new cppVisionIpcServer(name, NULL, NULL)
  * 
  *   def create_buffers(self, VisionStreamType tp, size_t num_buffers, size_t width, size_t height):             # <<<<<<<<<<<<<<
  *     self.server.create_buffers(tp, num_buffers, width, height)
@@ -26646,58 +26882,58 @@ __Pyx_RefNannySetupContext("PyInit_visionipc_pyx", 0);
   if (PyDict_SetItem(__pyx_mstate_global->__pyx_d, __pyx_mstate_global->__pyx_n_u_setstate_cython, __pyx_t_6) < 0) __PYX_ERR(1, 3, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":151
+  /* "msgq/visionipc/visionipc_pyx.pyx":154
  *     return self.extra.valid
  * 
  *   def recv(self, int timeout_ms=100):             # <<<<<<<<<<<<<<
  *     buf = self.client.recv(&self.extra, timeout_ms)
  *     if not buf:
 */
-  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5recv, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_recv, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[9])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 151, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_5recv, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_recv, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[9])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 154, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
   __Pyx_CyFunction_SetDefaultsTuple(__pyx_t_6, __pyx_mstate_global->__pyx_tuple[4]);
-  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_recv, __pyx_t_6) < 0) __PYX_ERR(0, 151, __pyx_L1_error)
+  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_recv, __pyx_t_6) < 0) __PYX_ERR(0, 154, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":157
+  /* "msgq/visionipc/visionipc_pyx.pyx":160
  *     return VisionBuf.create(buf)
  * 
  *   def connect(self, bool blocking):             # <<<<<<<<<<<<<<
  *     return self.client.connect(blocking)
  * 
 */
-  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_7connect, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_connect, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[10])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 157, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_7connect, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_connect, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[10])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 160, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
-  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_connect, __pyx_t_6) < 0) __PYX_ERR(0, 157, __pyx_L1_error)
+  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_connect, __pyx_t_6) < 0) __PYX_ERR(0, 160, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":160
+  /* "msgq/visionipc/visionipc_pyx.pyx":163
  *     return self.client.connect(blocking)
  * 
  *   def is_connected(self):             # <<<<<<<<<<<<<<
  *     return self.client.is_connected()
  * 
 */
-  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9is_connected, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_is_connected, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[11])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 160, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_9is_connected, __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_is_connected, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[11])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 163, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
-  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_is_connected, __pyx_t_6) < 0) __PYX_ERR(0, 160, __pyx_L1_error)
+  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_is_connected, __pyx_t_6) < 0) __PYX_ERR(0, 163, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":163
+  /* "msgq/visionipc/visionipc_pyx.pyx":166
  *     return self.client.is_connected()
  * 
  *   @staticmethod             # <<<<<<<<<<<<<<
  *   def available_streams(string name, bool block):
  *     return cppVisionIpcClient.getAvailableStreams(name, block)
 */
-  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_11available_streams, __Pyx_CYFUNCTION_STATICMETHOD | __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_available_stream, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[12])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 163, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_CyFunction_New(&__pyx_mdef_4msgq_9visionipc_13visionipc_pyx_15VisionIpcClient_11available_streams, __Pyx_CYFUNCTION_STATICMETHOD | __Pyx_CYFUNCTION_CCLASS, __pyx_mstate_global->__pyx_n_u_VisionIpcClient_available_stream, NULL, __pyx_mstate_global->__pyx_n_u_msgq_visionipc_visionipc_pyx, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[12])); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 166, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
-  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams, __pyx_t_6) < 0) __PYX_ERR(0, 163, __pyx_L1_error)
+  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams, __pyx_t_6) < 0) __PYX_ERR(0, 166, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
   __pyx_t_3 = NULL;
   __Pyx_INCREF(__pyx_builtin_staticmethod);
   __pyx_t_13 = __pyx_builtin_staticmethod; 
-  __Pyx_GetNameInClass(__pyx_t_14, (PyObject*)__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 163, __pyx_L1_error)
+  __Pyx_GetNameInClass(__pyx_t_14, (PyObject*)__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 166, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_14);
   __pyx_t_7 = 1;
   {
@@ -26706,10 +26942,10 @@ __Pyx_RefNannySetupContext("PyInit_visionipc_pyx", 0);
     __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
     __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-    if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 163, __pyx_L1_error)
+    if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 166, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_6);
   }
-  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams, __pyx_t_6) < 0) __PYX_ERR(0, 163, __pyx_L1_error)
+  if (__Pyx_SetItemOnTypeDict(__pyx_mstate_global->__pyx_ptype_4msgq_9visionipc_13visionipc_pyx_VisionIpcClient, __pyx_mstate_global->__pyx_n_u_available_streams, __pyx_t_6) < 0) __PYX_ERR(0, 166, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
 
   /* "(tree fragment)":1
@@ -26813,6 +27049,7 @@ static const __Pyx_StringTabEntry __pyx_string_tab[] = {
   {__pyx_k_All_dimensions_preceding_dimensi, sizeof(__pyx_k_All_dimensions_preceding_dimensi), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_All_dimensions_preceding_dimensi */
   {__pyx_k_AssertionError, sizeof(__pyx_k_AssertionError), 0, 1, 1}, /* PyObject cname: __pyx_n_u_AssertionError */
   {__pyx_k_Buffer_view_does_not_expose_stri, sizeof(__pyx_k_Buffer_view_does_not_expose_stri), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_Buffer_view_does_not_expose_stri */
+  {__pyx_k_CLContext, sizeof(__pyx_k_CLContext), 0, 1, 1}, /* PyObject cname: __pyx_n_u_CLContext */
   {__pyx_k_Can_only_create_a_buffer_that_is, sizeof(__pyx_k_Can_only_create_a_buffer_that_is), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_Can_only_create_a_buffer_that_is */
   {__pyx_k_Cannot_assign_to_read_only_memor, sizeof(__pyx_k_Cannot_assign_to_read_only_memor), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_Cannot_assign_to_read_only_memor */
   {__pyx_k_Cannot_create_writable_memory_vi, sizeof(__pyx_k_Cannot_create_writable_memory_vi), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_Cannot_create_writable_memory_vi */
@@ -26895,6 +27132,7 @@ static const __Pyx_StringTabEntry __pyx_string_tab[] = {
   {__pyx_k_collections_abc, sizeof(__pyx_k_collections_abc), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_collections_abc */
   {__pyx_k_conflate, sizeof(__pyx_k_conflate), 0, 1, 1}, /* PyObject cname: __pyx_n_u_conflate */
   {__pyx_k_connect, sizeof(__pyx_k_connect), 0, 1, 1}, /* PyObject cname: __pyx_n_u_connect */
+  {__pyx_k_context, sizeof(__pyx_k_context), 0, 1, 1}, /* PyObject cname: __pyx_n_u_context */
   {__pyx_k_contiguous_and_direct, sizeof(__pyx_k_contiguous_and_direct), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_contiguous_and_direct */
   {__pyx_k_contiguous_and_indirect, sizeof(__pyx_k_contiguous_and_indirect), 0, 1, 0}, /* PyObject cname: __pyx_kp_u_contiguous_and_indirect */
   {__pyx_k_count, sizeof(__pyx_k_count), 0, 1, 1}, /* PyObject cname: __pyx_n_u_count */
@@ -27013,7 +27251,7 @@ static int __Pyx_InitStrings(__Pyx_StringTabEntry const *t, PyObject **target, c
 
 static int __Pyx_InitCachedBuiltins(__pyx_mstatetype *__pyx_mstate) {
   CYTHON_UNUSED_VAR(__pyx_mstate);
-  __pyx_builtin_staticmethod = __Pyx_GetBuiltinName(__pyx_mstate->__pyx_n_u_staticmethod); if (!__pyx_builtin_staticmethod) __PYX_ERR(0, 163, __pyx_L1_error)
+  __pyx_builtin_staticmethod = __Pyx_GetBuiltinName(__pyx_mstate->__pyx_n_u_staticmethod); if (!__pyx_builtin_staticmethod) __PYX_ERR(0, 166, __pyx_L1_error)
   __pyx_builtin_TypeError = __Pyx_GetBuiltinName(__pyx_mstate->__pyx_n_u_TypeError); if (!__pyx_builtin_TypeError) __PYX_ERR(1, 2, __pyx_L1_error)
   __pyx_builtin_AssertionError = __Pyx_GetBuiltinName(__pyx_mstate->__pyx_n_u_AssertionError); if (!__pyx_builtin_AssertionError) __PYX_ERR(0, 83, __pyx_L1_error)
   __pyx_builtin___import__ = __Pyx_GetBuiltinName(__pyx_mstate->__pyx_n_u_import); if (!__pyx_builtin___import__) __PYX_ERR(1, 101, __pyx_L1_error)
@@ -27094,14 +27332,14 @@ static int __Pyx_InitCachedConstants(__pyx_mstatetype *__pyx_mstate) {
   __Pyx_GOTREF(__pyx_mstate_global->__pyx_tuple[3]);
   __Pyx_GIVEREF(__pyx_mstate_global->__pyx_tuple[3]);
 
-  /* "msgq/visionipc/visionipc_pyx.pyx":151
+  /* "msgq/visionipc/visionipc_pyx.pyx":154
  *     return self.extra.valid
  * 
  *   def recv(self, int timeout_ms=100):             # <<<<<<<<<<<<<<
  *     buf = self.client.recv(&self.extra, timeout_ms)
  *     if not buf:
 */
-  __pyx_mstate_global->__pyx_tuple[4] = PyTuple_Pack(1, __pyx_mstate_global->__pyx_int_100); if (unlikely(!__pyx_mstate_global->__pyx_tuple[4])) __PYX_ERR(0, 151, __pyx_L1_error)
+  __pyx_mstate_global->__pyx_tuple[4] = PyTuple_Pack(1, __pyx_mstate_global->__pyx_int_100); if (unlikely(!__pyx_mstate_global->__pyx_tuple[4])) __PYX_ERR(0, 154, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_mstate_global->__pyx_tuple[4]);
   __Pyx_GIVEREF(__pyx_mstate_global->__pyx_tuple[4]);
   __Pyx_RefNannyFinishContext();
@@ -27199,22 +27437,22 @@ static int __Pyx_CreateCodeObjects(__pyx_mstatetype *__pyx_mstate) {
     __pyx_mstate_global->__pyx_codeobj_tab[8] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_stringsource, __pyx_mstate->__pyx_n_u_setstate_cython, __pyx_k_Q, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[8])) goto bad;
   }
   {
-    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 3, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 151, 45};
+    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 3, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 154, 45};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_self, __pyx_mstate->__pyx_n_u_timeout_ms, __pyx_mstate->__pyx_n_u_buf};
     __pyx_mstate_global->__pyx_codeobj_tab[9] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_msgq_repo_msgq_visionipc_visioni, __pyx_mstate->__pyx_n_u_recv, __pyx_k_gU_1D_t1_Q_G1A, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[9])) goto bad;
   }
   {
-    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 2, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 157, 15};
+    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 2, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 160, 15};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_self, __pyx_mstate->__pyx_n_u_blocking};
     __pyx_mstate_global->__pyx_codeobj_tab[10] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_msgq_repo_msgq_visionipc_visioni, __pyx_mstate->__pyx_n_u_connect, __pyx_k_4whaq, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[10])) goto bad;
   }
   {
-    const __Pyx_PyCode_New_function_description descr = {1, 0, 0, 1, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 160, 13};
+    const __Pyx_PyCode_New_function_description descr = {1, 0, 0, 1, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 163, 13};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_self};
     __pyx_mstate_global->__pyx_codeobj_tab[11] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_msgq_repo_msgq_visionipc_visioni, __pyx_mstate->__pyx_n_u_is_connected, __pyx_k_4wm1, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[11])) goto bad;
   }
   {
-    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 2, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 163, 14};
+    const __Pyx_PyCode_New_function_description descr = {2, 0, 0, 2, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 166, 14};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_name, __pyx_mstate->__pyx_n_u_block};
     __pyx_mstate_global->__pyx_codeobj_tab[12] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_msgq_repo_msgq_visionipc_visioni, __pyx_mstate->__pyx_n_u_available_streams, __pyx_k_1, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[12])) goto bad;
   }

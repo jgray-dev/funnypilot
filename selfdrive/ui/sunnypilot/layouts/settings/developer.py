@@ -69,8 +69,8 @@ class DeveloperLayoutSP(DeveloperLayout):
 
   def _on_error_log_closed(self, result, log_exists):
     if result == DialogResult.CONFIRM and log_exists:
-      dialog2 = ConfirmDialog(tr("Would you like to delete this log?"), tr("Yes"), tr("No"), rich=False, callback=self._on_delete_confirm)
-      gui_app.push_widget(dialog2)
+      dialog2 = ConfirmDialog(tr("Would you like to delete this log?"), tr("Yes"), tr("No"), rich=False)
+      gui_app.set_modal_overlay(dialog2, callback=self._on_delete_confirm)
 
   def _on_error_log_clicked(self):
     text = ""
@@ -82,7 +82,7 @@ class DeveloperLayoutSP(DeveloperLayout):
       except Exception:
         pass
     dialog = HtmlModalSP(text=text, callback=lambda result: self._on_error_log_closed(result, os.path.exists(self.error_log_path)))
-    gui_app.push_widget(dialog)
+    gui_app.set_modal_overlay(dialog)
 
   def _update_state(self):
     disable_updates = ui_state.params.get_bool("DisableUpdates")

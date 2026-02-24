@@ -1,6 +1,5 @@
 import pyray as rl
-from collections.abc import Callable
-from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.application import FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.button import Button, ButtonStyle
@@ -18,13 +17,13 @@ LIST_ITEM_SPACING = 25
 
 
 class MultiOptionDialog(Widget):
-  def __init__(self, title, options, current="", option_font_weight=FontWeight.MEDIUM, callback: Callable[[DialogResult], None] | None = None):
+  def __init__(self, title, options, current="", option_font_weight=FontWeight.MEDIUM):
     super().__init__()
     self.title = title
     self.options = options
     self.current = current
     self.selection = current
-    self._callback = callback
+    self._result: DialogResult = DialogResult.NO_ACTION
 
     # Create scroller with option buttons
     self.option_buttons = [Button(option, click_callback=lambda opt=option: self._on_option_clicked(opt),
@@ -37,9 +36,7 @@ class MultiOptionDialog(Widget):
     self.select_button = Button(lambda: tr("Select"), click_callback=lambda: self._set_result(DialogResult.CONFIRM), button_style=ButtonStyle.PRIMARY)
 
   def _set_result(self, result: DialogResult):
-    gui_app.pop_widget()
-    if self._callback:
-      self._callback(result)
+    self._result = result
 
   def _on_option_clicked(self, option):
     self.selection = option
@@ -77,3 +74,5 @@ class MultiOptionDialog(Widget):
     select_rect = rl.Rectangle(content_rect.x + button_w + BUTTON_SPACING, button_y, button_w, BUTTON_HEIGHT)
     self.select_button.set_enabled(self.selection != self.current)
     self.select_button.render(select_rect)
+
+    return self._result

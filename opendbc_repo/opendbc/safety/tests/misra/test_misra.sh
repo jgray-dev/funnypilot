@@ -11,7 +11,7 @@ YELLOW="\e[1;33m"
 RED="\e[1;31m"
 NC='\033[0m'
 
-: "${CPPCHECK_DIR:=$(python3 -c "import cppcheck; print(cppcheck.DIR)")}"
+: "${CPPCHECK_DIR:=$DIR/cppcheck/}"
 
 # ensure checked in coverage table is up to date
 python3 $CPPCHECK_DIR/addons/misra.py -generate-table > coverage_table

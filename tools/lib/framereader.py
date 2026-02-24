@@ -51,10 +51,10 @@ def decompress_video_data(rawdat, w, h, pix_fmt="rgb24", vid_fmt='hevc', hwaccel
           "-vsync", "0",
           "-f", vid_fmt,
           "-flags2", "showall",
-          "-i", "pipe:0",
+          "-i", "-",
           "-f", "rawvideo",
           "-pix_fmt", pix_fmt,
-          "pipe:1"]
+          "-"]
   dat = subprocess.check_output(args, input=rawdat)
 
   ret: np.ndarray
@@ -71,7 +71,7 @@ def ffprobe(fn, fmt=None):
   cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"]
   if fmt:
     cmd += ["-f", fmt]
-  cmd += ["-i", "pipe:0"]
+  cmd += ["-i", "-"]
 
   try:
     with FileReader(fn) as f:

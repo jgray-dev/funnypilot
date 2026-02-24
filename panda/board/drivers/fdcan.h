@@ -1,4 +1,4 @@
-#include "board/drivers/drivers.h"
+#include "fdcan_declarations.h"
 
 FDCAN_GlobalTypeDef *cans[PANDA_CAN_CNT] = {FDCAN1, FDCAN2, FDCAN3};
 

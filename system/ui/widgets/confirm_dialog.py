@@ -1,5 +1,4 @@
 import pyray as rl
-from collections.abc import Callable
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
@@ -18,7 +17,7 @@ BACKGROUND_COLOR = rl.Color(27, 27, 27, 255)
 
 
 class ConfirmDialog(Widget):
-  def __init__(self, text: str, confirm_text: str, cancel_text: str | None = None, rich: bool = False, callback: Callable[[DialogResult], None] | None = None):
+  def __init__(self, text: str, confirm_text: str, cancel_text: str | None = None, rich: bool = False):
     super().__init__()
     if cancel_text is None:
       cancel_text = tr("Cancel")
@@ -27,7 +26,7 @@ class ConfirmDialog(Widget):
     self._cancel_button = Button(cancel_text, self._cancel_button_callback)
     self._confirm_button = Button(confirm_text, self._confirm_button_callback, button_style=ButtonStyle.PRIMARY)
     self._rich = rich
-    self._callback = callback
+    self._dialog_result = DialogResult.NO_ACTION
     self._cancel_text = cancel_text
     self._scroller = Scroller([self._html_renderer], line_separator=False, spacing=0)
 
@@ -37,15 +36,14 @@ class ConfirmDialog(Widget):
     else:
       self._html_renderer.parse_html_content(text)
 
+  def reset(self):
+    self._dialog_result = DialogResult.NO_ACTION
+
   def _cancel_button_callback(self):
-    gui_app.pop_widget()
-    if self._callback:
-      self._callback(DialogResult.CANCEL)
+    self._dialog_result = DialogResult.CANCEL
 
   def _confirm_button_callback(self):
-    gui_app.pop_widget()
-    if self._callback:
-      self._callback(DialogResult.CONFIRM)
+    self._dialog_result = DialogResult.CONFIRM
 
   def _render(self, rect: rl.Rectangle):
     dialog_x = OUTER_MARGIN if not self._rich else RICH_OUTER_MARGIN
@@ -75,9 +73,9 @@ class ConfirmDialog(Widget):
       self._scroller.render(text_rect)
 
     if rl.is_key_pressed(rl.KeyboardKey.KEY_ENTER):
-      self._confirm_button_callback()
+      self._dialog_result = DialogResult.CONFIRM
     elif rl.is_key_pressed(rl.KeyboardKey.KEY_ESCAPE):
-      self._cancel_button_callback()
+      self._dialog_result = DialogResult.CANCEL
 
     if self._cancel_text:
       self._confirm_button.render(confirm_button)
@@ -86,6 +84,8 @@ class ConfirmDialog(Widget):
       full_button_width = dialog_rect.width - 2 * MARGIN
       full_confirm_button = rl.Rectangle(dialog_rect.x + MARGIN, button_y, full_button_width, BUTTON_HEIGHT)
       self._confirm_button.render(full_confirm_button)
+
+    return self._dialog_result
 
 
 def alert_dialog(message: str, button_text: str | None = None):

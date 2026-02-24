@@ -129,8 +129,7 @@ int Event::clear() const {
 
   uint64_t val = 0;
   // read the eventfd to clear it
-  ssize_t ret = read(this->event_fd, &val, sizeof(uint64_t));
-  assert(ret == sizeof(uint64_t));
+  read(this->event_fd, &val, sizeof(uint64_t));
 
   return val;
 }

@@ -1,13 +1,12 @@
 from functools import partial
 import time
 from typing import Literal
-from collections.abc import Callable
 
 import pyray as rl
 
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.widgets import DialogResult, Widget
+from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.button import ButtonStyle, Button
 from openpilot.system.ui.widgets.inputbox import InputBox
 from openpilot.system.ui.widgets.label import Label
@@ -59,8 +58,7 @@ KEYBOARD_LAYOUTS = {
 
 
 class Keyboard(Widget):
-  def __init__(self, max_text_size: int = 255, min_text_size: int = 0, password_mode: bool = False, show_password_toggle: bool = False,
-               callback: Callable[[DialogResult], None] | None = None):
+  def __init__(self, max_text_size: int = 255, min_text_size: int = 0, password_mode: bool = False, show_password_toggle: bool = False):
     super().__init__()
     self._layout_name: Literal["lowercase", "uppercase", "numbers", "specials"] = "lowercase"
     self._caps_lock = False
@@ -73,13 +71,13 @@ class Keyboard(Widget):
     self._input_box = InputBox(max_text_size)
     self._password_mode = password_mode
     self._show_password_toggle = show_password_toggle
-    self._callback = callback
 
     # Backspace key repeat tracking
     self._backspace_pressed: bool = False
     self._backspace_press_time: float = 0.0
     self._backspace_last_repeat: float = 0.0
 
+    self._render_return_status = -1
     self._cancel_button = Button(lambda: tr("Cancel"), self._cancel_button_callback)
 
     self._eye_button = Button("", self._eye_button_callback, button_style=ButtonStyle.TRANSPARENT)
@@ -124,23 +122,16 @@ class Keyboard(Widget):
     self._title.set_text(title)
     self._sub_title.set_text(sub_title)
 
-  def set_callback(self, callback: Callable[[DialogResult], None] | None):
-    self._callback = callback
-
   def _eye_button_callback(self):
     self._password_mode = not self._password_mode
 
   def _cancel_button_callback(self):
     self.clear()
-    gui_app.pop_widget()
-    if self._callback:
-      self._callback(DialogResult.CANCEL)
+    self._render_return_status = 0
 
   def _key_callback(self, k):
     if k == ENTER_KEY:
-      gui_app.pop_widget()
-      if self._callback:
-        self._callback(DialogResult.CONFIRM)
+      self._render_return_status = 1
     else:
       self.handle_key_press(k)
 
@@ -206,6 +197,8 @@ class Keyboard(Widget):
           self._all_keys[key].set_enabled(is_enabled)
           self._all_keys[key].render(key_rect)
 
+    return self._render_return_status
+
   def _render_input_area(self, input_rect: rl.Rectangle):
     if self._show_password_toggle:
       self._input_box.set_password_mode(self._password_mode)
@@ -257,6 +250,7 @@ class Keyboard(Widget):
   def reset(self, min_text_size: int | None = None):
     if min_text_size is not None:
       self._min_text_size = min_text_size
+    self._render_return_status = -1
     self._last_shift_press_time = 0
     self._backspace_pressed = False
     self._backspace_press_time = 0.0
@@ -265,18 +259,15 @@ class Keyboard(Widget):
 
 
 if __name__ == "__main__":
-  def callback(result: DialogResult):
-    if result == DialogResult.CONFIRM:
-      print(f"You typed: {keyboard.text}")
-    elif result == DialogResult.CANCEL:
-      print("Canceled")
-    gui_app.request_close()
-
   gui_app.init_window("Keyboard")
-  keyboard = Keyboard(min_text_size=8, show_password_toggle=True, callback=callback)
-  keyboard.set_title("Keyboard Input", "Type your text below")
-
-  gui_app.push_widget(keyboard)
+  keyboard = Keyboard(min_text_size=8, show_password_toggle=True)
   for _ in gui_app.render():
-    pass
+    keyboard.set_title("Keyboard Input", "Type your text below")
+    result = keyboard.render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
+    if result == 1:
+      print(f"You typed: {keyboard.text}")
+      gui_app.request_close()
+    elif result == 0:
+      print("Canceled")
+      gui_app.request_close()
   gui_app.close()

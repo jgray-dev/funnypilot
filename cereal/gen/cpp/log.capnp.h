@@ -965,7 +965,7 @@ struct DeviceState {
   struct NetworkStats;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(a4d8b5af2aa492eb, 15, 10)
+    CAPNP_DECLARE_STRUCT_HEADER(a4d8b5af2aa492eb, 14, 10)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1034,7 +1034,7 @@ struct PandaState {
   struct PandaCanState;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(a7649e2575e4591e, 10, 4)
+    CAPNP_DECLARE_STRUCT_HEADER(a7649e2575e4591e, 9, 4)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -5530,11 +5530,9 @@ public:
 
   inline float getExhaustTempC() const;
 
-  inline float getGnssTempC() const;
+  inline float getCaseTempC() const;
 
   inline float getDspTempC() const;
-
-  inline float getBottomSocTempC() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -5754,14 +5752,11 @@ public:
   inline float getExhaustTempC();
   inline void setExhaustTempC(float value);
 
-  inline float getGnssTempC();
-  inline void setGnssTempC(float value);
+  inline float getCaseTempC();
+  inline void setCaseTempC(float value);
 
   inline float getDspTempC();
   inline void setDspTempC(float value);
-
-  inline float getBottomSocTempC();
-  inline void setBottomSocTempC(float value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -6179,8 +6174,6 @@ public:
 
   inline float getSbu2Voltage() const;
 
-  inline  ::uint16_t getSoundOutputLevel() const;
-
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -6336,9 +6329,6 @@ public:
 
   inline float getSbu2Voltage();
   inline void setSbu2Voltage(float value);
-
-  inline  ::uint16_t getSoundOutputLevel();
-  inline void setSoundOutputLevel( ::uint16_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -18091,9 +18081,9 @@ public:
 
   inline  ::uint32_t getUncertainCount() const;
 
-  inline float getPhoneProbOffsetDEPRECATED() const;
+  inline float getPhoneProbOffset() const;
 
-  inline  ::uint32_t getPhoneProbValidCountDEPRECATED() const;
+  inline  ::uint32_t getPhoneProbValidCount() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -18191,11 +18181,11 @@ public:
   inline  ::uint32_t getUncertainCount();
   inline void setUncertainCount( ::uint32_t value);
 
-  inline float getPhoneProbOffsetDEPRECATED();
-  inline void setPhoneProbOffsetDEPRECATED(float value);
+  inline float getPhoneProbOffset();
+  inline void setPhoneProbOffset(float value);
 
-  inline  ::uint32_t getPhoneProbValidCountDEPRECATED();
-  inline void setPhoneProbValidCountDEPRECATED( ::uint32_t value);
+  inline  ::uint32_t getPhoneProbValidCount();
+  inline void setPhoneProbValidCount( ::uint32_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -28157,16 +28147,16 @@ inline void DeviceState::Builder::setExhaustTempC(float value) {
       ::capnp::bounded<25>() * ::capnp::ELEMENTS, value);
 }
 
-inline float DeviceState::Reader::getGnssTempC() const {
+inline float DeviceState::Reader::getCaseTempC() const {
   return _reader.getDataField<float>(
       ::capnp::bounded<26>() * ::capnp::ELEMENTS);
 }
 
-inline float DeviceState::Builder::getGnssTempC() {
+inline float DeviceState::Builder::getCaseTempC() {
   return _builder.getDataField<float>(
       ::capnp::bounded<26>() * ::capnp::ELEMENTS);
 }
-inline void DeviceState::Builder::setGnssTempC(float value) {
+inline void DeviceState::Builder::setCaseTempC(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<26>() * ::capnp::ELEMENTS, value);
 }
@@ -28183,20 +28173,6 @@ inline float DeviceState::Builder::getDspTempC() {
 inline void DeviceState::Builder::setDspTempC(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<27>() * ::capnp::ELEMENTS, value);
-}
-
-inline float DeviceState::Reader::getBottomSocTempC() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
-}
-
-inline float DeviceState::Builder::getBottomSocTempC() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
-}
-inline void DeviceState::Builder::setBottomSocTempC(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<28>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool DeviceState::ThermalZone::Reader::hasName() const {
@@ -29074,20 +29050,6 @@ inline float PandaState::Builder::getSbu2Voltage() {
 inline void PandaState::Builder::setSbu2Voltage(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint16_t PandaState::Reader::getSoundOutputLevel() const {
-  return _reader.getDataField< ::uint16_t>(
-      ::capnp::bounded<36>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint16_t PandaState::Builder::getSoundOutputLevel() {
-  return _builder.getDataField< ::uint16_t>(
-      ::capnp::bounded<36>() * ::capnp::ELEMENTS);
-}
-inline void PandaState::Builder::setSoundOutputLevel( ::uint16_t value) {
-  _builder.setDataField< ::uint16_t>(
-      ::capnp::bounded<36>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool PandaState::PandaCanState::Reader::getBusOff() const {
@@ -48401,30 +48363,30 @@ inline void DriverMonitoringState::Builder::setUncertainCount( ::uint32_t value)
       ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
 }
 
-inline float DriverMonitoringState::Reader::getPhoneProbOffsetDEPRECATED() const {
+inline float DriverMonitoringState::Reader::getPhoneProbOffset() const {
   return _reader.getDataField<float>(
       ::capnp::bounded<12>() * ::capnp::ELEMENTS);
 }
 
-inline float DriverMonitoringState::Builder::getPhoneProbOffsetDEPRECATED() {
+inline float DriverMonitoringState::Builder::getPhoneProbOffset() {
   return _builder.getDataField<float>(
       ::capnp::bounded<12>() * ::capnp::ELEMENTS);
 }
-inline void DriverMonitoringState::Builder::setPhoneProbOffsetDEPRECATED(float value) {
+inline void DriverMonitoringState::Builder::setPhoneProbOffset(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
 }
 
-inline  ::uint32_t DriverMonitoringState::Reader::getPhoneProbValidCountDEPRECATED() const {
+inline  ::uint32_t DriverMonitoringState::Reader::getPhoneProbValidCount() const {
   return _reader.getDataField< ::uint32_t>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS);
 }
 
-inline  ::uint32_t DriverMonitoringState::Builder::getPhoneProbValidCountDEPRECATED() {
+inline  ::uint32_t DriverMonitoringState::Builder::getPhoneProbValidCount() {
   return _builder.getDataField< ::uint32_t>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS);
 }
-inline void DriverMonitoringState::Builder::setPhoneProbValidCountDEPRECATED( ::uint32_t value) {
+inline void DriverMonitoringState::Builder::setPhoneProbValidCount( ::uint32_t value) {
   _builder.setDataField< ::uint32_t>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
 }
