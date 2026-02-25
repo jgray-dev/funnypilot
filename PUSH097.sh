@@ -46,7 +46,7 @@ fi
 
 echo ""
 echo "Step 2: Pushing code to device..."
-ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git fetch"
+ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git fetch funnypilot"
 git push funnypilot "$BRANCH:$BRANCH" --force
 
 echo ""
