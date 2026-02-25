@@ -106,7 +106,7 @@ class LongitudinalPlannerSP:
     sccVision.maxPredictedLateralAccel = float(self.scc.vision.max_pred_lat_acc)
     sccVision.enabled = self.scc.vision.is_enabled
     sccVision.active = self.scc.vision.is_active
-    sccVision.gasGating = self.scc.vision.gas_gating_active  # FunnyPilot
+    sccVision.gasGating = bool(self.scc.vision.gas_gating_active)  # FunnyPilot
     # Map Control
     sccMap = smartCruiseControl.map
     sccMap.state = self.scc.map.state
@@ -114,7 +114,7 @@ class LongitudinalPlannerSP:
     sccMap.aTarget = float(self.scc.map.output_a_target)
     sccMap.enabled = self.scc.map.is_enabled
     sccMap.active = self.scc.map.is_active
-    sccMap.gasGating = self.scc.map.gas_gating_active  # FunnyPilot
+    sccMap.gasGating = bool(self.scc.map.gas_gating_active)  # FunnyPilot
 
     # Speed Limit
     speedLimit = longitudinalPlanSP.speedLimit

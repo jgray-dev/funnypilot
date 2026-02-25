@@ -104,8 +104,9 @@ class CarSpecificEvents:
 
     if CS.doorOpen:
       events.add(EventName.doorOpen)
-    if CS.seatbeltUnlatched:
-      events.add(EventName.seatbeltNotLatched)
+    # FunnyPilot: seatbelt check removed - allow use without seatbelt
+    # if CS.seatbeltUnlatched:
+    #   events.add(EventName.seatbeltNotLatched)
     if CS.gearShifter != GearShifter.drive and CS.gearShifter not in CI.DRIVABLE_GEARS:
       events.add(EventName.wrongGear)
     if CS.gearShifter == GearShifter.reverse:
