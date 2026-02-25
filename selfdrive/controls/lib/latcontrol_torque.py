@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 from collections import deque
 
@@ -115,7 +116,6 @@ class LatControlTorque(LatControl):
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
       # FunnyPilot: Lane change torque ramping
-      import time
       lane_change_active = abs(desired_curvature) > 0.01 and abs(CS.steeringAngleDeg) > 10
 
       if lane_change_active and self.prev_lane_change_state == 0:

@@ -94,6 +94,8 @@ class SmartCruiseControlVision:
 
     rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
     vel_plan = np.array(sm['modelV2'].velocity.x)
+    if len(rate_plan) == 0 or len(vel_plan) == 0:
+      return False
     predicted_lat_accels = rate_plan * vel_plan
 
     lookahead_frames = int(_GAS_GATE_LOOKAHEAD_TIME / DT_MDL)
@@ -107,6 +109,8 @@ class SmartCruiseControlVision:
     else:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
       vel_plan = np.array(sm['modelV2'].velocity.x)
+      if len(rate_plan) == 0 or len(vel_plan) == 0:
+        return
 
       self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
 

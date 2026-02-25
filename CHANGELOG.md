@@ -1,3 +1,10 @@
+FunnyPilot v0.9.7h (2026-02-25) HOTFIX
+========================
+* Fixed plannerd crash on long control enable: empty modelV2 arrays caused ValueError in
+  SCC-V gas gating (np.amax/np.percentile on zero-size array); added length guard before
+  all numpy reductions in vision_controller.py
+* Fixed latcontrol_torque.py: moved `import time` out of hot update() loop to module level
+
 FunnyPilot v0.9.7 (2026-02-25)
 ========================
 * Rebased on sunnypilot v2026.001.000 (2026-02-24)
