@@ -101,7 +101,7 @@ class SmartCruiseControlVision:
     lookahead_frames = int(_GAS_GATE_LOOKAHEAD_TIME / DT_MDL)
     upcoming_max_lat_acc = np.amax(predicted_lat_accels[:lookahead_frames])
 
-    return upcoming_max_lat_acc > _GAS_GATE_LAT_ACC_THRESHOLD
+    return bool(upcoming_max_lat_acc > _GAS_GATE_LAT_ACC_THRESHOLD)
 
   def _update_calculations(self, sm: messaging.SubMaster) -> None:
     if not self.long_enabled:
