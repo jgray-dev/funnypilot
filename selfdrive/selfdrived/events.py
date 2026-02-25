@@ -821,14 +821,13 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.HIGH, VisualAlert.none, AudibleAlert.disengage, 3.),
   },
 
-  # When the car is driving faster than most cars in the training data, the model outputs can be unpredictable.
+  # FunnyPilot: Changed to silent static banner - no disengage, no audio, engagement still allowed at high speed
   EventName.speedTooHigh: {
     ET.WARNING: Alert(
-      "Speed Too High",
-      "Model uncertain at this speed",
-      AlertStatus.userPrompt, AlertSize.mid,
-      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 4.),
-    ET.NO_ENTRY: NoEntryAlert("Slow down to engage"),
+      "High Speed Warning",
+      "Model uncertain above training speed",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, 3.),
   },
 
   EventName.vehicleSensorsInvalid: {

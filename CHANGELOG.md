@@ -1,3 +1,26 @@
+FunnyPilot v0.9.7 (2026-02-25)
+========================
+* Rebased on sunnypilot v2026.001.000 (2026-02-24)
+* Gas gating UI indicator: SCC-V and SCC-M badges turn orange with "GAS GATE" label when active
+* Variable follow distance (speed-dependent): closer at highway speeds, more buffer in town
+  - Distance 1 (aggressive): 2.5s@<20mph, 1.2s@45mph, 0.75s@75mph+
+  - Distance 2 (standard): 3.0s@<20mph, 1.6s@45mph, 1.0s@75mph+
+  - Distance 3 (relaxed): 3.8s@<20mph, 2.2s@45mph, 1.4s@75mph+
+* Follow distance switching gas gates instead of braking (4s gas gate on distance increase)
+* High speed warning now a silent static banner (no audio, no disengage, no NO_ENTRY block)
+* Speed limit assist now auto-tracks zone changes when active (no confirmation needed)
+  - Manual cruise speed change deactivates SLA until next speed limit zone change
+  - Re-prompts for confirmation after each manual override, then auto-tracks again
+* New longitudinal tuning:
+  - COMFORT_BRAKE reduced 2.5->2.0 m/s² (earlier, gentler braking)
+  - STOP_DISTANCE increased 6.0->8.5m (more buffer at stops)
+  - Raw aLeadK preserved for fast stoplight reaction (not smoothed)
+  - Smoothed dRel and vLeadK for stable tracking
+* Lane change torque ramp: 3.5s ramp, starting at 40% (carried from v0.9.6h)
+* Smooth stopping: linear torque reduction below 15mph (carried from v0.9.6)
+* Extended driver monitoring timeouts: 3x original values (carried from v0.9.6)
+* Max acceleration capped at 70% of openpilot defaults (carried from v0.9.6)
+
 sunnypilot Version 2026.001.000 (2026-03-xx)
 ========================
 * What's Changed (sunnypilot/sunnypilot)

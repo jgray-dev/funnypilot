@@ -19,9 +19,11 @@ class SmartCruiseControlRenderer(Widget):
     self.vision_enabled = False
     self.vision_active = False
     self.vision_frame = 0
+    self.vision_gas_gating = False  # FunnyPilot
     self.map_enabled = False
     self.map_active = False
     self.map_frame = 0
+    self.map_gas_gating = False  # FunnyPilot
     self.long_override = False
 
     self.font = gui_app.font(FontWeight.BOLD)
@@ -35,8 +37,10 @@ class SmartCruiseControlRenderer(Widget):
 
       self.vision_enabled = vision.enabled
       self.vision_active = vision.active
+      self.vision_gas_gating = vision.gasGating  # FunnyPilot
       self.map_enabled = map_.enabled
       self.map_active = map_.active
+      self.map_gas_gating = map_.gasGating  # FunnyPilot
 
     if sm.updated["carControl"]:
       self.long_override = sm["carControl"].cruiseControl.override
@@ -55,7 +59,7 @@ class SmartCruiseControlRenderer(Widget):
   def _pulse_element(frame):
     return not (frame % gui_app.target_fps < (gui_app.target_fps / 2.5))
 
-  def _draw_icon(self, rect_center_x, rect_height, x_offset, y_offset, name):
+  def _draw_icon(self, rect_center_x, rect_height, x_offset, y_offset, name, gas_gating=False):
     text = name
     font_size = 36
     padding_v = 5
@@ -66,6 +70,9 @@ class SmartCruiseControlRenderer(Widget):
 
     if self.long_override:
       box_color = COLORS.OVERRIDE
+    elif gas_gating:
+      # FunnyPilot: Orange color when gas gating is active
+      box_color = rl.Color(255, 140, 0, 255)
     else:
       box_color = rl.Color(0, 255, 0, 255)
 
@@ -77,11 +84,20 @@ class SmartCruiseControlRenderer(Widget):
     # Draw rounded background box
     rl.draw_rectangle_rounded(rl.Rectangle(box_x, box_y, box_width, box_height), 0.2, 10, box_color)
 
-    # Draw text centered in the box (black color for contrast against bright green/grey)
+    # Draw text centered in the box
     text_pos_x = box_x + (box_width - sz.x) / 2
     text_pos_y = box_y + (box_height - sz.y) / 2
-
     rl.draw_text_ex(self.font, text, rl.Vector2(text_pos_x, text_pos_y), font_size, 0, rl.BLACK)
+
+    # FunnyPilot: If gas gating, draw "GAS GATE" sub-label below
+    if gas_gating:
+      sub_text = "GAS GATE"
+      sub_font_size = 22
+      sub_sz = measure_text_cached(self.font, sub_text, sub_font_size)
+      sub_x = box_x + (box_width - sub_sz.x) / 2
+      sub_y = box_y + box_height + 2
+      rl.draw_text_ex(self.font, sub_text, rl.Vector2(sub_x, sub_y), sub_font_size, 0,
+                      rl.Color(255, 140, 0, 200))
 
   def _render(self, rect: rl.Rectangle):
     x_offset = -260
@@ -103,8 +119,10 @@ class SmartCruiseControlRenderer(Widget):
 
     scc_vision_pulse = self._pulse_element(self.vision_frame)
     if (self.vision_enabled and not self.vision_active) or (self.vision_active and scc_vision_pulse):
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V")
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V",
+                      gas_gating=self.vision_gas_gating)
 
     scc_map_pulse = self._pulse_element(self.map_frame)
     if (self.map_enabled and not self.map_active) or (self.map_active and scc_map_pulse):
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M")
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M",
+                      gas_gating=self.map_gas_gating)

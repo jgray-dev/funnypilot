@@ -137,6 +137,9 @@ class SpeedLimitAssist:
 
   # TODO-SP: SLA's own output_a_target for planner
   def get_a_target_from_control(self) -> float:
+    # FunnyPilot: Apply gas gating for speed limit reductions
+    if self.should_cut_gas_for_speed_limit():
+      return min(self.a_ego, 0.0)  # Cut gas, no positive acceleration
     return self.a_ego
 
   def update_params(self) -> None:
@@ -212,6 +215,33 @@ class SpeedLimitAssist:
   def get_active_state_target_acceleration(self) -> float:
     return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
 
+  def should_cut_gas_for_speed_limit(self) -> bool:
+    """FunnyPilot: Early gas gating for speed limit reductions - coast to new speed by the time we hit the limit"""
+    if not self.long_enabled or not self._has_speed_limit:
+      return False
+
+    # Only for speed reductions (with offset applied)
+    speed_diff = self.v_ego - self._speed_limit_final_last
+    if speed_diff <= 0:
+      return False
+
+    # Only apply if we have a valid distance to the speed limit ahead
+    if self._distance <= 0:
+      return False
+
+    # Calculate coast distance needed to reach target speed
+    # Using coast deceleration of -0.15 m/s² (gentle engine braking + drag)
+    coast_decel = -0.15
+    coast_distance_needed = (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2.0 * coast_decel)
+
+    # Add buffer: we want to reach target speed slightly BEFORE the limit
+    # Buffer = 2 seconds of travel at new speed limit
+    buffer_distance = self._speed_limit_final_last * 2.0
+    total_distance_needed = coast_distance_needed + buffer_distance
+
+    # Cut gas if we're within the coast distance
+    return self._distance <= total_distance_needed
+
   def _update_confirmed_state(self):
     if self._has_speed_limit:
       if self.v_offset < LIMIT_SPEED_OFFSET_TH:
@@ -245,20 +275,22 @@ class SpeedLimitAssist:
         # ACTIVE
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
+            # FunnyPilot: User manually changed speed -> deactivate SLA
             self.state = SpeedLimitAssistState.inactive
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
-            self.state = SpeedLimitAssistState.preActive
-            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
+          elif self.speed_limit_changed:
+            # FunnyPilot: Auto-track speed limit changes - no user confirmation required
+            self._update_confirmed_state()
           elif self._has_speed_limit and self.v_offset < LIMIT_SPEED_OFFSET_TH:
             self.state = SpeedLimitAssistState.adapting
 
         # ADAPTING
         elif self.state == SpeedLimitAssistState.adapting:
           if self.v_cruise_cluster_changed:
+            # FunnyPilot: User manually changed speed -> deactivate SLA
             self.state = SpeedLimitAssistState.inactive
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
-            self.state = SpeedLimitAssistState.preActive
-            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
+          elif self.speed_limit_changed:
+            # FunnyPilot: Auto-track speed limit changes
+            self._update_confirmed_state()
           elif self.v_offset >= LIMIT_SPEED_OFFSET_TH:
             self.state = SpeedLimitAssistState.active
 
@@ -280,7 +312,10 @@ class SpeedLimitAssist:
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          pass
+          # FunnyPilot: Re-prompt when entering a new speed limit zone
+          if self.speed_limit_changed and self._has_speed_limit:
+            self.state = SpeedLimitAssistState.preActive
+            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
     # DISABLED
     elif self.state == SpeedLimitAssistState.disabled:
@@ -316,11 +351,11 @@ class SpeedLimitAssist:
         # ACTIVE
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
+            # FunnyPilot: User manually changed speed -> deactivate SLA
             self.state = SpeedLimitAssistState.inactive
-
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
-            self.state = SpeedLimitAssistState.preActive
-            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
+          elif self.speed_limit_changed:
+            # FunnyPilot: Auto-track speed limit changes - no confirmation required
+            self.state = SpeedLimitAssistState.active  # stay active, speed_limit_final_last auto-updates
 
         # PRE_ACTIVE
         elif self.state == SpeedLimitAssistState.preActive:
@@ -332,7 +367,8 @@ class SpeedLimitAssist:
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          if self.speed_limit_changed:
+          # FunnyPilot: Re-prompt when entering a new speed limit zone
+          if self.speed_limit_changed and self._has_speed_limit:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
           elif self._update_non_pcm_long_confirmed_state():

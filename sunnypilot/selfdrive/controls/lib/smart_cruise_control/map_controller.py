@@ -18,14 +18,19 @@ ENABLED_STATES = (MapState.enabled, MapState.overriding, *ACTIVE_STATES)
 R = 6373000.0  # approximate radius of earth in meters
 TO_RADIANS = math.pi / 180
 TO_DEGREES = 180 / math.pi
-TARGET_JERK = -0.6  # m/s^3 There's some jounce limits that are not consistent so we're fudging this some
-TARGET_ACCEL = -1.2  # m/s^2 should match up with the long planner limit
-TARGET_OFFSET = 1.0  # seconds - This controls how soon before the curve you reach the target velocity. It also helps
+# FunnyPilot: Gentler curve approach with early gas gating
+TARGET_JERK = -0.3   # Was -0.6 (gentler decel ramp)
+TARGET_ACCEL = -0.6  # Was -1.2 (much gentler max decel)
+TARGET_OFFSET = 2.0  # Was 1.0 (start earlier)
+                     # seconds - This controls how soon before the curve you reach the target velocity. It also helps
                      # reach the target velocity when inaccuracies in the distance modeling logic would cause overshoot.
                      # The value is multiplied against the target velocity to determine the additional distance. This is
                      # done to keep the distance calculations consistent but results in the offset actually being less
                      # time than specified depending on how much of a speed differential there is between v_ego and the
                      # target velocity.
+
+# FunnyPilot: Coast preference
+COAST_PREFERENCE_SPEED_DIFF = 5.0  # m/s - prefer coasting if speed diff < 5 m/s
 
 
 def velocities_from_param(param: str, params: Params):
@@ -83,6 +88,7 @@ class SmartCruiseControlMap:
     self.target_lat = 0.0
     self.target_lon = 0.0
     self.frame = -1
+    self.gas_gating_active = False  # FunnyPilot: expose gas gate status for UI
 
     self.last_position = coordinate_from_param("LastGPSPosition", self.mem_params) or Coordinate(0.0, 0.0)
     self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
@@ -99,6 +105,21 @@ class SmartCruiseControlMap:
   def update_params(self):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.enabled = self.params.get_bool("SmartCruiseControlMap")
+
+  def should_cut_gas(self, distance_to_curve: float, v_ego: float, v_target: float) -> bool:
+    """FunnyPilot: Determine if gas should be cut for map-based curves"""
+    if not self.long_enabled:
+      return False
+
+    coast_decel = -0.1  # Light coast deceleration
+    speed_diff = v_ego - v_target
+
+    if speed_diff > 0:
+      coast_distance = (v_ego**2 - v_target**2) / (2 * abs(coast_decel))
+      buffer = v_ego * TARGET_OFFSET
+      return distance_to_curve < (coast_distance + buffer)
+
+    return False
 
   def update_calculations(self) -> None:
     self.last_position = coordinate_from_param("LastGPSPosition", self.mem_params) or Coordinate(0.0, 0.0)
@@ -257,5 +278,30 @@ class SmartCruiseControlMap:
 
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()
+
+    # FunnyPilot: Apply coast preference and gas gating
+    self.gas_gating_active = False
+    if self.v_target > 0 and self.v_target < self.v_ego:
+      speed_diff = self.v_ego - self.v_target
+
+      # Calculate distance to turn if we have valid target
+      if self.target_lat != 0.0 and self.target_lon != 0.0:
+        lat = self.last_position.latitude
+        lon = self.last_position.longitude
+        distance_to_turn = distance_to_point(lat * TO_RADIANS, lon * TO_RADIANS,
+                                             self.target_lat * TO_RADIANS, self.target_lon * TO_RADIANS)
+
+        # Cut gas early for smoother approach
+        if self.should_cut_gas(distance_to_turn, self.v_ego, self.v_target):
+          self.gas_gating_active = True
+          self.output_a_target = min(self.output_a_target, 0.0)
+
+      # Coast preference for small speed differences
+      if speed_diff < COAST_PREFERENCE_SPEED_DIFF:
+        # Small speed diff: gentle coast instead of brake
+        self.output_a_target = max(self.output_a_target, -0.1)
+      else:
+        # Larger speed diff: gentle brake (capped)
+        self.output_a_target = max(self.output_a_target, TARGET_ACCEL)
 
     self.frame += 1

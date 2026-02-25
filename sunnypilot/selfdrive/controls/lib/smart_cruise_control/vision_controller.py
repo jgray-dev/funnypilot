@@ -19,8 +19,9 @@ VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-_ENTERING_PRED_LAT_ACC_TH = 1.3  # Predicted Lat Acc threshold to trigger entering turn state.
-_ABORT_ENTERING_PRED_LAT_ACC_TH = 1.1  # Predicted Lat Acc threshold to abort entering state if speed drops.
+# FunnyPilot: Earlier detection and gentler deceleration
+_ENTERING_PRED_LAT_ACC_TH = 1.0  # Lower threshold (was 1.3) for earlier gas cut
+_ABORT_ENTERING_PRED_LAT_ACC_TH = 0.8  # Lower threshold (was 1.1)
 
 _TURNING_LAT_ACC_TH = 1.6  # Lat Acc threshold to trigger turning state.
 
@@ -33,15 +34,21 @@ _NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on 
 
 # Lookup table for the minimum smooth deceleration during the ENTERING state
 # depending on the actual maximum absolute lateral acceleration predicted on the turn ahead.
-_ENTERING_SMOOTH_DECEL_V = [-0.2, -1.]  # min decel value allowed on ENTERING state
-_ENTERING_SMOOTH_DECEL_BP = [1.3, 3.]  # absolute value of lat acc ahead
+# FunnyPilot: Gentler deceleration with coast priority
+_ENTERING_SMOOTH_DECEL_V = [0.0, -0.3, -0.6]  # Was [-0.2, -1.0]
+_ENTERING_SMOOTH_DECEL_BP = [1.0, 2.0, 3.5]  # Extended range
 
 # Lookup table for the acceleration for the TURNING state
 # depending on the current lateral acceleration of the vehicle.
-_TURNING_ACC_V = [0.5, 0., -0.4]  # acc value
+# FunnyPilot: More conservative turning acceleration
+_TURNING_ACC_V = [0.3, 0., -0.2]  # Was [0.5, 0., -0.4]
 _TURNING_ACC_BP = [1.5, 2.3, 3.]  # absolute value of current lat acc
 
-_LEAVING_ACC = 0.5  # Conformable acceleration to regain speed while leaving a turn.
+_LEAVING_ACC = 0.3  # FunnyPilot: Gentler (was 0.5)
+
+# FunnyPilot: Gas gating parameters
+_GAS_GATE_LAT_ACC_THRESHOLD = 0.8  # Cut gas earlier
+_GAS_GATE_LOOKAHEAD_TIME = 3.0  # seconds
 
 
 class SmartCruiseControlVision:
@@ -61,6 +68,7 @@ class SmartCruiseControlVision:
     self.is_active = False
     self.enabled = self.params.get_bool("SmartCruiseControlVision")
     self.v_cruise_setpoint = 0.
+    self.gas_gating_active = False  # FunnyPilot: expose gas gate status for UI
 
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
@@ -78,6 +86,20 @@ class SmartCruiseControlVision:
   def _update_params(self) -> None:
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.enabled = self.params.get_bool("SmartCruiseControlVision")
+
+  def should_cut_gas(self, sm: messaging.SubMaster) -> bool:
+    """FunnyPilot: Determine if gas should be cut based on upcoming curve"""
+    if not self.long_enabled:
+      return False
+
+    rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
+    vel_plan = np.array(sm['modelV2'].velocity.x)
+    predicted_lat_accels = rate_plan * vel_plan
+
+    lookahead_frames = int(_GAS_GATE_LOOKAHEAD_TIME / DT_MDL)
+    upcoming_max_lat_acc = np.amax(predicted_lat_accels[:lookahead_frames])
+
+    return upcoming_max_lat_acc > _GAS_GATE_LAT_ACC_THRESHOLD
 
   def _update_calculations(self, sm: messaging.SubMaster) -> None:
     if not self.long_enabled:
@@ -199,5 +221,10 @@ class SmartCruiseControlVision:
 
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()
+
+    # FunnyPilot: Apply gas gating
+    self.gas_gating_active = self.should_cut_gas(sm)
+    if self.gas_gating_active:
+      self.output_a_target = min(self.output_a_target, 0.0)  # No positive acceleration
 
     self.frame += 1

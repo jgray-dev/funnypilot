@@ -62,6 +62,11 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
 
+    # FunnyPilot: Smoothing buffers for stable lead tracking
+    self.vLead_buffer = deque(maxlen=5)   # 5 frames @ 20Hz = 0.25s smoothing
+    self.aLead_buffer = deque(maxlen=5)
+    self.dRel_buffer = deque(maxlen=3)    # 3 frames = 0.15s smoothing
+
   def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
@@ -77,6 +82,11 @@ class Track:
     self.vLeadK = float(self.kf.x[SPEED][0])
     self.aLeadK = float(self.kf.x[ACCEL][0])
 
+    # FunnyPilot: Apply moving average smoothing for stable radar output
+    self.vLead_buffer.append(self.vLeadK)
+    self.aLead_buffer.append(self.aLeadK)
+    self.dRel_buffer.append(d_rel)
+
     # Learn if constant acceleration
     if abs(self.aLeadK) < 0.5:
       self.aLeadTau.x = _LEAD_ACCEL_TAU
@@ -86,13 +96,20 @@ class Track:
     self.cnt += 1
 
   def get_RadarState(self, model_prob: float = 0.0):
+    # FunnyPilot: Use smoothed values for stable tracking, but keep raw aLeadK
+    # for fast acceleration detection (stoplight response)
+    n_v = len(self.vLead_buffer)
+    n_d = len(self.dRel_buffer)
+    vLeadK_smooth = sum(self.vLead_buffer) / n_v if n_v >= 3 else self.vLeadK
+    dRel_smooth = sum(self.dRel_buffer) / n_d if n_d >= 2 else self.dRel
+
     return {
-      "dRel": float(self.dRel),
+      "dRel": dRel_smooth,
       "yRel": float(self.yRel),
       "vRel": float(self.vRel),
       "vLead": float(self.vLead),
-      "vLeadK": float(self.vLeadK),
-      "aLeadK": float(self.aLeadK),
+      "vLeadK": vLeadK_smooth,
+      "aLeadK": float(self.aLeadK),  # raw for fast lead accel response
       "aLeadTau": float(self.aLeadTau.x),
       "status": True,
       "fcw": self.is_potential_fcw(model_prob),

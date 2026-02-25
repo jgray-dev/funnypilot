@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 import cereal.messaging as messaging
+from cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -17,7 +18,8 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
-A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
+# FunnyPilot: Reduced max acceleration to 70% for smoother driving
+A_CRUISE_MAX_VALS = [1.12, 0.84, 0.56, 0.42]  # 70% of [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
@@ -65,6 +67,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
+
+    # FunnyPilot: Personality transition gas gating
+    # When switching to longer follow distance, gas gate instead of braking
+    self._prev_personality = None
+    self._personality_gas_gate_frames = 0
+    self._PERSONALITY_GAS_GATE_DURATION = int(4.0 / DT_MDL)  # 4 seconds of gas gating after dist increase
 
   @staticmethod
   def parse_model(model_msg):
@@ -136,9 +144,27 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if force_slow_decel:
       v_cruise = 0.0
 
-    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
+    personality = sm['selfdriveState'].personality
+
+    # FunnyPilot: Detect when switching to a longer follow distance -> gas gate instead of brake
+    # Personality order (shorter to longer follow): aggressive < standard < relaxed
+    _PERSONALITY_ORDER = {
+      log.LongitudinalPersonality.aggressive: 0,
+      log.LongitudinalPersonality.standard: 1,
+      log.LongitudinalPersonality.relaxed: 2,
+    }
+    if self._prev_personality is not None and personality != self._prev_personality:
+      curr_order = _PERSONALITY_ORDER.get(personality, 1)
+      prev_order = _PERSONALITY_ORDER.get(self._prev_personality, 1)
+      if curr_order > prev_order:
+        self._personality_gas_gate_frames = self._PERSONALITY_GAS_GATE_DURATION
+    self._prev_personality = personality
+    if self._personality_gas_gate_frames > 0:
+      self._personality_gas_gate_frames -= 1
+
+    self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality)
+    self.mpc.update(sm['radarState'], v_cruise, personality=personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -171,6 +197,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
+
+    # FunnyPilot: Gas gate when transitioning to longer follow distance
+    if self._personality_gas_gate_frames > 0:
+      output_a_target = min(output_a_target, 0.0)
+
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 
