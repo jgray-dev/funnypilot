@@ -217,6 +217,7 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       maxPredictedLateralAccel @4 :Float32;
       enabled @5 :Bool;
       active @6 :Bool;
+      gasGating @7 :Bool;  # FunnyPilot: gas gating currently active
     }
 
     struct Map {
@@ -225,6 +226,7 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       aTarget @2 :Float32;
       enabled @3 :Bool;
       active @4 :Bool;
+      gasGating @5 :Bool;  # FunnyPilot: gas gating currently active
     }
 
     enum VisionState {

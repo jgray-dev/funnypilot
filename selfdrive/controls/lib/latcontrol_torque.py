@@ -50,6 +50,13 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
+    # FunnyPilot: Lane change torque ramping state
+    self.lane_change_torque_scale = 1.0
+    self.lane_change_start_time = 0.0
+    self.lane_change_ramp_duration = 3.5  # 3.5 seconds - gradual highway lane changes
+    self.lane_change_min_scale = 0.4  # Start at 40% - gentle initial torque
+    self.prev_lane_change_state = 0
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
     self.torque_params.latAccelOffset = latAccelOffset
@@ -106,6 +113,30 @@ class LatControlTorque(LatControl):
       pid_log, output_torque = self.extension.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
+
+      # FunnyPilot: Lane change torque ramping
+      import time
+      lane_change_active = abs(desired_curvature) > 0.01 and abs(CS.steeringAngleDeg) > 10
+
+      if lane_change_active and self.prev_lane_change_state == 0:
+        self.lane_change_start_time = time.monotonic()
+        self.prev_lane_change_state = 1
+
+      if lane_change_active:
+        elapsed = time.monotonic() - self.lane_change_start_time
+        ramp_progress = min(elapsed / self.lane_change_ramp_duration, 1.0)
+        self.lane_change_torque_scale = self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
+      else:
+        self.lane_change_torque_scale = 1.0
+        self.prev_lane_change_state = 0
+
+      output_torque *= self.lane_change_torque_scale
+
+      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
+      speed_mph = CS.vEgo * 2.23694
+      if speed_mph < 15.0:
+        torque_scale = max(0.0, speed_mph / 15.0)
+        output_torque *= torque_scale
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)
