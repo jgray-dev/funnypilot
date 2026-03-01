@@ -2,7 +2,32 @@
 
 ## SSH Access
 
-Device: `ssh comma@192.168.86.31`
+**Home network (port forwarding):**
+```
+ssh comma@192.168.86.31
+```
+
+**Remote / off-network (Tailscale VPN — works anywhere):**
+```
+ssh comma@100.93.118.118
+```
+Tailscale account: `nohaxjustdoge@` — both this dev machine and any other device must be on the same tailnet.
+Install Tailscale at https://tailscale.com/download and `tailscale up` to join, then the SSH above works.
+
+**Tailscale is self-healing:** binaries and auth state are stored in `/data/tailscale/` so they survive
+AGNOS (base OS) updates. The `/data/continue.sh` script starts tailscaled on every boot automatically.
+
+**If Tailscale stops working after an AGNOS update:**
+```bash
+ssh comma@192.168.86.31  # home network first
+sudo mkdir -p /run/tailscale
+sudo /data/tailscale/bin/tailscaled \
+  --state=/data/tailscale/state/tailscaled.state \
+  --socket=/run/tailscale/tailscaled.sock \
+  --tun=userspace-networking &
+sleep 3
+sudo /data/tailscale/bin/tailscale --socket=/run/tailscale/tailscaled.sock up --ssh
+```
 
 ## Git Remotes
 
