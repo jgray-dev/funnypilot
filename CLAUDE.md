@@ -61,6 +61,8 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
   "cd /data/openpilot && git fetch funnypilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH && sudo systemctl restart comma"
 ```
 
+**Push scripts:** Only create a `PUSH<version>.sh` if the user explicitly requests it (e.g. device is offline and a manual-deploy script is needed). Do not create them by default.
+
 ## Key Files
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
