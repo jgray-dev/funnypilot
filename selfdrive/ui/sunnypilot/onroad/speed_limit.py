@@ -60,6 +60,10 @@ class SpeedLimitRenderer(Widget):
     self.speed_limit_ahead_valid = False
     self.speed_limit_ahead_frame = 0
 
+    # FunnyPilot: Dynamic SLA state
+    self.sla_locked: bool = False
+    self.sla_dynamic_offset: float = 0.0
+
     self.assist_frame = 0
     self.is_cruise_set: bool = False
     self.is_cruise_available: bool = True
@@ -100,6 +104,8 @@ class SpeedLimitRenderer(Widget):
       self.speed_limit_final_last = resolver.speedLimitFinalLast * self.speed_conv
       self.speed_limit_source = resolver.source
       self.speed_limit_assist_state = assist.state
+      self.sla_locked = assist.slaLocked            # FunnyPilot: dynamic SLA lock state
+      self.sla_dynamic_offset = assist.slaDynamicOffset  # FunnyPilot: dynamic offset ratio
 
     if sm.updated["liveMapDataSP"]:
       lmd = sm["liveMapDataSP"]
@@ -157,6 +163,10 @@ class SpeedLimitRenderer(Widget):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
+      # FunnyPilot: Draw dynamic SLA lock status badge
+      if self.sla_locked and self.speed_limit_assist_state in (AssistState.active, AssistState.adapting,
+                                                                AssistState.pending, AssistState.inactive):
+        self._draw_sla_lock_badge(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode >= SpeedLimitMode.warning
@@ -253,6 +263,33 @@ class SpeedLimitRenderer(Widget):
 
       f_scale = 0.6 if len(sub) < 3 else 0.475
       self._draw_text_centered(self.font_bold, sub, int(box_sz * f_scale), rl.Vector2(s_rect.x + box_sz / 2, s_rect.y + box_sz / 2), white)
+
+  def _draw_sla_lock_badge(self, sign_rect):
+    """FunnyPilot: Draw a small badge showing dynamic SLA is locked and current offset percentage."""
+    offset_pct = self.sla_dynamic_offset * 100.0
+    if abs(offset_pct) < 0.5:
+      offset_str = "±0%"
+    elif offset_pct >= 0:
+      offset_str = f"+{round(offset_pct)}%"
+    else:
+      offset_str = f"{round(offset_pct)}%"
+
+    # Badge appears to the left of the sign
+    badge_w = 120
+    badge_h = 56
+    badge_x = sign_rect.x - badge_w - 8
+    badge_y = sign_rect.y + sign_rect.height - badge_h
+
+    # Background: teal/cyan to distinguish from SCC badges
+    badge_color = rl.Color(0, 180, 160, 220)
+    rl.draw_rectangle_rounded(rl.Rectangle(badge_x, badge_y, badge_w, badge_h), 0.3, 10, badge_color)
+
+    # "SLA" label
+    mid_x = badge_x + badge_w / 2
+    self._draw_text_centered(self.font_bold, "SLA", 24, rl.Vector2(mid_x, badge_y + 14), Colors.WHITE)
+
+    # Offset percentage
+    self._draw_text_centered(self.font_bold, offset_str, 26, rl.Vector2(mid_x, badge_y + 40), Colors.WHITE)
 
   def _draw_ahead_info(self, sign_rect):
     source_is_map = self.speed_limit_source == SpeedLimitSource.map

@@ -134,6 +134,8 @@ class LongitudinalPlannerSP:
     assist.active = self.sla.is_active
     assist.vTarget = float(self.sla.output_v_target)
     assist.aTarget = float(self.sla.output_a_target)
+    assist.slaLocked = bool(self.sla.sla_locked)             # FunnyPilot: dynamic SLA lock
+    assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)  # FunnyPilot: offset ratio
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

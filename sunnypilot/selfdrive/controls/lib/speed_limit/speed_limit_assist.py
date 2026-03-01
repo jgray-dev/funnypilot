@@ -92,6 +92,10 @@ class SpeedLimitAssist:
     self._minus_hold = 0.
     self._last_carstate_ts = 0.
 
+    # FunnyPilot: Dynamic SLA locking
+    self._sla_locked = False          # True once SLA has been activated; cleared only on disable
+    self._dynamic_offset_ratio = 0.0  # (v_cruise - speed_limit_final_last) / speed_limit_final_last
+
     # TODO-SP: SLA's own output_a_target for planner
     # Solution functions mapped to respective states
     self.acceleration_solutions = {
@@ -119,6 +123,31 @@ class SpeedLimitAssist:
   def v_cruise_cluster_below_confirm_speed_threshold(self) -> bool:
     return bool(self.v_cruise_cluster_conv < CONFIRM_SPEED_THRESHOLD[self.is_metric])
 
+  @property
+  def sla_locked(self) -> bool:
+    return self._sla_locked
+
+  @property
+  def dynamic_offset_ratio(self) -> float:
+    return self._dynamic_offset_ratio
+
+  @property
+  def dynamic_offset_percent(self) -> float:
+    return self._dynamic_offset_ratio * 100.0
+
+  def _effective_speed_limit_target(self) -> float:
+    """FunnyPilot: Returns the effective speed target accounting for dynamic offset when locked."""
+    if self._sla_locked and self._has_speed_limit and self._speed_limit_final_last > 0:
+      return self._speed_limit_final_last * (1.0 + self._dynamic_offset_ratio)
+    return self._speed_limit_final_last
+
+  def _update_locked_offset(self) -> None:
+    """FunnyPilot: Recalculate dynamic offset when user adjusts cruise while locked."""
+    if self._has_speed_limit and self._speed_limit_final_last > 0 and self.v_cruise_cluster > 0:
+      ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
+      # Cap to ±50% to prevent extreme effective targets from bad data
+      self._dynamic_offset_ratio = max(-0.5, min(0.5, ratio))
+
   def update_active_event(self, events_sp: EventsSP) -> None:
     if self.v_cruise_cluster_below_confirm_speed_threshold:
       events_sp.add(EventNameSP.speedLimitChanged)
@@ -127,10 +156,11 @@ class SpeedLimitAssist:
 
   def get_v_target_from_control(self) -> float:
     if self._has_speed_limit:
+      effective_target = self._effective_speed_limit_target()
       if self.pcm_op_long and self.is_enabled:
-        return self._speed_limit_final_last
+        return effective_target
       if not self.pcm_op_long and self.is_active:
-        return self._speed_limit_final_last
+        return effective_target
 
     # Fallback
     return V_CRUISE_UNSET
@@ -179,8 +209,8 @@ class SpeedLimitAssist:
     speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
     self.v_cruise_cluster = v_cruise_cluster
 
-    # Update current velocity offset (error)
-    self.v_offset = self._speed_limit_final_last - self.v_ego
+    # FunnyPilot: Compute v_offset against effective target (accounts for dynamic offset when locked)
+    self.v_offset = self._effective_speed_limit_target() - self.v_ego
 
     self.speed_limit_final_last_conv = round(self._speed_limit_final_last * speed_conv)
     self.v_cruise_cluster_conv = round(self.v_cruise_cluster * speed_conv)
@@ -207,8 +237,9 @@ class SpeedLimitAssist:
     return self.a_ego
 
   def get_adapting_state_target_acceleration(self) -> float:
+    effective_target = self._effective_speed_limit_target()
     if self._distance > 0:
-      return (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2. * self._distance)
+      return (effective_target ** 2 - self.v_ego ** 2) / (2. * self._distance)
 
     return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
 
@@ -220,8 +251,10 @@ class SpeedLimitAssist:
     if not self.long_enabled or not self._has_speed_limit:
       return False
 
+    effective_target = self._effective_speed_limit_target()
+
     # Only for speed reductions (with offset applied)
-    speed_diff = self.v_ego - self._speed_limit_final_last
+    speed_diff = self.v_ego - effective_target
     if speed_diff <= 0:
       return False
 
@@ -232,11 +265,11 @@ class SpeedLimitAssist:
     # Calculate coast distance needed to reach target speed
     # Using coast deceleration of -0.15 m/s² (gentle engine braking + drag)
     coast_decel = -0.15
-    coast_distance_needed = (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2.0 * coast_decel)
+    coast_distance_needed = (effective_target ** 2 - self.v_ego ** 2) / (2.0 * coast_decel)
 
     # Add buffer: we want to reach target speed slightly BEFORE the limit
     # Buffer = 2 seconds of travel at new speed limit
-    buffer_distance = self._speed_limit_final_last * 2.0
+    buffer_distance = effective_target * 2.0
     total_distance_needed = coast_distance_needed + buffer_distance
 
     # Cut gas if we're within the coast distance
@@ -248,6 +281,7 @@ class SpeedLimitAssist:
         self.state = SpeedLimitAssistState.adapting
       else:
         self.state = SpeedLimitAssistState.active
+      self._sla_locked = True  # FunnyPilot: Lock into dynamic SLA mode on activation
     else:
       self.state = SpeedLimitAssistState.pending
 
@@ -270,13 +304,20 @@ class SpeedLimitAssist:
     if self.state != SpeedLimitAssistState.disabled:
       if not self.long_enabled or not self.enabled:
         self.state = SpeedLimitAssistState.disabled
+        # FunnyPilot: Clear dynamic lock on full disable
+        self._sla_locked = False
+        self._dynamic_offset_ratio = 0.0
 
       else:
         # ACTIVE
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
-            # FunnyPilot: User manually changed speed -> deactivate SLA
-            self.state = SpeedLimitAssistState.inactive
+            if self._sla_locked:
+              # FunnyPilot: Dynamic SLA - update offset ratio, stay active
+              self._update_locked_offset()
+            else:
+              # FunnyPilot: User manually changed speed -> deactivate SLA
+              self.state = SpeedLimitAssistState.inactive
           elif self.speed_limit_changed:
             # FunnyPilot: Auto-track speed limit changes - no user confirmation required
             self._update_confirmed_state()
@@ -286,8 +327,12 @@ class SpeedLimitAssist:
         # ADAPTING
         elif self.state == SpeedLimitAssistState.adapting:
           if self.v_cruise_cluster_changed:
-            # FunnyPilot: User manually changed speed -> deactivate SLA
-            self.state = SpeedLimitAssistState.inactive
+            if self._sla_locked:
+              # FunnyPilot: Dynamic SLA - update offset ratio, stay adapting
+              self._update_locked_offset()
+            else:
+              # FunnyPilot: User manually changed speed -> deactivate SLA
+              self.state = SpeedLimitAssistState.inactive
           elif self.speed_limit_changed:
             # FunnyPilot: Auto-track speed limit changes
             self._update_confirmed_state()
@@ -299,8 +344,12 @@ class SpeedLimitAssist:
           if self.target_set_speed_confirmed:
             self._update_confirmed_state()
           elif self.speed_limit_changed:
-            self.state = SpeedLimitAssistState.preActive
-            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
+            if self._sla_locked:
+              # FunnyPilot: Already locked - auto-activate on new limit
+              self._update_confirmed_state()
+            else:
+              self.state = SpeedLimitAssistState.preActive
+              self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
         # PRE_ACTIVE
         elif self.state == SpeedLimitAssistState.preActive:
@@ -312,8 +361,11 @@ class SpeedLimitAssist:
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          # FunnyPilot: Re-prompt when entering a new speed limit zone
-          if self.speed_limit_changed and self._has_speed_limit:
+          if self._sla_locked and self.speed_limit_changed and self._has_speed_limit:
+            # FunnyPilot: Auto-reactivate on new zone when locked
+            self._update_confirmed_state()
+          elif not self._sla_locked and self.speed_limit_changed and self._has_speed_limit:
+            # FunnyPilot: Re-prompt when entering a new speed limit zone
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
@@ -346,13 +398,20 @@ class SpeedLimitAssist:
     if self.state != SpeedLimitAssistState.disabled:
       if not self.long_enabled or not self.enabled:
         self.state = SpeedLimitAssistState.disabled
+        # FunnyPilot: Clear dynamic lock on full disable
+        self._sla_locked = False
+        self._dynamic_offset_ratio = 0.0
 
       else:
         # ACTIVE
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
-            # FunnyPilot: User manually changed speed -> deactivate SLA
-            self.state = SpeedLimitAssistState.inactive
+            if self._sla_locked:
+              # FunnyPilot: Dynamic SLA - update offset ratio, stay active
+              self._update_locked_offset()
+            else:
+              # FunnyPilot: User manually changed speed -> deactivate SLA
+              self.state = SpeedLimitAssistState.inactive
           elif self.speed_limit_changed:
             # FunnyPilot: Auto-track speed limit changes - no confirmation required
             self.state = SpeedLimitAssistState.active  # stay active, speed_limit_final_last auto-updates
@@ -361,18 +420,24 @@ class SpeedLimitAssist:
         elif self.state == SpeedLimitAssistState.preActive:
           if self._update_non_pcm_long_confirmed_state():
             self.state = SpeedLimitAssistState.active
+            self._sla_locked = True  # FunnyPilot: Lock on activation
           elif self.pre_active_timer <= 0:
             # Timeout - session ended
             self.state = SpeedLimitAssistState.inactive
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          # FunnyPilot: Re-prompt when entering a new speed limit zone
-          if self.speed_limit_changed and self._has_speed_limit:
-            self.state = SpeedLimitAssistState.preActive
-            self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
-          elif self._update_non_pcm_long_confirmed_state():
+          if self._sla_locked and self.speed_limit_changed and self._has_speed_limit:
+            # FunnyPilot: Auto-reactivate on new zone when locked
             self.state = SpeedLimitAssistState.active
+          elif not self._sla_locked:
+            # FunnyPilot: Re-prompt when entering a new speed limit zone
+            if self.speed_limit_changed and self._has_speed_limit:
+              self.state = SpeedLimitAssistState.preActive
+              self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
+            elif self._update_non_pcm_long_confirmed_state():
+              self.state = SpeedLimitAssistState.active
+              self._sla_locked = True  # FunnyPilot: Lock on activation
 
     # DISABLED
     elif self.state == SpeedLimitAssistState.disabled:
@@ -384,6 +449,7 @@ class SpeedLimitAssist:
         elif self.long_engaged_timer <= 0:
           if self._update_non_pcm_long_confirmed_state():
             self.state = SpeedLimitAssistState.active
+            self._sla_locked = True  # FunnyPilot: Lock on first activation
           elif self._has_speed_limit:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
