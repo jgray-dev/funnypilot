@@ -4,40 +4,125 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+
 import os
+import re
+import time
+
+import pyray as rl
 
 from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.system.ui.widgets.scroller_tici import Scroller
 
-from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
-from openpilot.system.ui.sunnypilot.widgets.tree_dialog import TreeOptionDialog, TreeNode, TreeFolder
+from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp, toggle_item_sp
+from openpilot.system.ui.sunnypilot.widgets.progress_bar import progress_item
 
 
 DESCRIPTIONS = {
-  'disable_updates_offroad': tr_noop(
-    "When enabled, automatic software updates will be off.<br><b>This requires a reboot to take effect.</b>"
-  ),
-  'disable_updates_onroad': tr_noop(
-    "Please enable \"Always Offroad\" mode or turn off the vehicle to adjust these toggles."
-  )
+  'disable_updates_offroad': tr_noop("When enabled, automatic software updates will be off.<br><b>This requires a reboot to take effect.</b>"),
+  'disable_updates_onroad': tr_noop("Please enable \"Always Offroad\" mode or turn off the vehicle to adjust these toggles."),
 }
 
 
 class SoftwareLayoutSP(SoftwareLayout):
   def __init__(self):
     super().__init__()
+
+    self._funnypilot_display_to_branch: dict[str, str] = {}
+
+    self.refresh_branches_btn = button_item_sp(
+      lambda: tr("FunnyPilot Branches"),
+      lambda: tr("REFRESH"),
+      description=lambda: tr("Refresh available branches from the funnypilot remote."),
+      callback=self._refresh_branch_list,
+    )
+
+    self.branch_download_progress = progress_item(tr("Branch Download"))
+    self.branch_download_progress.set_visible(False)
+
     self.disable_updates_toggle = toggle_item_sp(
       lambda: tr("Disable Updates"),
       description="",
       initial_state=ui_state.params.get_bool("DisableUpdates"),
       callback=self._on_disable_updates_toggled,
     )
-    self._scroller.add_widget(self.disable_updates_toggle)
+
+    self._uninstall_btn = button_item_sp(lambda: tr("Uninstall"), lambda: tr("UNINSTALL"), callback=self._on_uninstall)
+
+    self._scroller = Scroller(
+      [
+        self._onroad_label,
+        self._version_item,
+        self.refresh_branches_btn,
+        self._branch_btn,
+        self.branch_download_progress,
+        self._download_btn,
+        self._install_btn,
+        self._uninstall_btn,
+        self.disable_updates_toggle,
+      ],
+      line_separator=True,
+      spacing=0,
+    )
+
+  @staticmethod
+  def _is_funnypilot_version_branch(branch: str) -> bool:
+    return re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]?", branch) is not None
+
+  @staticmethod
+  def _branch_sort_key(branch: str) -> tuple[int, int, int, int, str]:
+    m = re.fullmatch(r"funnypilot-(\d+)\.(\d+)\.(\d+)([a-z]?)", branch)
+    if m is None:
+      return (0, 0, 0, 0, "")
+    major, minor, patch, suffix = m.groups()
+    suffix_rank = 1 if suffix else 0
+    return (int(major), int(minor), int(patch), suffix_rank, suffix)
+
+  @staticmethod
+  def _display_branch_name(branch: str) -> str:
+    if branch.startswith("funnypilot-"):
+      return branch[len("funnypilot-") :]
+    return branch
+
+  @staticmethod
+  def _parse_updater_state(state: str) -> tuple[str, int, str]:
+    state = state or "idle"
+    parts = state.split("|", 2)
+    phase = parts[0].strip()
+
+    default_progress = {
+      "checking...": 5,
+      "downloading...": 45,
+      "finalizing update...": 92,
+    }
+
+    progress = default_progress.get(phase, 0)
+    if len(parts) >= 2:
+      try:
+        progress = max(0, min(100, int(parts[1])))
+      except Exception:
+        pass
+
+    detail = parts[2] if len(parts) == 3 and parts[2] else phase
+    return phase, progress, detail
+
+  def _refresh_branch_list(self):
+    self._waiting_for_updater = True
+    self._waiting_start_ts = time.monotonic()
+    os.system("pkill -SIGUSR1 -f system.updated.updated")
+
+  def _build_funnypilot_branch_map(self) -> dict[str, str]:
+    branches_str = ui_state.params.get("UpdaterAvailableBranches") or ""
+    branches = [b.strip() for b in branches_str.split(",") if b.strip()]
+    fp_branches = [b for b in branches if self._is_funnypilot_version_branch(b)]
+    fp_branches.sort(key=self._branch_sort_key, reverse=True)
+    return {self._display_branch_name(branch): branch for branch in fp_branches}
 
   def _handle_reboot(self, result):
     if result == DialogResult.CONFIRM:
@@ -51,44 +136,50 @@ class SoftwareLayoutSP(SoftwareLayout):
     gui_app.set_modal_overlay(dialog, callback=self._handle_reboot)
 
   def _on_select_branch(self):
-    current_git_branch = ui_state.params.get("GitBranch") or ""
-    branches_str = ui_state.params.get("UpdaterAvailableBranches") or ""
-    branches = [b for b in branches_str.split(",") if b]
-    current_target = ui_state.params.get("UpdaterTargetBranch") or ""
-    top_level_branches = [current_git_branch, "release-mici", "release-tizi", "staging", "dev", "master"]
+    self._funnypilot_display_to_branch = self._build_funnypilot_branch_map()
 
-    if HARDWARE.get_device_type() == "tici":
-      top_level_branches = ["release-tici", "staging-tici"]
-      branches = [b for b in branches if b.endswith("-tici")]
+    if not self._funnypilot_display_to_branch:
+      gui_app.set_modal_overlay(alert_dialog(tr("No FunnyPilot version branches available yet. Tap Refresh and try again.")))
+      return
 
-    top_level_nodes = [TreeNode(b, {'display_name': b}) for b in top_level_branches if b in branches]
-    remaining_branches = [b for b in branches if b not in top_level_branches]
-    prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if b.endswith("-prebuilt")]
-    non_prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if not b.endswith("-prebuilt")]
+    options = list(self._funnypilot_display_to_branch.keys())
+    current_target = ui_state.params.get("UpdaterTargetBranch") or ui_state.params.get("GitBranch") or ""
+    current_display = self._display_branch_name(current_target)
 
-    folders = [
-      TreeFolder("", top_level_nodes),
-      TreeFolder("Prebuilt Branches", prebuilt_nodes),
-      TreeFolder("Non-Prebuilt Branches", non_prebuilt_nodes),
-    ]
+    self._branch_dialog = MultiOptionDialog(tr("Select FunnyPilot branch"), options, current_display)
 
-    def _on_branch_selected(result):
-      if result == DialogResult.CONFIRM and self._branch_dialog is not None:
-        selection = self._branch_dialog.selection_ref
-        if selection:
-          ui_state.params.put("UpdaterTargetBranch", selection)
-          self._branch_btn.action_item.set_value(selection)
-          os.system("pkill -SIGUSR1 -f system.updated.updated")
+    def handle_selection(result):
+      if result == DialogResult.CONFIRM and self._branch_dialog is not None and self._branch_dialog.selection:
+        selected_display = self._branch_dialog.selection
+        selected_branch = self._funnypilot_display_to_branch.get(selected_display)
+        if selected_branch:
+          ui_state.params.put("UpdaterTargetBranch", selected_branch)
+          self._branch_btn.action_item.set_value(selected_display)
+          self._waiting_for_updater = True
+          self._waiting_start_ts = time.monotonic()
+          os.system("pkill -SIGHUP -f system.updated.updated")
       self._branch_dialog = None
 
-    self._branch_dialog = TreeOptionDialog(tr("Select a branch"), folders, current_target, "",
-                                           on_exit=_on_branch_selected)
-
-    gui_app.set_modal_overlay(self._branch_dialog, callback=_on_branch_selected)
+    gui_app.set_modal_overlay(self._branch_dialog, callback=handle_selection)
 
   def _update_state(self):
     super()._update_state()
     show_advanced = ui_state.params.get_bool("ShowAdvancedControls")
+
+    self.refresh_branches_btn.action_item.set_enabled(ui_state.is_offroad())
+
+    branch_value = self._display_branch_name(ui_state.params.get("UpdaterTargetBranch") or "")
+    self._branch_btn.action_item.set_value(branch_value)
+    self._branch_btn.action_item.set_enabled(ui_state.is_offroad())
+
+    updater_state = ui_state.params.get("UpdaterState") or "idle"
+    phase, progress, detail = self._parse_updater_state(updater_state)
+    downloading = phase in ("checking...", "downloading...", "finalizing update...")
+    self.branch_download_progress.set_visible(downloading)
+    if downloading:
+      text = f"{int(progress)}% - {detail}"
+      self.branch_download_progress.action_item.update(progress, text, show_progress=True, text_color=rl.WHITE)
+
     self.disable_updates_toggle.action_item.set_enabled(ui_state.is_offroad())
     self.disable_updates_toggle.set_visible(show_advanced)
 

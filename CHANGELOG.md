@@ -12,6 +12,7 @@ FunnyPilot v1.0.0 (2026-03-01)
 * Offline/deployment robustness:
   - Improved sidebar LAN IP detection fallback when internet egress is unavailable, preserving local nav web access visibility.
   - Added local-network deployment script `PUSH100.sh` for direct device updates while offline.
+  - Software panel now supports FunnyPilot branch refresh + selection flow directly on-device (no SSH needed): refresh branch list from `funnypilot` remote, choose version branch, auto-download into updater overlay with progress feedback, then install/reboot.
 * Versioning:
   - `FUNNYPILOT_VERSION` set to `1.0.0`.
 
