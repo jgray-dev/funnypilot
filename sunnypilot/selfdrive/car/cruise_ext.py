@@ -22,7 +22,7 @@ CRUISE_BUTTON_TIMER = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0,
                        ButtonType.cancel: 0, ButtonType.mainCruise: 0}
 
 V_CRUISE_MIN = 8
-V_CRUISE_MAX = 145
+V_CRUISE_MAX = 210  # FunnyPilot: raised from 145 kph (~90mph) to 210 kph (~130mph)
 V_CRUISE_UNSET = 255
 
 

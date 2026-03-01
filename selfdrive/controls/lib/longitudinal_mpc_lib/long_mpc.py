@@ -62,14 +62,14 @@ MIN_X_LEAD_FACTOR = 0.5
 
 # FunnyPilot: Variable follow distance breakpoints (speed in m/s)
 # Breakpoints: 0, 20, 35, 50, 75 mph with gradients between 20-35 and 50-75
-# Distance 2 (standard): 2.5s@<=20mph, 1.5s@35-50mph, 1.0s@>=75mph
-# Distance 1 (aggressive): 15% shorter = 2.125s@<=20mph, 1.275s@35-50mph, 0.85s@>=75mph
-# Distance 3 (relaxed):    15% longer  = 2.875s@<=20mph, 1.725s@35-50mph, 1.15s@>=75mph
+# Distance 2 (standard): 2.25s@<=20mph, 1.5s@35-50mph, 1.0s@>=75mph
+# Distance 1 (aggressive): 15% shorter = 1.9125s@<=20mph, 1.275s@35-50mph, 0.85s@>=75mph
+# Distance 3 (relaxed):    15% longer  = 2.5875s@<=20mph, 1.725s@35-50mph, 1.15s@>=75mph
 _T_FOLLOW_V_MPH = [0., 20., 35., 50., 75.]
 _T_FOLLOW_V_MPS = [v * 0.44704 for v in _T_FOLLOW_V_MPH]  # convert mph to m/s
-_T_FOLLOW_AGGRESSIVE  = [2.125, 2.125, 1.275, 1.275, 0.85]  # dist 1 (closest, 15% below standard)
-_T_FOLLOW_STANDARD    = [2.5,   2.5,   1.5,   1.5,   1.0]   # dist 2 (medium)
-_T_FOLLOW_RELAXED     = [2.875, 2.875, 1.725, 1.725, 1.15]  # dist 3 (farthest, 15% above standard)
+_T_FOLLOW_AGGRESSIVE  = [1.9125, 1.9125, 1.275, 1.275, 0.85]  # dist 1 (closest, 15% below standard)
+_T_FOLLOW_STANDARD    = [2.25,   2.25,   1.5,   1.5,   1.0]   # dist 2 (medium)
+_T_FOLLOW_RELAXED     = [2.5875, 2.5875, 1.725, 1.725, 1.15]  # dist 3 (farthest, 15% above standard)
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:

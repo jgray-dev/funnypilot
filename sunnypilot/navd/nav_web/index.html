@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FunnyPilot Navigation</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+  <header>
+    <div class="logo">FunnyPilot <span>Navigation</span></div>
+  </header>
+
+  <div id="status-strip">
+    <div class="dot"></div>
+    <span id="status-text">No active navigation</span>
+  </div>
+
+  <div class="container">
+    <div class="search-section">
+      <input
+        id="search-input"
+        type="text"
+        placeholder="Search destination..."
+        autocomplete="off"
+        autocorrect="off"
+        spellcheck="false"
+      >
+      <div id="autocomplete-list"></div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="hotkey-bar">
+      <button id="btn-home" class="hotkey-btn">
+        <span class="btn-icon">🏠</span>
+        Home
+      </button>
+      <button id="btn-work" class="hotkey-btn">
+        <span class="btn-icon">🏢</span>
+        Work
+      </button>
+      <button id="btn-cancel" class="hotkey-btn cancel">
+        <span class="btn-icon">✕</span>
+        Cancel
+      </button>
+    </div>
+
+    <div id="dest-panel" class="dest-panel">
+      <h3>Active Destination</h3>
+      <div id="dest-name" class="dest-name"></div>
+      <div id="dest-addr" class="dest-addr"></div>
+      <div class="save-btns" id="save-btns" style="display:none">
+        <button id="btn-save-home" class="save-btn">💾 Save as Home</button>
+        <button id="btn-save-work" class="save-btn">💾 Save as Work</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

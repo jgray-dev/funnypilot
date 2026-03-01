@@ -23,8 +23,8 @@ from opendbc.sunnypilot.car.interfaces import CarInterfaceBaseSP
 GearShifter = structs.CarState.GearShifter
 ButtonType = structs.CarState.ButtonEvent.Type
 
-V_CRUISE_MAX = 145
-MAX_CTRL_SPEED = (V_CRUISE_MAX + 4) * CV.KPH_TO_MS
+V_CRUISE_MAX = 210  # FunnyPilot: raised from 145 kph (~90mph) to 210 kph (~130mph)
+MAX_CTRL_SPEED = 153 * CV.KPH_TO_MS  # FunnyPilot: ~95mph threshold for high speed banner (decoupled from V_CRUISE_MAX)
 ACCEL_MAX = 2.0
 ACCEL_MIN = -3.5
 

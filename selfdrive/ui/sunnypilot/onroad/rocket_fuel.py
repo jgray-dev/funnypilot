@@ -12,12 +12,17 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 class RocketFuel:
   def __init__(self):
     self.vc_accel = 0.0
+    self.gas_gating = False
 
   def render(self, rect: rl.Rectangle, sm) -> None:
     if not ui_state.rocket_fuel:
       return
 
     vc_accel0 = sm['carState'].aEgo
+
+    if sm.updated["longitudinalPlanSP"]:
+      scc = sm["longitudinalPlanSP"].smartCruiseControl
+      self.gas_gating = scc.vision.gasGating or scc.map.gasGating
 
     # Smooth the acceleration
     self.vc_accel = self.vc_accel + (vc_accel0 - self.vc_accel) / 5.0
@@ -30,7 +35,8 @@ class RocketFuel:
       color = rl.Color(0, 245, 0, 200)
     elif self.vc_accel < 0:
       hha = 0.85 + 0.1 / self.vc_accel  # only extend up to 85%
-      color = rl.Color(245, 0, 0, 200)
+      # FunnyPilot: Orange during gas gating (coasting), red during active braking
+      color = rl.Color(255, 140, 0, 200) if self.gas_gating else rl.Color(245, 0, 0, 200)
 
     if hha < 0:
       hha = 0.0
