@@ -2,31 +2,43 @@
 
 ## SSH Access
 
-**Home network (port forwarding):**
-```
+**Home network (direct):**
+```bash
 ssh comma@192.168.86.31
 ```
 
-**Remote / off-network (Tailscale VPN — works anywhere):**
+**Remote / off-network (Tailscale VPN — works from anywhere):**
+```bash
+ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock nc %h %p" comma@100.93.118.118
 ```
-ssh comma@100.93.118.118
+Device Tailscale IP: `100.93.118.118` (hostname: `comma-740ff8eb`)
+Tailscale account: `nohaxjustdoge@`
+
+**Dev server Tailscale** runs as a persistent systemd user service (no root needed):
+```bash
+systemctl --user status tailscaled   # check status
+systemctl --user restart tailscaled  # restart if needed
+/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock status
 ```
-Tailscale account: `nohaxjustdoge@` — both this dev machine and any other device must be on the same tailnet.
-Install Tailscale at https://tailscale.com/download and `tailscale up` to join, then the SSH above works.
+State: `/home/astro/.local/share/tailscale/` — persists across restarts.
+Linger enabled: service auto-starts on boot even without active login session.
 
-**Tailscale is self-healing:** binaries and auth state are stored in `/data/tailscale/` so they survive
-AGNOS (base OS) updates. The `/data/continue.sh` script starts tailscaled on every boot automatically.
+**Device Tailscale** runs via systemd (kernel TUN mode) with state in `/data/tailscale/state/`
+(survives AGNOS updates). Managed by `/etc/systemd/system/tailscaled.service.d/state.conf`.
 
-**If Tailscale stops working after an AGNOS update:**
+**If device Tailscale stops working after an AGNOS update:**
 ```bash
 ssh comma@192.168.86.31  # home network first
+sudo systemctl daemon-reload
+sudo systemctl restart tailscaled
+# If systemd service is gone (AGNOS wiped /etc):
+sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
 sudo mkdir -p /run/tailscale
 sudo /data/tailscale/bin/tailscaled \
   --state=/data/tailscale/state/tailscaled.state \
-  --socket=/run/tailscale/tailscaled.sock \
-  --tun=userspace-networking &
+  --socket=/run/tailscale/tailscaled.sock --port=41641 &
 sleep 3
-sudo /data/tailscale/bin/tailscale --socket=/run/tailscale/tailscaled.sock up --ssh
+sudo /data/tailscale/bin/tailscale --socket=/run/tailscale/tailscaled.sock up --ssh=false
 ```
 
 ## Git Remotes
