@@ -268,6 +268,8 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       active @2 :Bool;
       vTarget @3 :Float32;
       aTarget @4 :Float32;
+      slaLocked @5 :Bool;           # FunnyPilot: locked into dynamic SLA mode
+      slaDynamicOffset @6 :Float32; # FunnyPilot: dynamic offset ratio (e.g. 0.20 = +20% above limit)
     }
 
     enum Source {

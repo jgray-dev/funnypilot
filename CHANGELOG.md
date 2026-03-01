@@ -1,3 +1,23 @@
+FunnyPilot v0.9.8 (2026-03-01)
+========================
+* Dynamic Speed Limit Assist (Locked Mode):
+  - SLA now stays permanently locked once activated (only clears on cruise disengage)
+  - When user adjusts cruise while SLA is active, records the offset % relative to limit
+    (e.g. 36mph in a 30mph zone = +20% offset)
+  - On entering a new speed limit zone, the stored offset is automatically applied
+    (e.g. +20% offset + 40mph zone = 48mph effective target)
+  - Offset is continuously updated whenever the user adjusts cruise
+  - Offset is capped at ±50% for safety
+  - Works for automatic speed reductions (SLA slows car to new_limit * (1 + offset))
+  - For increases: SLA sets target above current cruise; user confirms with + press
+* Dynamic SLA status badge in onroad UI:
+  - Teal "SLA" badge appears near the speed limit sign when locked
+  - Shows current dynamic offset (e.g. "+20%", "-5%", "±0%")
+* Revised follow distance (all distances recalibrated):
+  - Distance 2 (standard): 2.5s@≤20mph, gradient 20-35mph, 1.5s@35-50mph, gradient 50-75mph, 1.0s@≥75mph
+  - Distance 1 (aggressive): 15% shorter than standard at all speeds
+  - Distance 3 (relaxed): 15% longer than standard at all speeds
+
 FunnyPilot v0.9.7h (2026-02-25) HOTFIX
 ========================
 * Fixed plannerd crash on long control enable: empty modelV2 arrays caused ValueError in
