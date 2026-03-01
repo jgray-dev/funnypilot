@@ -67,6 +67,48 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.0 Changes
+
+- `sunnypilot/navd/navigationd.py` - Fixed route bootstrap race: if destination is set before GPS becomes valid, daemon now automatically fetches the route once GPS lock arrives. Refactored destination parsing into `_load_destination()` and reused for reroute path.
+- `sunnypilot/navd/nav_state.py` - Resets `distance_to_maneuver` on `set_route()` so reroutes/new routes do not briefly show stale maneuver distance.
+- `sunnypilot/navd/nav_web/app.js` - Hardened coordinate validation with `hasNumber()` checks. Correctly supports valid `0` lat/lon values (equator/prime meridian) for GPS, destination markers, Home/Work validation, and map recentering.
+- `sunnypilot/navd/routing/route_cache.py` - New offline route cache + recovery helpers. Stores fetched routes on disk as gzip with index pruning (max route count + total size cap), loads best cached route when online fetch fails, tracks breadcrumbs, and builds temporary backtrack/rejoin routes while offline.
+- `sunnypilot/navd/navigationd.py` - Integrated cache-aware route fetch (`online -> cache fallback`) and breadcrumb-driven offline rejoin route generation on off-route events when reroute API is unavailable.
+- `selfdrive/ui/layouts/sidebar.py` - Improved local IP detection for nav web display with fallback strategy that works better in offline/no-internet scenarios.
+- `sunnypilot/navd/nav_web/app.js` - Added Leaflet availability guard so web UI stays functional for non-map controls if CDN map assets fail offline.
+- `PUSH100.sh` - Local-LAN deployment script for branch `funnypilot-1.0.0` (`ssh comma@192.168.86.31`) to push, checkout/reset, verify version, and restart comma service.
+
+### v0.9.9 Changes
+
+- `sunnypilot/navd/__init__.py`, `sunnypilot/navd/routing/__init__.py` - Package markers.
+- `sunnypilot/navd/routing/osrm_client.py` - OSRM public API client. `get_route(start_lat, start_lon, end_lat, end_lon)` → dict with steps + GeoJSON geometry. No API key required.
+- `sunnypilot/navd/routing/geocoder.py` - Geocoding: `autocomplete(query, lat, lon)` via Photon (Komoot), `reverse(lat, lon)` via Nominatim. Both free/keyless.
+- `sunnypilot/navd/nav_state.py` - `NavState` class: holds route, tracks step index, computes distance-to-maneuver using Haversine. Detects arrival (<30m) and off-route (>100m). `update(lat, lon)` advances step index. `current_instruction()` returns dict for navInstruction fields.
+- `sunnypilot/navd/navigationd.py` - 3 Hz navigation daemon. Watches `NavDestination` param, fetches OSRM route on change, publishes `navInstruction` + `navigationStateSP` cereal messages. Auto re-routes on off-route (10s cooldown). Clears destination on arrival.
+- `sunnypilot/navd/nav_webserver.py` - aiohttp server on port 8888. REST API: GET/POST/DELETE `/api/destination`, GET/POST `/api/home`, GET/POST `/api/work`, GET `/api/autocomplete`, GET `/api/status`, GET `/api/gps`. Proxies geocoding. Serves static web UI.
+- `sunnypilot/navd/nav_web/index.html` - Single-page web app. Dark theme, Leaflet map, search + autocomplete, Home/Work/Cancel buttons, destination status panel with save-as-home/work.
+- `sunnypilot/navd/nav_web/style.css` - Dark theme: `#1a1a2e` background, `#e94560` FunnyPilot red accent. Mobile-first responsive.
+- `sunnypilot/navd/nav_web/app.js` - Leaflet map init, debounced autocomplete (300ms), `setDestination()`, `pollStatus()` (3s interval), `cancelNav()`, `saveAsHome/Work()`.
+- `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - `NavigationPanel(Widget)`: bottom-left turn-by-turn overlay (440×100px). Draws directional arrow with raylib primitives based on `maneuverModifier`. Shows distance-to-maneuver, road name, ETA, remaining distance. Hidden when `navigationStateSP.active == False`.
+- `selfdrive/ui/sunnypilot/onroad/nav_quick_access.py` - `NavQuickAccess(Widget)`: pre-drive Home/Work/Refresh buttons (3×140×100px, centered bottom). Visible when started but not in Drive. Tapping Home/Work writes `NavDestination` from saved params. Refresh clears+rewrites destination to force re-route.
+- `cereal/custom.capnp` - Renamed `CustomReserved10 @0xcb9fd56c7057593a` → `NavigationStateSP` with fields: `active`, `destinationName`, `destinationAddr`, `distanceRemaining`, `timeRemaining`.
+- `cereal/services.py` - Added `"navigationStateSP": (True, 1., 10)` to sunnypilot section.
+- `selfdrive/ui/sunnypilot/ui_state.py` - Added `"navInstruction"` and `"navigationStateSP"` to `sm_services_ext`.
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` - Imported + instantiated `NavigationPanel` and `NavQuickAccess`. Both updated in `_update_state()` and rendered in `_render()`.
+- `system/manager/process_config.py` - Added `PythonProcess("navigationd", ...)` and `PythonProcess("nav_webserver", ...)` with `always_run`.
+
+### v0.9.8h Changes (HOTFIX)
+
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` - Reduced max follow distance from 2.5s to 2.25s for standard personality. Aggressive/relaxed updated proportionally (±15%).
+- `selfdrive/monitoring/helpers.py` - Driver monitoring tripled again to 9x original (270s passive, 99s active).
+- `selfdrive/ui/sunnypilot/onroad/speed_limit.py` - SLA badge moved down 30px to avoid blocking speed limit numbers. Fixed initial display "?0%" → "0%" (removed ± character that rendered incorrectly).
+- `selfdrive/ui/sunnypilot/onroad/rocket_fuel.py` - Accel bar shows orange during gas gating (coasting deceleration) instead of red. Reads `vision.gasGating` and `map.gasGating` from `longitudinalPlanSP`.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` - Simplified SCC badge: hidden when inactive, red when active braking, orange when gas gating. Removed pulsing, green color, and GAS GATE sub-label.
+- `selfdrive/controls/lib/longitudinal_planner.py` - Replaced flat 70% accel cap with speed-dependent taper: full accel 0–25mph, linear 1%/mph reduction 25–75mph, capped at 50% above 75mph.
+- `selfdrive/car/cruise.py`, `sunnypilot/selfdrive/car/cruise_ext.py`, `opendbc_repo/opendbc/car/interfaces.py` - Raised `V_CRUISE_MAX` from 145 kph (90mph) to 210 kph (130mph). `MAX_CTRL_SPEED` set independently to 153 kph (~95mph) for silent high-speed banner.
+- `selfdrive/controls/lib/longitudinal_planner.py` - Brake jerk limiter: rate-limits decel-direction changes to 4 m/s³ to eliminate lurch when MPC first acquires a lead (accel side unrestricted). Lead loss coast grace period: holds last lead speed as v_cruise cap for 2.5s then releases over 2.0s on lead disappearance, preventing accelerate-then-brake cycle. Both reset cleanly on disengage.
+- Removed Tailscale from device (PUSH098h.sh includes removal steps: stops/disables systemd service, removes `/data/tailscale` and service drop-in). SSH now home network only.
+
 ### v0.9.8 Changes
 
 - `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Dynamic SLA locking: `_sla_locked` flag + `_dynamic_offset_ratio` float. When SLA is active and user adjusts cruise, records offset % (capped ±50%) and stays locked instead of deactivating. `_effective_speed_limit_target()` applies ratio to new zones. `_update_locked_offset()` recalculates ratio on cruise change with guards (`_speed_limit_final_last > 0`, `v_cruise_cluster > 0`). `_update_confirmed_state()` sets `_sla_locked = True` on activation. Lock cleared only on full disable (`long_enabled = False` or `enabled = False`).

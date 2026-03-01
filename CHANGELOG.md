@@ -1,3 +1,20 @@
+FunnyPilot v1.0.0 (2026-03-01)
+========================
+* Consolidated and promoted all post-v0.9.7 updates (v0.9.7h, v0.9.8, v0.9.8h, v0.9.9) into a single release branch.
+* Navigation system hardening:
+  - Fixed route bootstrap edge case where destination could be set before GPS lock, preventing initial route fetch.
+  - Added automatic route fetch once GPS becomes valid for an already-set destination.
+  - Reset maneuver distance state on route load to avoid stale values after reroute.
+  - Improved nav web UI coordinate validation to correctly handle valid zero coordinates (equator/prime-meridian) and avoid false "missing location" cases.
+  - Added disk-backed offline route cache (gzip-compressed, auto-pruned by count/size) with cache fallback when live OSRM fetch fails.
+  - Added breadcrumb-based offline recovery route generation to rejoin current route after temporary detours when no network reroute is available.
+  - Added offline Leaflet-safe web behavior: map panel degrades gracefully if tile/CDN assets are unavailable.
+* Offline/deployment robustness:
+  - Improved sidebar LAN IP detection fallback when internet egress is unavailable, preserving local nav web access visibility.
+  - Added local-network deployment script `PUSH100.sh` for direct device updates while offline.
+* Versioning:
+  - `FUNNYPILOT_VERSION` set to `1.0.0`.
+
 FunnyPilot v0.9.8 (2026-03-01)
 ========================
 * Dynamic Speed Limit Assist (Locked Mode):

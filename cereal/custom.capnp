@@ -459,7 +459,12 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
   }
 }
 
-struct CustomReserved10 @0xcb9fd56c7057593a {
+struct NavigationStateSP @0xcb9fd56c7057593a {
+  active            @0 :Bool;       # Route currently active
+  destinationName   @1 :Text;       # e.g. "Coffee Shop" or "Work"
+  destinationAddr   @2 :Text;       # e.g. "123 Main St, City"
+  distanceRemaining @3 :Float32;    # meters to destination
+  timeRemaining     @4 :Float32;    # seconds to destination
 }
 
 struct CustomReserved11 @0xc2243c65e0340384 {

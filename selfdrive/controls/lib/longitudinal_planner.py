@@ -18,10 +18,20 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
-# FunnyPilot: Reduced max acceleration to 70% for smoother driving
-A_CRUISE_MAX_VALS = [1.12, 0.84, 0.56, 0.42]  # 70% of [1.6, 1.2, 0.8, 0.6]
+# FunnyPilot: Speed-dependent accel cap — full accel 0-25mph, taper to 50% at 75mph
+# Original upstream values: [1.6, 1.2, 0.8, 0.6] at [0, 10, 25, 40] m/s
+A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
+_ACCEL_CAP_BP_MPS = [0., 11.176, 33.528]  # 0, 25, 75 mph in m/s
+_ACCEL_CAP_VALS   = [1.0, 1.0,   0.5]     # 100% -> 100% -> 50%
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
+
+# FunnyPilot: Brake jerk limiter - max rate of decel change to prevent lurching
+_MAX_DECEL_JERK = 4.0  # m/s³ — 0 to -1.0 m/s² ramps in over 0.25s
+
+# FunnyPilot: Lead loss coast grace period
+_LEAD_LOSS_HOLD_FRAMES    = int(2.5 / DT_MDL)  # hold at last lead speed for 2.5s
+_LEAD_LOSS_RELEASE_FRAMES = int(2.0 / DT_MDL)  # then gradually release over 2.0s
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 
@@ -30,7 +40,9 @@ _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
 
 def get_max_accel(v_ego):
-  return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
+  base = np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
+  cap = np.interp(v_ego, _ACCEL_CAP_BP_MPS, _ACCEL_CAP_VALS)
+  return base * cap
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
@@ -73,6 +85,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self._prev_personality = None
     self._personality_gas_gate_frames = 0
     self._PERSONALITY_GAS_GATE_DURATION = int(4.0 / DT_MDL)  # 4 seconds of gas gating after dist increase
+
+    # FunnyPilot: Brake jerk limiter
+    self._prev_output_a_target = 0.0
+
+    # FunnyPilot: Lead loss coast grace period
+    self._lead_present_last = False
+    self._lead_loss_v_hold = 0.0
+    self._lead_loss_grace_frames = 0
 
   @staticmethod
   def parse_model(model_msg):
@@ -126,6 +146,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       # Clip aEgo to cruise limits to prevent large accelerations when becoming active
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
+      self._prev_output_a_target = self.a_desired
+      self._lead_loss_grace_frames = 0
+      self._lead_present_last = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -143,6 +166,26 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     if force_slow_decel:
       v_cruise = 0.0
+
+    # FunnyPilot: Lead loss coast grace period
+    # When a lead disappears, hold its last known speed for 2.5s then release over 2.0s.
+    # Prevents accelerating back to cruise only to brake again when the lead reappears.
+    lead = sm['radarState'].leadOne
+    lead_present = lead.status
+    if lead_present:
+      self._lead_loss_v_hold = lead.vLead  # continuously update while lead is visible
+    if self._lead_present_last and not lead_present and v_ego > 5.0:
+      self._lead_loss_grace_frames = _LEAD_LOSS_HOLD_FRAMES + _LEAD_LOSS_RELEASE_FRAMES
+    if not lead_present and self._lead_loss_grace_frames > 0:
+      self._lead_loss_grace_frames -= 1
+      if self._lead_loss_grace_frames > _LEAD_LOSS_RELEASE_FRAMES:
+        v_cruise = min(v_cruise, self._lead_loss_v_hold)
+      else:
+        pct = 1.0 - (self._lead_loss_grace_frames / _LEAD_LOSS_RELEASE_FRAMES)
+        v_cruise = min(v_cruise, self._lead_loss_v_hold + pct * max(0.0, v_cruise - self._lead_loss_v_hold))
+    elif lead_present:
+      self._lead_loss_grace_frames = 0
+    self._lead_present_last = lead_present
 
     personality = sm['selfdriveState'].personality
 
@@ -202,7 +245,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self._personality_gas_gate_frames > 0:
       output_a_target = min(output_a_target, 0.0)
 
+    # FunnyPilot: Brake jerk limiter — rate-limit decel only, accel side unrestricted
+    if output_a_target < self._prev_output_a_target:
+      output_a_target = max(output_a_target, self._prev_output_a_target - _MAX_DECEL_JERK * self.dt)
+
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
+    self._prev_output_a_target = self.output_a_target
     self.prev_accel_clip = accel_clip
 
   def publish(self, sm, pm):

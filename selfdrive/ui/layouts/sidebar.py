@@ -1,4 +1,5 @@
 import pyray as rl
+import socket
 import time
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -8,6 +9,31 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, F
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
+
+NAV_WEB_PORT = 8888
+_IP_REFRESH_INTERVAL = 5.0  # seconds between IP lookups
+
+
+def _get_local_ip() -> str:
+  """Return a best-effort LAN IP even when internet is unavailable."""
+  try:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+      s.connect(("8.8.8.8", 80))
+      ip = s.getsockname()[0]
+      if ip and not ip.startswith("127."):
+        return ip
+  except Exception:
+    pass
+
+  try:
+    hostname_ip = socket.gethostbyname(socket.gethostname())
+    if hostname_ip and not hostname_ip.startswith("127."):
+      return hostname_ip
+  except Exception:
+    pass
+
+  return ""
+
 
 from openpilot.selfdrive.ui.sunnypilot.layouts.sidebar import SidebarSP
 
@@ -70,6 +96,8 @@ class Sidebar(Widget, SidebarSP):
     SidebarSP.__init__(self)
     self._net_type = NETWORK_TYPES.get(NetworkType.none)
     self._net_strength = 0
+    self._nav_ip: str = _get_local_ip()
+    self._ip_last_refresh: float = time.monotonic()
 
     self._temp_status = MetricData(tr_noop("TEMP"), tr_noop("GOOD"), Colors.GOOD)
     self._panda_status = MetricData(tr_noop("VEHICLE"), tr_noop("ONLINE"), Colors.GOOD)
@@ -89,8 +117,7 @@ class Sidebar(Widget, SidebarSP):
     self._on_flag_click: Callable | None = None
     self._open_settings_callback: Callable | None = None
 
-  def set_callbacks(self, on_settings: Callable | None = None, on_flag: Callable | None = None,
-                    open_settings: Callable | None = None):
+  def set_callbacks(self, on_settings: Callable | None = None, on_flag: Callable | None = None, open_settings: Callable | None = None):
     self._on_settings_click = on_settings
     self._on_flag_click = on_flag
     self._open_settings_callback = open_settings
@@ -121,6 +148,11 @@ class Sidebar(Widget, SidebarSP):
     self._net_type = NETWORK_TYPES.get(device_state.networkType.raw, tr_noop("Unknown"))
     strength = device_state.networkStrength
     self._net_strength = max(0, min(5, strength.raw + 1)) if strength.raw > 0 else 0
+
+    now = time.monotonic()
+    if now - self._ip_last_refresh >= _IP_REFRESH_INTERVAL:
+      self._nav_ip = _get_local_ip()
+      self._ip_last_refresh = now
 
   def _update_temperature_status(self, device_state):
     thermal_status = device_state.thermalStatus
@@ -182,8 +214,12 @@ class Sidebar(Widget, SidebarSP):
       bg_color = rl.Color(Colors.DANGER.r, Colors.DANGER.g, Colors.DANGER.b, int(255 * 0.65)) if mic_pressed else Colors.DANGER
 
       rl.draw_rectangle_rounded(self._mic_indicator_rect, 1, 10, bg_color)
-      rl.draw_texture(self._mic_img, int(self._mic_indicator_rect.x + (self._mic_indicator_rect.width - self._mic_img.width) / 2),
-                      int(self._mic_indicator_rect.y + (self._mic_indicator_rect.height - self._mic_img.height) / 2), Colors.WHITE)
+      rl.draw_texture(
+        self._mic_img,
+        int(self._mic_indicator_rect.x + (self._mic_indicator_rect.width - self._mic_img.width) / 2),
+        int(self._mic_indicator_rect.y + (self._mic_indicator_rect.height - self._mic_img.height) / 2),
+        Colors.WHITE,
+      )
 
   def _draw_network_indicator(self, rect: rl.Rectangle):
     # Signal strength dots
@@ -202,6 +238,11 @@ class Sidebar(Widget, SidebarSP):
     text_y = rect.y + 247
     text_pos = rl.Vector2(rect.x + 58, text_y)
     rl.draw_text_ex(self._font_regular, tr(self._net_type), text_pos, FONT_SIZE, 0, Colors.WHITE)
+
+    # FunnyPilot: show nav web server IP so user can connect from any network
+    if self._nav_ip:
+      ip_text = f"{self._nav_ip}:{NAV_WEB_PORT}"
+      rl.draw_text_ex(self._font_regular, ip_text, rl.Vector2(rect.x + 58, text_y + 40), 25, 0, Colors.WHITE_DIM)
 
   def _draw_metrics(self, rect: rl.Rectangle):
     if gui_app.sunnypilot_ui():
@@ -233,8 +274,5 @@ class Sidebar(Widget, SidebarSP):
     for text in labels:
       text_size = measure_text_cached(self._font_bold, text, FONT_SIZE)
       text_y += text_size.y
-      text_pos = rl.Vector2(
-        metric_rect.x + 22 + (metric_rect.width - 22 - text_size.x) / 2,
-        text_y
-      )
+      text_pos = rl.Vector2(metric_rect.x + 22 + (metric_rect.width - 22 - text_size.x) / 2, text_y)
       rl.draw_text_ex(self._font_bold, text, text_pos, FONT_SIZE, 0, Colors.WHITE)

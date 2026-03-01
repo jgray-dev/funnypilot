@@ -268,17 +268,17 @@ class SpeedLimitRenderer(Widget):
     """FunnyPilot: Draw a small badge showing dynamic SLA is locked and current offset percentage."""
     offset_pct = self.sla_dynamic_offset * 100.0
     if abs(offset_pct) < 0.5:
-      offset_str = "±0%"
+      offset_str = "0%"
     elif offset_pct >= 0:
       offset_str = f"+{round(offset_pct)}%"
     else:
       offset_str = f"{round(offset_pct)}%"
 
-    # Badge appears to the left of the sign
+    # Badge appears to the left of the sign, below the number area
     badge_w = 120
     badge_h = 56
     badge_x = sign_rect.x - badge_w - 8
-    badge_y = sign_rect.y + sign_rect.height - badge_h
+    badge_y = sign_rect.y + sign_rect.height - badge_h + 30
 
     # Background: teal/cyan to distinguish from SCC badges
     badge_color = rl.Color(0, 180, 160, 220)
