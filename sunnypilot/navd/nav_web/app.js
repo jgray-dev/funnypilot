@@ -98,8 +98,8 @@ async function pollStatus() {
         destMarker = L.marker(destLatLng, {
           icon: L.divIcon({
             className: '',
-            html: '<div style="font-size:22px;margin-top:-8px">📍</div>',
-            iconAnchor: [11, 22],
+            html: '<div style="color:#e94560; margin-top:-14px; drop-shadow: 0 4px 6px rgba(0,0,0,0.5);"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3" fill="white"></circle></svg></div>',
+            iconAnchor: [14, 28],
           }),
         }).addTo(map);
       } else {
