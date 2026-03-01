@@ -73,14 +73,18 @@ class SoftwareLayout(Widget):
     self._branch_btn.action_item.set_value(ui_state.params.get("UpdaterTargetBranch") or "")
     self._branch_dialog: MultiOptionDialog | None = None
 
-    self._scroller = Scroller([
-      self._onroad_label,
-      self._version_item,
-      self._download_btn,
-      self._install_btn,
-      self._branch_btn,
-      button_item(lambda: tr("Uninstall"), lambda: tr("UNINSTALL"), callback=self._on_uninstall),
-    ], line_separator=True, spacing=0)
+    self._scroller = Scroller(
+      [
+        self._onroad_label,
+        self._version_item,
+        self._download_btn,
+        self._install_btn,
+        self._branch_btn,
+        button_item(lambda: tr("Uninstall"), lambda: tr("UNINSTALL"), callback=self._on_uninstall),
+      ],
+      line_separator=True,
+      spacing=0,
+    )
 
   def show_event(self):
     self._scroller.show_event()
@@ -102,16 +106,17 @@ class SoftwareLayout(Widget):
     self._download_btn.set_visible(ui_state.is_offroad())
 
     updater_state = ui_state.params.get("UpdaterState") or "idle"
+    updater_state_key = updater_state.split("|", 1)[0].strip()
     failed_count = ui_state.params.get("UpdateFailedCount") or 0
     fetch_available = ui_state.params.get_bool("UpdaterFetchAvailable")
     update_available = ui_state.params.get_bool("UpdateAvailable")
 
-    if updater_state != "idle":
+    if updater_state_key != "idle":
       # Updater responded
       self._waiting_for_updater = False
       self._download_btn.action_item.set_enabled(False)
       # Use the mapping, with a fallback to the original state string
-      display_text = STATE_TO_DISPLAY_TEXT.get(updater_state, updater_state)
+      display_text = STATE_TO_DISPLAY_TEXT.get(updater_state_key, updater_state_key)
       self._download_btn.action_item.set_value(display_text)
     else:
       if failed_count > 0:

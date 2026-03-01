@@ -36,12 +36,15 @@ ROUTES_NO_CONNECTIVITY_MAX = 84
 # send an offroad prompt after this many hours onroad and this many routes
 HOURS_NO_CONNECTIVITY_PROMPT = 23
 ROUTES_NO_CONNECTIVITY_PROMPT = 80
+FUNNYPILOT_REMOTE = "funnypilot"
+FUNNYPILOT_BRANCH_RE = re.compile(r"^funnypilot-\d+\.\d+\.\d+[a-z]?$")
 
 
 class UserRequest:
   NONE = 0
   CHECK = 1
   FETCH = 2
+
 
 class WaitTimeHelper:
   def __init__(self):
@@ -63,9 +66,11 @@ class WaitTimeHelper:
   def sleep(self, t: float) -> None:
     self.ready_event.wait(timeout=t)
 
+
 def write_time_to_param(params, param) -> None:
   t = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
   params.put(param, t)
+
 
 def run(cmd: list[str], cwd: str | None = None) -> str:
   return subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT, encoding='utf8')
@@ -80,6 +85,7 @@ def set_consistent_flag(consistent: bool) -> None:
     consistent_file.unlink(missing_ok=True)
   os.sync()
 
+
 def parse_release_notes(basedir: str) -> bytes:
   try:
     with open(os.path.join(basedir, "CHANGELOG.md"), "rb") as f:
@@ -93,6 +99,7 @@ def parse_release_notes(basedir: str) -> bytes:
   except Exception:
     cloudlog.exception("failed to parse release notes")
   return b""
+
 
 def setup_git_options(cwd: str) -> None:
   # We sync FS object atimes (which NEOS doesn't use) and mtimes, but ctimes
@@ -124,7 +131,6 @@ def dismount_overlay() -> None:
 
 
 def init_overlay() -> None:
-
   # Re-create the overlay if BASEDIR/.git has changed since we created the overlay
   if OVERLAY_INIT.is_file() and os.path.ismount(OVERLAY_MERGED):
     git_dir_path = os.path.join(BASEDIR, ".git")
@@ -197,8 +203,15 @@ def handle_agnos_update() -> None:
   from openpilot.system.hardware.tici.agnos import flash_agnos_update, get_target_slot_number
 
   cur_version = HARDWARE.get_os_version()
-  updated_version = run(["bash", "-c", r"unset AGNOS_VERSION && source launch_env.sh && \
-                          echo -n $AGNOS_VERSION"], OVERLAY_MERGED).strip()
+  updated_version = run(
+    [
+      "bash",
+      "-c",
+      r"unset AGNOS_VERSION && source launch_env.sh && \
+                          echo -n $AGNOS_VERSION",
+    ],
+    OVERLAY_MERGED,
+  ).strip()
 
   cloudlog.info(f"AGNOS version check: {cur_version} vs {updated_version}")
   if cur_version == updated_version:
@@ -216,12 +229,38 @@ def handle_agnos_update() -> None:
   set_offroad_alert("Offroad_NeosUpdate", False)
 
 
-
 class Updater:
   def __init__(self):
     self.params = Params()
     self.branches = defaultdict(str)
     self._has_internet: bool = False
+
+  def set_updater_state(self, state: str, progress: int | None = None, detail: str | None = None) -> None:
+    if progress is None:
+      self.params.put("UpdaterState", state)
+      return
+
+    if detail:
+      self.params.put("UpdaterState", f"{state}|{int(progress)}|{detail}")
+    else:
+      self.params.put("UpdaterState", f"{state}|{int(progress)}")
+
+  @staticmethod
+  def _is_funnypilot_branch(branch: str) -> bool:
+    return FUNNYPILOT_BRANCH_RE.fullmatch(branch) is not None
+
+  @staticmethod
+  def _remote_exists(remote: str) -> bool:
+    try:
+      run(["git", "remote", "get-url", remote], OVERLAY_MERGED)
+      return True
+    except subprocess.CalledProcessError:
+      return False
+
+  def _get_fetch_remote(self, branch: str) -> str:
+    if self._is_funnypilot_branch(branch) and self._remote_exists(FUNNYPILOT_REMOTE):
+      return FUNNYPILOT_REMOTE
+    return "origin"
 
   @property
   def has_internet(self) -> bool:
@@ -242,7 +281,7 @@ class Updater:
       hash_mismatch = self.get_commit_hash(BASEDIR) != self.branches[self.target_branch]
       branch_mismatch = self.get_branch(BASEDIR) != self.target_branch
       on_target_branch = self.get_branch(FINALIZED) == self.target_branch
-      return ((hash_mismatch or branch_mismatch) and on_target_branch)
+      return (hash_mismatch or branch_mismatch) and on_target_branch
     return False
 
   @property
@@ -265,7 +304,7 @@ class Updater:
 
     self.params.put_bool("UpdaterFetchAvailable", self.update_available)
     if len(self.branches):
-      self.params.put("UpdaterAvailableBranches", ','.join(self.branches.keys()))
+      self.params.put("UpdaterAvailableBranches", ','.join(sorted(self.branches.keys())))
 
     last_uptime_onroad = self.params.get("UptimeOnroad", return_default=True)
     last_route_count = self.params.get("RouteCount", return_default=True)
@@ -303,6 +342,7 @@ class Updater:
       except Exception:
         cloudlog.exception("updater.get_description")
       return f"{version} / {branch} / {commit} / {commit_date}"
+
     self.params.put("UpdaterCurrentDescription", get_description(BASEDIR))
     self.params.put("UpdaterCurrentReleaseNotes", parse_release_notes(BASEDIR))
     self.params.put("UpdaterNewDescription", get_description(FINALIZED))
@@ -313,7 +353,7 @@ class Updater:
     for alert in ("Offroad_UpdateFailed", "Offroad_ConnectivityNeeded", "Offroad_ConnectivityNeededPrompt"):
       set_offroad_alert(alert, False)
 
-    dt_uptime_onroad = (self.params.get("UptimeOnroad", return_default=True) - last_uptime_onroad) / (60*60)
+    dt_uptime_onroad = (self.params.get("UptimeOnroad", return_default=True) - last_uptime_onroad) / (60 * 60)
     dt_route_count = self.params.get("RouteCount", return_default=True) - last_route_count
     build_metadata = get_build_metadata()
     if failed_count > 15 and exception is not None and self.has_internet:
@@ -334,21 +374,45 @@ class Updater:
 
     excluded_branches = ('release2', 'release2-staging')
 
+    setup_git_options(OVERLAY_MERGED)
+
+    remote = "origin"
+    if self._remote_exists(FUNNYPILOT_REMOTE):
+      remote = FUNNYPILOT_REMOTE
+
     try:
-      run(["git", "ls-remote", "origin", "HEAD"], OVERLAY_MERGED)
+      run(["git", "ls-remote", remote, "HEAD"], OVERLAY_MERGED)
       self._has_internet = True
     except subprocess.CalledProcessError:
       self._has_internet = False
 
-    setup_git_options(OVERLAY_MERGED)
-    output = run(["git", "ls-remote", "--heads"], OVERLAY_MERGED)
+    output = run(["git", "ls-remote", "--heads", remote], OVERLAY_MERGED)
 
     self.branches = defaultdict(lambda: None)
+    found_funnypilot_version_branches = False
     for line in output.split('\n'):
       ls_remotes_re = r'(?P<commit_sha>\b[0-9a-f]{5,40}\b)(\s+)(refs\/heads\/)(?P<branch_name>.*$)'
       x = re.fullmatch(ls_remotes_re, line.strip())
-      if x is not None and x.group('branch_name') not in excluded_branches:
-        self.branches[x.group('branch_name')] = x.group('commit_sha')
+      if x is None:
+        continue
+
+      branch_name = x.group('branch_name')
+      if remote == FUNNYPILOT_REMOTE:
+        if self._is_funnypilot_branch(branch_name):
+          self.branches[branch_name] = x.group('commit_sha')
+          found_funnypilot_version_branches = True
+      elif branch_name not in excluded_branches:
+        self.branches[branch_name] = x.group('commit_sha')
+
+    if remote == FUNNYPILOT_REMOTE and not found_funnypilot_version_branches:
+      cloudlog.warning("no version branches found on %s, falling back to origin", FUNNYPILOT_REMOTE)
+      output = run(["git", "ls-remote", "--heads", "origin"], OVERLAY_MERGED)
+      self.branches = defaultdict(lambda: None)
+      for line in output.split('\n'):
+        ls_remotes_re = r'(?P<commit_sha>\b[0-9a-f]{5,40}\b)(\s+)(refs\/heads\/)(?P<branch_name>.*$)'
+        x = re.fullmatch(ls_remotes_re, line.strip())
+        if x is not None and x.group('branch_name') not in excluded_branches:
+          self.branches[x.group('branch_name')] = x.group('commit_sha')
 
     cur_branch = self.get_branch(OVERLAY_MERGED)
     cur_commit = self.get_commit_hash(OVERLAY_MERGED)
@@ -362,7 +426,10 @@ class Updater:
   def fetch_update(self) -> None:
     cloudlog.info("attempting git fetch inside staging overlay")
 
-    self.params.put("UpdaterState", "downloading...")
+    branch = self.target_branch
+    remote = self._get_fetch_remote(branch)
+
+    self.set_updater_state("downloading...", 10, f"Fetching {branch} from {remote}")
 
     # TODO: cleanly interrupt this and invalidate old update
     set_consistent_flag(False)
@@ -370,23 +437,39 @@ class Updater:
 
     setup_git_options(OVERLAY_MERGED)
 
-    run(["git", "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], OVERLAY_MERGED)
+    run(
+      [
+        "git",
+        "config",
+        "--replace-all",
+        f"remote.{remote}.fetch",
+        f"+refs/heads/*:refs/remotes/{remote}/*",
+      ],
+      OVERLAY_MERGED,
+    )
 
-    branch = self.target_branch
-    git_fetch_output = run(["git", "fetch", "origin", branch], OVERLAY_MERGED)
+    git_fetch_output = run(["git", "fetch", remote, branch], OVERLAY_MERGED)
     cloudlog.info("git fetch success: %s", git_fetch_output)
+
+    self.set_updater_state("downloading...", 45, f"Applying {branch}")
 
     cloudlog.info("git reset in progress")
     cmds = [
       ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
-      ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
+      ["git", "branch", "--set-upstream-to", f"{remote}/{branch}"],
       ["git", "reset", "--hard"],
       ["git", "clean", "-xdff"],
+    ]
+    r = [run(cmd, OVERLAY_MERGED) for cmd in cmds]
+
+    self.set_updater_state("downloading...", 70, "Syncing submodules")
+
+    cmds = [
       ["git", "submodule", "sync"],
       ["git", "submodule", "update", "--init", "--recursive"],
       ["git", "submodule", "foreach", "--recursive", "git", "reset", "--hard"],
     ]
-    r = [run(cmd, OVERLAY_MERGED) for cmd in cmds]
+    r.extend(run(cmd, OVERLAY_MERGED) for cmd in cmds)
     cloudlog.info("git reset success: %s", '\n'.join(r))
 
     # TODO: show agnos download progress
@@ -394,7 +477,7 @@ class Updater:
       handle_agnos_update()
 
     # Create the finalized, ready-to-swap update
-    self.params.put("UpdaterState", "finalizing update...")
+    self.set_updater_state("finalizing update...", 92, "Preparing install package")
     finalize_update()
     cloudlog.info("finalize success!")
 
@@ -426,14 +509,14 @@ def main() -> None:
       params.put("InstallDate", t)
 
     updater = Updater()
-    update_failed_count = 0 # TODO: Load from param?
+    update_failed_count = 0  # TODO: Load from param?
     wait_helper = WaitTimeHelper()
 
     # invalidate old finalized update
     set_consistent_flag(False)
 
     # set initial state
-    params.put("UpdaterState", "idle")
+    updater.set_updater_state("idle")
 
     # Run the update loop
     first_run = True
@@ -457,7 +540,7 @@ def main() -> None:
         update_failed_count += 1
 
         # check for update
-        params.put("UpdaterState", "checking...")
+        updater.set_updater_state("checking...", 5, "Refreshing branch list")
         updater.check_for_update()
 
         # download update
@@ -473,12 +556,7 @@ def main() -> None:
           write_time_to_param(params, "UpdaterLastFetchTime")
         update_failed_count = 0
       except subprocess.CalledProcessError as e:
-        cloudlog.event(
-          "update process failed",
-          cmd=e.cmd,
-          output=e.output,
-          returncode=e.returncode
-        )
+        cloudlog.event("update process failed", cmd=e.cmd, output=e.output, returncode=e.returncode)
         exception = f"command failed: {e.cmd}\n{e.output}"
         OVERLAY_INIT.unlink(missing_ok=True)
       except Exception as e:
@@ -487,15 +565,15 @@ def main() -> None:
         OVERLAY_INIT.unlink(missing_ok=True)
 
       try:
-        params.put("UpdaterState", "idle")
-        update_successful = (update_failed_count == 0)
+        updater.set_updater_state("idle")
+        update_successful = update_failed_count == 0
         updater.set_params(update_successful, update_failed_count, exception)
       except Exception:
         cloudlog.exception("uncaught updated exception while setting params, shouldn't happen")
 
       # infrequent attempts if we successfully updated recently
       wait_helper.user_request = UserRequest.NONE
-      wait_helper.sleep(5*60 if update_failed_count > 0 else 1.5*60*60)
+      wait_helper.sleep(5 * 60 if update_failed_count > 0 else 1.5 * 60 * 60)
 
 
 if __name__ == "__main__":
