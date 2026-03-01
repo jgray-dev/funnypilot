@@ -52,29 +52,13 @@ All versions must be separate branches: `funnypilot-0.9.X`
 In each new branch, modify the CHANGELOG.md file to correspond to what was last modified in the version of the branch.
 Additionally, edit CLAUDE.md Key Files section to describe what changes and logic were implemented in what files.
 
-## Version Push Scripts
+## Deploying to Device
 
-Each version has a `PUSH<version>.sh` script (e.g., `PUSH097.sh`) that pushes that specific version to the device.
-
-**Usage:**
 ```bash
-./PUSH097.sh
-```
-
-The script will:
-1. Verify you're on the correct branch
-2. Check for uncommitted changes
-3. Test SSH connection to the device
-4. Push code to the funnypilot remote
-5. Update device to the branch
-6. Verify FUNNYPILOT_VERSION matches
-7. Restart openpilot services
-
-**Creating a new push script for a new version:**
-```bash
-cp PUSH097.sh PUSH<newversion>.sh
-# Edit the script to update BRANCH variable to the new branch name
-chmod +x PUSH<newversion>.sh
+BRANCH=$(git branch --show-current)
+git push funnypilot "$BRANCH:$BRANCH" --force
+ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock nc %h %p" comma@100.93.118.118 \
+  "cd /data/openpilot && git fetch funnypilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH && sudo systemctl restart comma"
 ```
 
 ## Key Files
