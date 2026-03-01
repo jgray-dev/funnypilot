@@ -4,14 +4,16 @@
 set -e
 
 DEVICE_IP="192.168.86.31"
+DEVICE_IP_TS="100.93.118.118"
 DEVICE_USER="comma"
 BRANCH="funnypilot-0.9.8"
+TS_PROXY="/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock nc %h %p"
 
 echo "========================================="
 echo "FunnyPilot v0.9.8 Push Script"
 echo "========================================="
 echo ""
-echo "Target Device: $DEVICE_USER@$DEVICE_IP"
+echo "Target Device: $DEVICE_USER@$DEVICE_IP (or $DEVICE_IP_TS via Tailscale)"
 echo "Branch: $BRANCH"
 echo ""
 
@@ -38,24 +40,34 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 echo "Step 1: Testing SSH connection..."
-if ! ssh -o ConnectTimeout=5 "$DEVICE_USER@$DEVICE_IP" "echo 'Connection successful'"; then
-  echo "ERROR: Cannot connect to device at $DEVICE_IP"
-  echo "Make sure the device is online and connected to the network."
-  exit 1
+# Try home network first, fall back to Tailscale
+SSH_TARGET="$DEVICE_USER@$DEVICE_IP"
+SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=no"
+if ! ssh $SSH_OPTS "$SSH_TARGET" "echo 'Connection successful'" 2>/dev/null; then
+  echo "Home network unreachable, trying Tailscale..."
+  SSH_TARGET="$DEVICE_USER@$DEVICE_IP_TS"
+  SSH_OPTS="$SSH_OPTS -o ProxyCommand=\"$TS_PROXY\""
+  if ! eval "ssh $SSH_OPTS \"$SSH_TARGET\" \"echo 'Connection successful'\"" 2>/dev/null; then
+    echo "ERROR: Cannot connect to device via home network or Tailscale."
+    echo "  Home: $DEVICE_USER@$DEVICE_IP"
+    echo "  Tailscale: $DEVICE_USER@$DEVICE_IP_TS"
+    exit 1
+  fi
+  echo "Connected via Tailscale."
 fi
 
 echo ""
 echo "Step 2: Pushing code to device..."
-ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git fetch funnypilot"
+eval "ssh $SSH_OPTS \"$SSH_TARGET\" \"cd /data/openpilot && git fetch funnypilot\""
 git push funnypilot "$BRANCH:$BRANCH" --force
 
 echo ""
 echo "Step 3: Updating device to $BRANCH..."
-ssh "$DEVICE_USER@$DEVICE_IP" "cd /data/openpilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH"
+eval "ssh $SSH_OPTS \"$SSH_TARGET\" \"cd /data/openpilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH\""
 
 echo ""
 echo "Step 4: Verifying FUNNYPILOT_VERSION..."
-REMOTE_VERSION=$(ssh "$DEVICE_USER@$DEVICE_IP" "cat /data/openpilot/FUNNYPILOT_VERSION")
+REMOTE_VERSION=$(eval "ssh $SSH_OPTS \"$SSH_TARGET\" \"cat /data/openpilot/FUNNYPILOT_VERSION\"")
 LOCAL_VERSION=$(cat FUNNYPILOT_VERSION)
 
 if [ "$REMOTE_VERSION" = "$LOCAL_VERSION" ]; then
@@ -68,7 +80,7 @@ fi
 
 echo ""
 echo "Step 5: Restarting openpilot services..."
-ssh "$DEVICE_USER@$DEVICE_IP" "sudo systemctl restart comma"
+eval "ssh $SSH_OPTS \"$SSH_TARGET\" \"sudo systemctl restart comma\""
 
 echo ""
 echo "========================================="
