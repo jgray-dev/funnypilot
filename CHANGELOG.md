@@ -1,6 +1,7 @@
 FunnyPilot v1.0.0 (2026-03-01)
 ========================
 * Consolidated and promoted all post-v0.9.7 updates (v0.9.7h, v0.9.8, v0.9.8h, v0.9.9) into a single release branch.
+* Redesigned navigation web UI (dark mode, scalable SVGs, modern layout).
 * Navigation system hardening:
   - Fixed route bootstrap edge case where destination could be set before GPS lock, preventing initial route fetch.
   - Added automatic route fetch once GPS becomes valid for an already-set destination.

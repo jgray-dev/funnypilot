@@ -2,58 +2,100 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>FunnyPilot Navigation</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
   <header>
-    <div class="logo">FunnyPilot <span>Navigation</span></div>
+    <div class="brand">
+      <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
+      </svg>
+      <div>FunnyPilot <span>Nav</span></div>
+    </div>
+    
+    <div id="status-strip">
+      <div class="pulse-dot"></div>
+      <span id="status-text">Standby</span>
+    </div>
   </header>
-
-  <div id="status-strip">
-    <div class="dot"></div>
-    <span id="status-text">No active navigation</span>
-  </div>
 
   <div class="container">
     <div class="search-section">
-      <input
-        id="search-input"
-        type="text"
-        placeholder="Search destination..."
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-      >
+      <div class="search-box">
+        <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Where to?"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+        >
+      </div>
       <div id="autocomplete-list"></div>
     </div>
 
-    <div id="map"></div>
+    <div class="map-wrapper">
+      <div id="map"></div>
+    </div>
 
     <div class="hotkey-bar">
       <button id="btn-home" class="hotkey-btn">
-        <span class="btn-icon">🏠</span>
+        <div class="btn-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+        </div>
         Home
       </button>
       <button id="btn-work" class="hotkey-btn">
-        <span class="btn-icon">🏢</span>
+        <div class="btn-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+        </div>
         Work
       </button>
       <button id="btn-cancel" class="hotkey-btn cancel">
-        <span class="btn-icon">✕</span>
+        <div class="btn-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </div>
         Cancel
       </button>
     </div>
 
     <div id="dest-panel" class="dest-panel">
-      <h3>Active Destination</h3>
+      <h3>Active Route</h3>
       <div id="dest-name" class="dest-name"></div>
       <div id="dest-addr" class="dest-addr"></div>
       <div class="save-btns" id="save-btns" style="display:none">
-        <button id="btn-save-home" class="save-btn">💾 Save as Home</button>
-        <button id="btn-save-work" class="save-btn">💾 Save as Work</button>
+        <button id="btn-save-home" class="save-btn">
+          <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save Home
+        </button>
+        <button id="btn-save-work" class="save-btn">
+          <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save Work
+        </button>
       </div>
     </div>
   </div>

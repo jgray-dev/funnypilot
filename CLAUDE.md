@@ -69,6 +69,7 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 ### v1.0.0 Changes
 
+- `sunnypilot/navd/nav_web/` - Completely redesigned UI: true dark mode (`#000`), replaced system emojis with inline SVGs, integrated sleek map tile inversion filtering, and modernized layout components (status badge, search box, dest panel).
 - `sunnypilot/navd/navigationd.py` - Fixed route bootstrap race: if destination is set before GPS becomes valid, daemon now automatically fetches the route once GPS lock arrives. Refactored destination parsing into `_load_destination()` and reused for reroute path.
 - `sunnypilot/navd/nav_state.py` - Resets `distance_to_maneuver` on `set_route()` so reroutes/new routes do not briefly show stale maneuver distance.
 - `sunnypilot/navd/nav_web/app.js` - Hardened coordinate validation with `hasNumber()` checks. Correctly supports valid `0` lat/lon values (equator/prime meridian) for GPS, destination markers, Home/Work validation, and map recentering.
