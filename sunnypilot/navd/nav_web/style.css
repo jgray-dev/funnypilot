@@ -20,7 +20,10 @@
 }
 
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(73, 244, 255, 0.12), transparent 36%),
+    radial-gradient(circle at 85% 80%, rgba(233, 69, 96, 0.14), transparent 44%),
+    var(--bg);
   color: var(--text-main);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, sans-serif;
   font-size: 16px;
@@ -213,9 +216,29 @@ header {
   background: #000;
 }
 
-/* Dark Map Magic Filter */
-.leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+#map::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent 26%);
+}
+
+.mapboxgl-ctrl-group {
+  background: rgba(12, 12, 16, 0.78) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+
+.mapboxgl-ctrl-group button {
+  filter: invert(1) brightness(1.2);
+}
+
+.map-marker {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 0 18px rgba(73, 244, 255, 0.35);
 }
 
 /* Hotkey Bar */
