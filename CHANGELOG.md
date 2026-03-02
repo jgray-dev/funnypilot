@@ -1,3 +1,38 @@
+FunnyPilot v1.0.2m (2026-03-02)
+========================
+* Navigation web stack moved to Mapbox visuals + traffic-aware routing:
+  - Web UI now uses Mapbox GL JS with dark globe rendering (`dark-v11` + globe projection + atmospheric fog) instead of Leaflet tile inversion.
+  - Added backend `/api/config` + `/api/route_preview` for secure token-driven map bootstrap and live route overlays.
+  - Route preview now requests backend directions and draws route geometry on the map for current GPS→destination context.
+* Onroad lane clarity improvements (Raylib Python UI):
+  - Navigation panel now includes a top-down lane overview that shows current/target lane positioning and target-lane highlighting.
+  - Added lane intent status labels (`lane aligned`, `prepare left/right lane`, `lane change armed/in progress`) using model lane-change desire + blinker context.
+  - Lane overview remains visible during navigation even when explicit per-lane metadata is sparse, so lane positioning intent is always communicated.
+* Routing/geocoding upgraded to Mapbox-first behavior with fallback safety:
+  - `get_route()` now prefers Mapbox Directions `driving-traffic` (traffic-aware ETA and maneuvers), falling back to OSRM if token/service is unavailable.
+  - Place search/reverse geocoding now prefers Mapbox Geocoding with Photon/Nominatim fallback.
+* Secret handling hardened for Git safety:
+  - Added `sunnypilot/navd/mapbox_config.py` token loader supporting env vars or local secrets file.
+  - Added `.nav_secrets/` to `.gitignore` and new helper script `scripts/setup_mapbox_tokens.py` for local/device secret installation without committing keys.
+
+FunnyPilot v1.0.2 (2026-03-02)
+========================
+* Navigation guidance upgrade for onroad + controls integration:
+  - `navigationd` now publishes richer `navInstruction` payloads (secondary text, lane guidance,
+    and upcoming maneuver list) instead of only basic turn text/distance.
+  - OSRM route parsing now extracts per-step lane indications from intersections and carries
+    destination/exit metadata into step secondary text for better guidance context.
+  - Onroad `NavigationPanel` now renders desired-lane guidance boxes (active lane highlighted)
+    while preserving existing turn instruction layout.
+* Nav-aware auto lane-change assist (highway maneuvers):
+  - Added nav-driven virtual blinker assist for `off ramp` / `on ramp` / `fork` / `merge`
+    maneuvers to trigger existing auto lane change flow without requiring new CAN params/keys.
+  - Assist is intentionally gated for safety: requires lateral active, speed threshold,
+    non-nudge auto lane change mode, valid distance window, and per-maneuver trigger limiting.
+* Stability hardening:
+  - New nav parsing/publishing paths are wrapped defensively so malformed lane data cannot crash
+    navd/modeld/UI hot loops (continuing v1.0.1 crash-prevention direction).
+
 FunnyPilot v1.0.1 (2026-03-02)
 ========================
 * Fix: onroad UI crash on every offroad→onroad transition (boot loop bug).

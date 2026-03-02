@@ -99,6 +99,9 @@ Pipfile
 .history
 .ionide
 
+# Local navigation secrets
+.nav_secrets/
+
 .claude/
 .context/
 PLAN.md

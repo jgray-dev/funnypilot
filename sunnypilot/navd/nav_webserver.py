@@ -2,18 +2,20 @@
 FunnyPilot nav_webserver — aiohttp REST server on port 8888.
 
 Provides destination management API + web UI for navigation.
-Proxies geocoding calls to Photon/Nominatim so browser avoids CORS issues.
+Proxies geocoding/routing calls so browser can stay tokenless.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import os
-import urllib.request
-import urllib.parse
 
 from aiohttp import web
 
 from openpilot.common.params import Params, UnknownKeyName
+from openpilot.sunnypilot.navd.mapbox_config import load_mapbox_tokens
+from openpilot.sunnypilot.navd.routing.osrm_client import get_route
 from openpilot.sunnypilot.navd.routing.geocoder import autocomplete as geocode_autocomplete
 
 PORT = 8888
@@ -68,6 +70,16 @@ async def api_status(request):
     "gps_lon": gps.get("longitude", 0.0) if gps else 0.0,
   }
   return web.json_response(result)
+
+
+async def api_config(request):
+  tokens = load_mapbox_tokens()
+  return web.json_response(
+    {
+      "mapboxPublicToken": tokens.get("public_token", ""),
+      "mapboxConfigured": bool(tokens.get("public_token") or tokens.get("secret_token")),
+    }
+  )
 
 
 async def api_set_destination(request):
@@ -150,12 +162,36 @@ async def api_gps(request):
   return web.json_response(data or {})
 
 
+async def api_route_preview(request):
+  try:
+    q = request.rel_url.query
+    start_lat = float(q.get("start_lat", ""))
+    start_lon = float(q.get("start_lon", ""))
+    end_lat = float(q.get("end_lat", ""))
+    end_lon = float(q.get("end_lon", ""))
+  except Exception:
+    return web.json_response({"error": "Invalid route coordinates"}, status=400)
+
+  route = await asyncio.get_event_loop().run_in_executor(None, lambda: get_route(start_lat, start_lon, end_lat, end_lon))
+  if route is None:
+    return web.json_response({"error": "Route unavailable"}, status=503)
+
+  return web.json_response(
+    {
+      "distance": route.get("distance", 0.0),
+      "duration": route.get("duration", 0.0),
+      "geometry": route.get("geometry", {"type": "LineString", "coordinates": []}),
+    }
+  )
+
+
 def main():
   app = web.Application()
   app.router.add_get("/", index)
   app.router.add_get("/index.html", index)
   app.router.add_static("/static", WEB_DIR)
   app.router.add_get("/api/status", api_status)
+  app.router.add_get("/api/config", api_config)
   app.router.add_post("/api/destination", api_set_destination)
   app.router.add_delete("/api/destination", api_clear_destination)
   app.router.add_get("/api/home", api_get_home)
@@ -164,6 +200,7 @@ def main():
   app.router.add_post("/api/work", api_set_work)
   app.router.add_get("/api/autocomplete", api_autocomplete)
   app.router.add_get("/api/gps", api_gps)
+  app.router.add_get("/api/route_preview", api_route_preview)
 
   # reuse_address prevents TIME_WAIT bind failures on rapid restart
   web.run_app(app, host="0.0.0.0", port=PORT, access_log=None, reuse_address=True, reuse_port=False)

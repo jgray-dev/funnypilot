@@ -3,13 +3,14 @@ from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeController, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
+from openpilot.sunnypilot.selfdrive.controls.lib.nav_lane_change_assist import NavLaneChangeAssist
 
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
-LANE_CHANGE_TIME_MAX = 10.
+LANE_CHANGE_TIME_MAX = 10.0
 
 DESIRES = {
   LaneChangeDirection.none: {
@@ -50,22 +51,51 @@ class DesireHelper:
     self.desire = log.Desire.none
     self.alc = AutoLaneChangeController(self)
     self.lane_turn_controller = LaneTurnController(self)
+    self.nav_lane_change_assist = NavLaneChangeAssist()
     self.lane_turn_direction = TurnDirection.none
 
   @staticmethod
-  def get_lane_change_direction(CS):
-    return LaneChangeDirection.left if CS.leftBlinker else LaneChangeDirection.right
+  def get_lane_change_direction(left_blinker: bool, right_blinker: bool):
+    if left_blinker and not right_blinker:
+      return LaneChangeDirection.left
+    if right_blinker and not left_blinker:
+      return LaneChangeDirection.right
+    return LaneChangeDirection.none
 
-  def update(self, carstate, lateral_active, lane_change_prob):
+  def update(self, carstate, lateral_active, lane_change_prob, nav_instruction=None):
     self.alc.update_params()
     self.lane_turn_controller.update_params()
     v_ego = carstate.vEgo
-    one_blinker = carstate.leftBlinker != carstate.rightBlinker
+
+    manual_left_blinker = carstate.leftBlinker
+    manual_right_blinker = carstate.rightBlinker
+    manual_one_blinker = manual_left_blinker != manual_right_blinker
+
+    nav_left_blinker = False
+    nav_right_blinker = False
+    if nav_instruction is not None:
+      nav_left_blinker, nav_right_blinker = self.nav_lane_change_assist.update(
+        nav_instruction,
+        v_ego,
+        lateral_active,
+        self.lane_change_state,
+        self.alc.lane_change_set_timer,
+        manual_one_blinker,
+      )
+
+    left_blinker = bool(manual_left_blinker or nav_left_blinker)
+    right_blinker = bool(manual_right_blinker or nav_right_blinker)
+    one_blinker = left_blinker != right_blinker
     below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
 
     # Lane turn controller update
-    self.lane_turn_controller.update_lane_turn(blindspot_left=carstate.leftBlindspot, blindspot_right=carstate.rightBlindspot,
-                                               left_blinker=carstate.leftBlinker, right_blinker=carstate.rightBlinker, v_ego=v_ego)
+    self.lane_turn_controller.update_lane_turn(
+      blindspot_left=carstate.leftBlindspot,
+      blindspot_right=carstate.rightBlindspot,
+      left_blinker=manual_left_blinker,
+      right_blinker=manual_right_blinker,
+      v_ego=v_ego,
+    )
     self.lane_turn_direction = self.lane_turn_controller.get_turn_direction()
 
     if not lateral_active or self.lane_change_timer > LANE_CHANGE_TIME_MAX or self.alc.lane_change_set_timer == AutoLaneChangeMode.OFF:
@@ -77,19 +107,21 @@ class DesireHelper:
         self.lane_change_state = LaneChangeState.preLaneChange
         self.lane_change_ll_prob = 1.0
         # Initialize lane change direction to prevent UI alert flicker
-        self.lane_change_direction = self.get_lane_change_direction(carstate)
+        self.lane_change_direction = self.get_lane_change_direction(left_blinker, right_blinker)
 
       # LaneChangeState.preLaneChange
       elif self.lane_change_state == LaneChangeState.preLaneChange:
         # Update lane change direction
-        self.lane_change_direction = self.get_lane_change_direction(carstate)
+        self.lane_change_direction = self.get_lane_change_direction(left_blinker, right_blinker)
 
-        torque_applied = carstate.steeringPressed and \
-                         ((carstate.steeringTorque > 0 and self.lane_change_direction == LaneChangeDirection.left) or
-                          (carstate.steeringTorque < 0 and self.lane_change_direction == LaneChangeDirection.right))
+        torque_applied = carstate.steeringPressed and (
+          (carstate.steeringTorque > 0 and self.lane_change_direction == LaneChangeDirection.left)
+          or (carstate.steeringTorque < 0 and self.lane_change_direction == LaneChangeDirection.right)
+        )
 
-        blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
-                              (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
+        blindspot_detected = (carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or (
+          carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right
+        )
 
         self.alc.update_lane_change(blindspot_detected, carstate.brakePressed)
 

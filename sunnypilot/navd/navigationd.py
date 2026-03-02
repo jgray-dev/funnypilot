@@ -5,10 +5,13 @@ Watches NavDestination param, fetches OSRM routes, tracks route progress,
 and publishes navInstruction + navigationStateSP via cereal.
 """
 
+from __future__ import annotations
+
 import json
 import time
 
 import cereal.messaging as messaging
+from cereal import log
 from openpilot.common.params import Params, UnknownKeyName
 from openpilot.sunnypilot.navd.nav_state import NavState
 from openpilot.sunnypilot.navd.routing.osrm_client import get_route
@@ -16,6 +19,47 @@ from openpilot.sunnypilot.navd.routing.route_cache import RouteCache, Breadcrumb
 
 LOOP_HZ = 3
 REROUTE_COOLDOWN_S = 10.0
+
+
+_NAV_DIRECTION_MAP = {
+  "none": log.NavInstruction.Direction.none,
+  "left": log.NavInstruction.Direction.left,
+  "right": log.NavInstruction.Direction.right,
+  "straight": log.NavInstruction.Direction.straight,
+  "slightleft": log.NavInstruction.Direction.slightLeft,
+  "slightright": log.NavInstruction.Direction.slightRight,
+}
+
+
+def _nav_direction_from_text(direction: str) -> int:
+  norm = (direction or "none").strip().lower().replace("-", "")
+  return _NAV_DIRECTION_MAP.get(norm, log.NavInstruction.Direction.none)
+
+
+def _set_nav_lanes(ni, lanes: list[dict]) -> None:
+  lane_list = ni.init("lanes", len(lanes))
+  for i, lane in enumerate(lanes):
+    lane_msg = lane_list[i]
+    lane_msg.active = bool(lane.get("active", False))
+
+    directions = lane.get("directions", [])
+    if not isinstance(directions, list):
+      directions = []
+    direction_list = lane_msg.init("directions", len(directions))
+    for j, direction in enumerate(directions):
+      direction_list[j] = _nav_direction_from_text(str(direction))
+
+    active_direction = lane.get("activeDirection", "none")
+    lane_msg.activeDirection = _nav_direction_from_text(str(active_direction))
+
+
+def _set_nav_maneuvers(ni, maneuvers: list[dict]) -> None:
+  maneuver_list = ni.init("allManeuvers", len(maneuvers))
+  for i, maneuver in enumerate(maneuvers):
+    maneuver_msg = maneuver_list[i]
+    maneuver_msg.distance = float(max(0.0, maneuver.get("distance", 0.0)))
+    maneuver_msg.type = str(maneuver.get("type", ""))
+    maneuver_msg.modifier = str(maneuver.get("modifier", "straight"))
 
 
 def _load_destination(dest_str: str | None) -> dict | None:
@@ -157,11 +201,23 @@ def main():
     if nav_state.active:
       instr = nav_state.current_instruction()
       ni.maneuverPrimaryText = instr.get("maneuverPrimaryText", "")
+      ni.maneuverSecondaryText = instr.get("maneuverSecondaryText", "")
       ni.maneuverType = instr.get("maneuverType", "")
       ni.maneuverModifier = instr.get("maneuverModifier", "straight")
       ni.maneuverDistance = instr.get("maneuverDistance", 0.0)
       ni.distanceRemaining = instr.get("distanceRemaining", 0.0)
       ni.timeRemaining = instr.get("timeRemaining", 0.0)
+      ni.showFull = bool(instr.get("showFull", False))
+
+      try:
+        _set_nav_lanes(ni, instr.get("lanes", []))
+      except Exception:
+        pass
+
+      try:
+        _set_nav_maneuvers(ni, instr.get("allManeuvers", []))
+      except Exception:
+        pass
     pm.send("navInstruction", nav_msg)
 
     # --- Publish navigationStateSP ---

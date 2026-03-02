@@ -1,34 +1,159 @@
 'use strict';
 
-let map, posMarker, destMarker, routeLayer;
+let map;
+let gpsMarker;
+let destMarker;
+let routeLoaded = false;
 let debounceTimer = null;
 let currentResults = [];
 let mapAvailable = false;
+let lastRouteKey = '';
+let routeFetchInFlight = false;
 
-function initMap() {
-  if (typeof window.L === 'undefined') {
+const ROUTE_SOURCE_ID = 'active-route-source';
+const ROUTE_LAYER_GLOW_ID = 'active-route-glow';
+const ROUTE_LAYER_MAIN_ID = 'active-route-main';
+
+function fetchJson(url, options) {
+  return fetch(url, options).then((r) => {
+    if (!r.ok) throw new Error('Request failed');
+    return r.json();
+  });
+}
+
+function markerElement(color, ringColor) {
+  const el = document.createElement('div');
+  el.className = 'map-marker';
+  el.style.background = color;
+  el.style.borderColor = ringColor;
+  return el;
+}
+
+function ensureRouteLayers() {
+  if (!map || routeLoaded) return;
+  if (!map.getSource(ROUTE_SOURCE_ID)) {
+    map.addSource(ROUTE_SOURCE_ID, {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [] },
+      },
+    });
+  }
+
+  if (!map.getLayer(ROUTE_LAYER_GLOW_ID)) {
+    map.addLayer({
+      id: ROUTE_LAYER_GLOW_ID,
+      type: 'line',
+      source: ROUTE_SOURCE_ID,
+      paint: {
+        'line-color': '#00d4ff',
+        'line-width': 10,
+        'line-opacity': 0.2,
+      },
+    });
+  }
+
+  if (!map.getLayer(ROUTE_LAYER_MAIN_ID)) {
+    map.addLayer({
+      id: ROUTE_LAYER_MAIN_ID,
+      type: 'line',
+      source: ROUTE_SOURCE_ID,
+      paint: {
+        'line-color': '#49f4ff',
+        'line-width': 4,
+        'line-opacity': 0.95,
+      },
+    });
+  }
+
+  routeLoaded = true;
+}
+
+function setRouteGeoJson(coordinates) {
+  if (!mapAvailable || !map) return;
+  ensureRouteLayers();
+  const src = map.getSource(ROUTE_SOURCE_ID);
+  if (!src) return;
+  src.setData({
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'LineString',
+      coordinates: Array.isArray(coordinates) ? coordinates : [],
+    },
+  });
+}
+
+function clearRoute() {
+  setRouteGeoJson([]);
+  lastRouteKey = '';
+}
+
+function setMarkerPosition(marker, lon, lat) {
+  if (!mapAvailable || !marker) return;
+  marker.setLngLat([lon, lat]);
+}
+
+function maybeFitRoute(gpsLon, gpsLat, destLon, destLat) {
+  if (!map) return;
+  const bounds = new mapboxgl.LngLatBounds();
+  bounds.extend([gpsLon, gpsLat]);
+  bounds.extend([destLon, destLat]);
+  map.fitBounds(bounds, { padding: 56, duration: 900, maxZoom: 14 });
+}
+
+async function initMap() {
+  let config = {};
+  try {
+    config = await fetchJson('/api/config');
+  } catch (_) {
+    config = {};
+  }
+
+  if (typeof window.mapboxgl === 'undefined' || !config.mapboxPublicToken) {
     mapAvailable = false;
     const mapEl = document.getElementById('map');
     if (mapEl) {
-      mapEl.innerHTML = '<div style="padding:18px;color:#d0d0d0">Map unavailable (offline). Search and saved Home/Work still work when data is available.</div>';
+      mapEl.innerHTML = '<div style="padding:18px;color:#d0d0d0">Map unavailable (missing Mapbox token or offline). Search and saved Home/Work still work.</div>';
     }
     return;
   }
 
+  mapboxgl.accessToken = config.mapboxPublicToken;
   mapAvailable = true;
-  map = L.map('map', { zoomControl: true }).setView([37.4, -122.0], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 19,
-  }).addTo(map);
-
-  const posIcon = L.divIcon({
-    className: '',
-    html: '<div style="width:14px;height:14px;background:#e94560;border:3px solid white;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.5)"></div>',
-    iconAnchor: [7, 7],
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/dark-v11',
+    projection: 'globe',
+    center: [-122.0, 37.4],
+    zoom: 12,
+    attributionControl: true,
+    antialias: true,
   });
-  posMarker = L.marker([37.4, -122.0], { icon: posIcon }).addTo(map);
-  posMarker.setOpacity(0);
+
+  map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+
+  map.on('style.load', () => {
+    map.setFog({
+      color: 'rgb(12, 18, 24)',
+      'high-color': 'rgb(26, 36, 44)',
+      'horizon-blend': 0.12,
+      'space-color': 'rgb(1, 2, 4)',
+      'star-intensity': 0.12,
+    });
+    ensureRouteLayers();
+  });
+
+  gpsMarker = new mapboxgl.Marker({ element: markerElement('#e94560', '#ffffff'), anchor: 'center' })
+    .setLngLat([-122.0, 37.4])
+    .addTo(map);
+
+  destMarker = new mapboxgl.Marker({ element: markerElement('#49f4ff', '#0d1a24'), anchor: 'center' })
+    .setLngLat([-122.0, 37.4])
+    .addTo(map);
+  destMarker.getElement().style.display = 'none';
 }
 
 function fmtDist(meters) {
@@ -87,30 +212,56 @@ async function pollStatus() {
     }
 
     if (mapAvailable && hasNumber(data.gps_lat) && hasNumber(data.gps_lon)) {
-      const latlng = [data.gps_lat, data.gps_lon];
-      posMarker.setLatLng(latlng);
-      posMarker.setOpacity(1);
+      setMarkerPosition(gpsMarker, data.gps_lon, data.gps_lat);
+      gpsMarker.getElement().style.display = 'block';
     }
 
     if (mapAvailable && data.active && hasNumber(data.dest_lat) && hasNumber(data.dest_lon)) {
-      const destLatLng = [data.dest_lat, data.dest_lon];
-      if (!destMarker) {
-        destMarker = L.marker(destLatLng, {
-          icon: L.divIcon({
-            className: '',
-            html: '<div style="color:#e94560; margin-top:-14px; drop-shadow: 0 4px 6px rgba(0,0,0,0.5);"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3" fill="white"></circle></svg></div>',
-            iconAnchor: [14, 28],
-          }),
-        }).addTo(map);
-      } else {
-        destMarker.setLatLng(destLatLng);
+      setMarkerPosition(destMarker, data.dest_lon, data.dest_lat);
+      destMarker.getElement().style.display = 'block';
+
+      if (hasNumber(data.gps_lat) && hasNumber(data.gps_lon)) {
+        await updateRoutePreview(data.gps_lat, data.gps_lon, data.dest_lat, data.dest_lon);
       }
-    } else if (mapAvailable && destMarker) {
-      destMarker.remove();
-      destMarker = null;
+    } else if (mapAvailable) {
+      destMarker.getElement().style.display = 'none';
+      clearRoute();
     }
   } catch (e) {
     // silently ignore network errors during polling
+  }
+}
+
+async function updateRoutePreview(startLat, startLon, endLat, endLon) {
+  if (!mapAvailable || routeFetchInFlight) return;
+
+  const routeKey = [
+    Number(startLat).toFixed(3),
+    Number(startLon).toFixed(3),
+    Number(endLat).toFixed(5),
+    Number(endLon).toFixed(5),
+  ].join('|');
+  if (routeKey === lastRouteKey) return;
+
+  routeFetchInFlight = true;
+  try {
+    const q =
+      '/api/route_preview?start_lat=' + encodeURIComponent(startLat)
+      + '&start_lon=' + encodeURIComponent(startLon)
+      + '&end_lat=' + encodeURIComponent(endLat)
+      + '&end_lon=' + encodeURIComponent(endLon);
+
+    const data = await fetchJson(q);
+    const coords = data?.geometry?.coordinates;
+    if (Array.isArray(coords) && coords.length > 1) {
+      setRouteGeoJson(coords);
+      maybeFitRoute(startLon, startLat, endLon, endLat);
+      lastRouteKey = routeKey;
+    }
+  } catch (_) {
+    // keep UI responsive; fallback behavior is no route overlay
+  } finally {
+    routeFetchInFlight = false;
   }
 }
 
@@ -204,8 +355,8 @@ async function setDestination(item) {
 async function cancelNav() {
   await fetch('/api/destination', { method: 'DELETE' });
   document.getElementById('search-input').value = '';
-  if (mapAvailable && routeLayer) { routeLayer.remove(); routeLayer = null; }
-  if (mapAvailable && destMarker) { destMarker.remove(); destMarker = null; }
+  clearRoute();
+  if (mapAvailable && destMarker) destMarker.getElement().style.display = 'none';
   await pollStatus();
 }
 
@@ -253,8 +404,8 @@ async function saveAsWork() {
   alert('Saved as Work');
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  initMap();
+document.addEventListener('DOMContentLoaded', async () => {
+  await initMap();
   pollStatus();
   setInterval(pollStatus, 3000);
 

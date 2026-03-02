@@ -97,13 +97,45 @@ class NavState:
 
     step = self.steps[self.step_index]
     maneuver = step.get("maneuver", {})
+
+    def _safe_float(value, default: float = 0.0) -> float:
+      try:
+        return float(value)
+      except Exception:
+        return default
+
+    lanes = step.get("lanes", [])
+    if not isinstance(lanes, list):
+      lanes = []
+
+    all_maneuvers: list[dict] = []
+    cumulative_distance = max(0.0, _safe_float(self.distance_to_maneuver))
+    max_upcoming = min(len(self.steps), self.step_index + 6)
+    for idx in range(self.step_index, max_upcoming):
+      next_step = self.steps[idx]
+      next_maneuver = next_step.get("maneuver", {})
+      if idx > self.step_index:
+        prev_step_distance = max(0.0, _safe_float(self.steps[idx - 1].get("distance", 0.0)))
+        cumulative_distance += prev_step_distance
+      all_maneuvers.append(
+        {
+          "distance": cumulative_distance,
+          "type": str(next_maneuver.get("type", "")),
+          "modifier": str(next_maneuver.get("modifier", "straight")),
+        }
+      )
+
     return {
       "maneuverPrimaryText": step.get("name", ""),
+      "maneuverSecondaryText": step.get("secondary", ""),
       "maneuverType": maneuver.get("type", ""),
       "maneuverModifier": maneuver.get("modifier", "straight"),
       "maneuverDistance": self.distance_to_maneuver,
       "distanceRemaining": self.distance_remaining,
       "timeRemaining": self.time_remaining,
+      "showFull": self.distance_to_maneuver < 120.0,
+      "lanes": lanes,
+      "allManeuvers": all_maneuvers,
     }
 
   def is_arrived(self, lat: float, lon: float) -> bool:

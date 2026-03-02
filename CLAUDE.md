@@ -67,6 +67,25 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.2m Changes
+
+- `sunnypilot/navd/mapbox_config.py` - New token loader for Mapbox credentials; reads from env (`MAPBOX_PUBLIC_TOKEN`, `MAPBOX_SECRET_TOKEN`) or secret files (`.nav_secrets/mapbox_tokens.json` and device paths) without committing keys.
+- `sunnypilot/navd/routing/osrm_client.py` - Routing now prefers Mapbox Directions `driving-traffic` (traffic-aware) and falls back to public OSRM on failure, preserving lane/secondary maneuver extraction.
+- `sunnypilot/navd/routing/geocoder.py` - Autocomplete/reverse geocoding now use Mapbox Geocoding first, with Photon/Nominatim fallback.
+- `sunnypilot/navd/nav_webserver.py` - Added `/api/config` for web token bootstrap and `/api/route_preview` for backend route geometry fetches.
+- `sunnypilot/navd/nav_web/index.html`, `sunnypilot/navd/nav_web/app.js`, `sunnypilot/navd/nav_web/style.css` - Migrated nav web UI from Leaflet to Mapbox GL JS dark globe visuals with route overlay rendering.
+- `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - Expanded lane guidance with a top-down lane map, target-lane highlighting, and lane-intent status labels driven by nav lanes + model lane-change desire/blinker state.
+- `scripts/setup_mapbox_tokens.py`, `.gitignore` - Added helper to install local/device token files and excluded `.nav_secrets/` from git tracking.
+
+### v1.0.2 Changes
+
+- `sunnypilot/navd/routing/osrm_client.py` - Route parsing now extracts per-step lane guidance from OSRM intersections (`lanes`, `activeDirection`) and stores richer secondary maneuver context (`destinations`, `exits`, `ref`).
+- `sunnypilot/navd/nav_state.py` - `current_instruction()` now publishes lane data, `maneuverSecondaryText`, `showFull`, and a compact upcoming maneuver queue (`allManeuvers`) with cumulative distances.
+- `sunnypilot/navd/navigationd.py` - Nav publisher now fills advanced `navInstruction` fields (`maneuverSecondaryText`, `showFull`, `lanes`, `allManeuvers`) with enum-safe direction mapping and defensive guards to avoid navd crashes from malformed payloads.
+- `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - Added desired-lane HUD rendering (active lane highlight + compact lane direction boxes), dynamic panel sizing when lane guidance is present, and safe lane decoding from `navInstruction`.
+- `sunnypilot/selfdrive/controls/lib/nav_lane_change_assist.py` - New nav-aware auto lane-change helper that emits virtual blinker requests for highway maneuvers (`off ramp`, `on ramp`, `fork`, `merge`) with speed, distance-window, cooldown, and one-trigger-per-maneuver gating.
+- `selfdrive/controls/lib/desire_helper.py`, `selfdrive/modeld/modeld.py` - Integrated nav-aware lane-change assist into desire generation by feeding `navInstruction` into `DesireHelper.update()`, while preserving manual blinker priority and existing lane-turn behavior.
+
 ### v1.0.1 Changes
 
 - `selfdrive/ui/sunnypilot/onroad/nav_quick_access.py` - Fixed Widget visibility bypass: changed `self.visible = True/False` to `self.set_visible(not in_drive)` so Widget's `_is_visible` is properly managed. Removed manual `if not self.visible: return` from `_render()`. Added `_PARAMS_REFRESH_INTERVAL = 5.0s` throttle for NavHomeLocation/NavWorkLocation param reads. Moved `import math` to module level.
