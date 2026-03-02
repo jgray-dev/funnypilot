@@ -1,4 +1,5 @@
 import colorsys
+import time
 import numpy as np
 import pyray as rl
 from cereal import messaging, car
@@ -18,16 +19,22 @@ MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
 
 THROTTLE_COLORS = [
-  rl.Color(13, 248, 122, 102),   # HSLF(148/360, 0.94, 0.51, 0.4)
-  rl.Color(114, 255, 92, 89),    # HSLF(112/360, 1.0, 0.68, 0.35)
-  rl.Color(114, 255, 92, 0),     # HSLF(112/360, 1.0, 0.68, 0.0)
+  rl.Color(13, 248, 122, 102),  # HSLF(148/360, 0.94, 0.51, 0.4)
+  rl.Color(114, 255, 92, 89),  # HSLF(112/360, 1.0, 0.68, 0.35)
+  rl.Color(114, 255, 92, 0),  # HSLF(112/360, 1.0, 0.68, 0.0)
 ]
 
 NO_THROTTLE_COLORS = [
-  rl.Color(242, 242, 242, 102), # HSLF(148/360, 0.0, 0.95, 0.4)
+  rl.Color(242, 242, 242, 102),  # HSLF(148/360, 0.0, 0.95, 0.4)
   rl.Color(242, 242, 242, 89),  # HSLF(112/360, 0.0, 0.95, 0.35)
-  rl.Color(242, 242, 242, 0),   # HSLF(112/360, 0.0, 0.95, 0.0)
+  rl.Color(242, 242, 242, 0),  # HSLF(112/360, 0.0, 0.95, 0.0)
 ]
+
+METER_TO_MILE = 0.000621371
+METER_TO_FOOT = 3.28084
+NAV_GUIDE_COLOR = rl.Color(86, 240, 255, 220)
+NAV_GUIDE_FADE = rl.Color(86, 240, 255, 100)
+NAV_TEXT_COLOR = rl.Color(230, 247, 255, 245)
 
 
 @dataclass
@@ -76,6 +83,16 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       stops=[],
     )
 
+    self._nav_active = False
+    self._nav_modifier = "straight"
+    self._nav_primary = ""
+    self._nav_distance = 0.0
+    self._nav_distance_remaining = 0.0
+    self._nav_time_remaining = 0.0
+    self._nav_lanes_active = []
+    self._nav_lane_count = 0
+    self._nav_last_tick = time.monotonic()
+
     # Get longitudinal control setting from car parameters
     if car_params := Params().get("CarParams"):
       cp = messaging.log_from_bytes(car_params, car.CarParams)
@@ -89,14 +106,11 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     sm = ui_state.sm
 
     # Check if data is up-to-date
-    if (sm.recv_frame["liveCalibration"] < ui_state.started_frame or
-        sm.recv_frame["modelV2"] < ui_state.started_frame):
+    if sm.recv_frame["liveCalibration"] < ui_state.started_frame or sm.recv_frame["modelV2"] < ui_state.started_frame:
       return
 
     # Set up clipping region
-    self._clip_region = rl.Rectangle(
-      rect.x - CLIP_MARGIN, rect.y - CLIP_MARGIN, rect.width + 2 * CLIP_MARGIN, rect.height + 2 * CLIP_MARGIN
-    )
+    self._clip_region = rl.Rectangle(rect.x - CLIP_MARGIN, rect.y - CLIP_MARGIN, rect.width + 2 * CLIP_MARGIN, rect.height + 2 * CLIP_MARGIN)
 
     # Update state
     self._experimental_mode = sm['selfdriveState'].experimentalMode
@@ -110,6 +124,8 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     if sm.updated['carParams']:
       self._longitudinal_control = sm['carParams'].openpilotLongitudinalControl
+
+    self._update_nav_state(sm)
 
     model = sm['modelV2']
     radar_state = sm['radarState'] if sm.valid['radarState'] else None
@@ -134,6 +150,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     # Draw elements
     self._draw_lane_lines()
     self._draw_path(sm)
+    self._draw_nav_ar_overlay(rect)
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
@@ -176,9 +193,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     # Update lane lines using raw points
     for i, lane_line in enumerate(self._lane_lines):
-      lane_line.projected_points = self._map_line_to_polygon(
-        lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
-      )
+      lane_line.projected_points = self._map_line_to_polygon(lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance)
 
     # Update road edges using raw points
     for road_edge in self._road_edges:
@@ -190,9 +205,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       max_distance = np.clip(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
-    self._path.projected_points = self._map_line_to_polygon(
-      self._path.raw_points, 0.9, self._path_offset_z, max_idx, max_distance, allow_invert=False
-    )
+    self._path.projected_points = self._map_line_to_polygon(self._path.raw_points, 0.9, self._path_offset_z, max_idx, max_distance, allow_invert=False)
 
     self._update_experimental_gradient()
 
@@ -322,6 +335,142 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(218, 202, 37, 255))
       rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(201, 34, 49, lead.fill_alpha))
 
+  def _update_nav_state(self, sm) -> None:
+    now = time.monotonic()
+    dt = max(0.0, min(0.25, now - self._nav_last_tick))
+    self._nav_last_tick = now
+
+    if sm.updated.get('navigationStateSP', False):
+      ns = sm['navigationStateSP']
+      self._nav_active = bool(ns.active)
+      self._nav_distance_remaining = float(ns.distanceRemaining)
+      self._nav_time_remaining = float(ns.timeRemaining)
+
+    if sm.updated.get('navInstruction', False):
+      ni = sm['navInstruction']
+      self._nav_modifier = ni.maneuverModifier or "straight"
+      self._nav_primary = ni.maneuverPrimaryText or ""
+      self._nav_distance = float(ni.maneuverDistance)
+      self._nav_lane_count = len(ni.lanes)
+      self._nav_lanes_active = [i for i, lane in enumerate(ni.lanes) if getattr(lane, 'active', False)]
+
+    if self._nav_active and dt > 0.0:
+      v_ego = float(sm['carState'].vEgo)
+      self._nav_distance = max(0.0, self._nav_distance - v_ego * dt)
+      self._nav_distance_remaining = max(0.0, self._nav_distance_remaining - v_ego * dt)
+      self._nav_time_remaining = max(0.0, self._nav_time_remaining - dt)
+
+  def _draw_nav_ar_overlay(self, rect: rl.Rectangle) -> None:
+    if not self._nav_active or self._path.raw_points.size == 0:
+      return
+
+    lane_shift = self._nav_lane_shift()
+    lane_width = self._estimate_lane_width()
+    lateral_offset = lane_shift * lane_width + self._camera_offset
+
+    first_distance = float(np.clip(self._nav_distance, 8.0, 28.0))
+    mark_distances = [first_distance, min(first_distance + 10.0, 45.0), min(first_distance + 20.0, 60.0)]
+
+    points = []
+    for idx, distance in enumerate(mark_distances):
+      path_idx = self._get_path_length_idx(self._path.raw_points[:, 0], distance)
+      z = self._path.raw_points[path_idx, 2] if path_idx < len(self._path.raw_points) else 0.0
+      screen_point = self._map_to_screen(distance, lateral_offset, z + self._path_offset_z)
+      if screen_point is None:
+        continue
+
+      alpha = int(np.interp(idx, [0, 2], [235, 100]))
+      size = float(np.interp(distance, [8.0, 60.0], [24.0, 11.0]))
+      self._draw_nav_marker(screen_point[0], screen_point[1], size, alpha)
+      points.append(screen_point)
+
+    if len(points) >= 2:
+      for i in range(len(points) - 1):
+        a = points[i]
+        b = points[i + 1]
+        color = NAV_GUIDE_COLOR if i == 0 else NAV_GUIDE_FADE
+        rl.draw_line_ex(rl.Vector2(a[0], a[1]), rl.Vector2(b[0], b[1]), 3.0 - i, color)
+
+    if points:
+      lead_x, lead_y = points[0]
+      dist_text = self._format_distance(self._nav_distance)
+      eta_text = self._format_eta(self._nav_time_remaining)
+      label = f"{dist_text}  {self._nav_primary[:26]}"
+      label_w = rl.measure_text(label, 30)
+      label_x = float(np.clip(lead_x - label_w / 2, rect.x + 10, rect.x + rect.width - label_w - 10))
+      label_y = lead_y - 54
+
+      rl.draw_text(label, int(label_x + 2), int(label_y + 2), 30, rl.Color(0, 0, 0, 175))
+      rl.draw_text(label, int(label_x), int(label_y), 30, NAV_TEXT_COLOR)
+      rl.draw_text(f"ETA {eta_text}", int(label_x), int(label_y + 28), 22, rl.Color(184, 220, 238, 225))
+
+  def _draw_nav_marker(self, x: float, y: float, size: float, alpha: int) -> None:
+    direction_bias = self._turn_bias()
+    color = rl.Color(NAV_GUIDE_COLOR.r, NAV_GUIDE_COLOR.g, NAV_GUIDE_COLOR.b, alpha)
+    tip = rl.Vector2(x + direction_bias * size * 0.26, y - size)
+    left = rl.Vector2(x - size * 0.6, y + size * 0.45)
+    right = rl.Vector2(x + size * 0.6, y + size * 0.45)
+    inner_tip = rl.Vector2(x + direction_bias * size * 0.2, y - size * 0.35)
+    inner_left = rl.Vector2(x - size * 0.28, y + size * 0.24)
+    inner_right = rl.Vector2(x + size * 0.28, y + size * 0.24)
+
+    rl.draw_triangle(left, tip, right, color)
+    rl.draw_triangle(inner_left, inner_tip, inner_right, rl.Color(7, 30, 38, min(255, alpha + 10)))
+
+  def _estimate_lane_width(self) -> float:
+    left = self._lane_lines[1].raw_points
+    right = self._lane_lines[2].raw_points
+    if left.shape[0] > 8 and right.shape[0] > 8:
+      lane_width = abs(float(left[8, 1] - right[8, 1]))
+      if lane_width > 1.0:
+        return float(np.clip(lane_width, 2.8, 4.2))
+    return 3.5
+
+  def _turn_bias(self) -> float:
+    modifier = (self._nav_modifier or "").lower()
+    if "left" in modifier:
+      return -1.0
+    if "right" in modifier:
+      return 1.0
+    return 0.0
+
+  def _nav_lane_shift(self) -> int:
+    if self._nav_lanes_active and self._nav_lane_count > 0:
+      lane_count = self._nav_lane_count
+      target = self._nav_lanes_active[0]
+      center = (lane_count - 1) / 2.0
+      return int(np.clip(round(target - center), -2, 2))
+
+    modifier = (self._nav_modifier or "").lower()
+    if "left" in modifier:
+      return 1
+    if "right" in modifier:
+      return -1
+    return 0
+
+  @staticmethod
+  def _format_distance(meters: float) -> str:
+    meters = max(0.0, float(meters))
+    if ui_state.is_metric:
+      if meters < 1000.0:
+        return f"{int(round(meters / 10.0) * 10)} m"
+      return f"{meters / 1000.0:.1f} km"
+
+    feet = meters * METER_TO_FOOT
+    if feet < 1000.0:
+      return f"{int(round(feet / 50.0) * 50)} ft"
+    return f"{meters * METER_TO_MILE:.1f} mi"
+
+  @staticmethod
+  def _format_eta(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 60.0:
+      return f"{int(seconds)}s"
+    mins = int(round(seconds / 60.0))
+    if mins < 60:
+      return f"{mins}m"
+    return f"{mins // 60}h {mins % 60}m"
+
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:
     """Get the index corresponding to the given path distance"""
@@ -352,7 +501,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       return np.empty((0, 2), dtype=np.float32)
 
     # Slice points and filter non-negative x-coordinates
-    points = line[:max_idx + 1]
+    points = line[: max_idx + 1]
 
     # Interpolate around max_idx so path end is smooth (max_distance is always >= p0.x)
     if 0 < max_idx < line.shape[0] - 1:
@@ -395,14 +544,8 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     y_min, y_max = clip.y, clip.y + clip.height
 
     # Filter points within clip region
-    left_in_clip = (
-      (left_screen[0] >= x_min) & (left_screen[0] <= x_max) &
-      (left_screen[1] >= y_min) & (left_screen[1] <= y_max)
-    )
-    right_in_clip = (
-      (right_screen[0] >= x_min) & (right_screen[0] <= x_max) &
-      (right_screen[1] >= y_min) & (right_screen[1] <= y_max)
-    )
+    left_in_clip = (left_screen[0] >= x_min) & (left_screen[0] <= x_max) & (left_screen[1] >= y_min) & (left_screen[1] <= y_max)
+    right_in_clip = (right_screen[0] >= x_min) & (right_screen[0] <= x_max) & (right_screen[1] >= y_min) & (right_screen[1] <= y_max)
     both_in_clip = left_in_clip & right_in_clip
 
     if not np.any(both_in_clip):
@@ -426,12 +569,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
   @staticmethod
   def _hsla_to_color(h, s, l, a):
     rgb = colorsys.hls_to_rgb(h, l, s)
-    return rl.Color(
-      int(rgb[0] * 255),
-      int(rgb[1] * 255),
-      int(rgb[2] * 255),
-      int(a * 255)
-    )
+    return rl.Color(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255), int(a * 255))
 
   @staticmethod
   def _blend_colors(begin_colors, end_colors, t):
@@ -441,9 +579,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       return begin_colors
 
     inv_t = 1.0 - t
-    return [rl.Color(
-      int(inv_t * start.r + t * end.r),
-      int(inv_t * start.g + t * end.g),
-      int(inv_t * start.b + t * end.b),
-      int(inv_t * start.a + t * end.a)
-    ) for start, end in zip(begin_colors, end_colors, strict=True)]
+    return [
+      rl.Color(int(inv_t * start.r + t * end.r), int(inv_t * start.g + t * end.g), int(inv_t * start.b + t * end.b), int(inv_t * start.a + t * end.a))
+      for start, end in zip(begin_colors, end_colors, strict=True)
+    ]

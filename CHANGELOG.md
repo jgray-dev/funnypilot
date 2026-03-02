@@ -1,3 +1,15 @@
+FunnyPilot v1.0.4ar (2026-03-02)
+========================
+* Onroad navigation UI rewritten as an AR-style overlay (no bottom-left box):
+  - Replaced the card-style `NavigationPanel` with a perspective lane ribbon centered on the driving path.
+  - Added target-lane highlighting, lane-line perspective guides, and a turn cue projected near the horizon.
+  - Navigation text is now minimal and contextual (large distance + maneuver label + compact ETA/remaining meta).
+  - Added camera-calibrated AR nav markers in `model_renderer` so turn guidance is projected directly onto the drivable path.
+* Navigation responsiveness improved for real driving:
+  - Increased `navigationd` publish loop from 3 Hz to 5 Hz for faster nav state/instruction refresh.
+  - Updated `cereal/services.py` metadata for `navInstruction` and `navigationStateSP` from 1 Hz to 5 Hz.
+  - Added UI-side distance dead-reckoning that decays maneuver/remaining distance each frame using live vehicle speed, reducing 1-second "step" updates.
+
 FunnyPilot v1.0.2m (2026-03-02)
 ========================
 * Navigation web stack moved to Mapbox visuals + traffic-aware routing:
