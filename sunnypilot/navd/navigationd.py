@@ -124,7 +124,7 @@ def main():
     # --- Poll GPS ---
     sm.update(0)
     gps = sm["gpsLocationExternal"]
-    if gps.accuracy < 50.0 and (gps.latitude != 0.0 or gps.longitude != 0.0):
+    if gps.horizontalAccuracy < 50.0 and (gps.latitude != 0.0 or gps.longitude != 0.0):
       last_gps_lat = gps.latitude
       last_gps_lon = gps.longitude
       gps_valid = True
