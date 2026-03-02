@@ -1,5 +1,5 @@
 """
-FunnyPilot navigationd — 3 Hz navigation daemon.
+FunnyPilot navigationd - 5 Hz navigation daemon.
 
 Watches NavDestination param, fetches OSRM routes, tracks route progress,
 and publishes navInstruction + navigationStateSP via cereal.
