@@ -67,6 +67,13 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.1 Changes
+
+- `selfdrive/ui/sunnypilot/onroad/nav_quick_access.py` - Fixed Widget visibility bypass: changed `self.visible = True/False` to `self.set_visible(not in_drive)` so Widget's `_is_visible` is properly managed. Removed manual `if not self.visible: return` from `_render()`. Added `_PARAMS_REFRESH_INTERVAL = 5.0s` throttle for NavHomeLocation/NavWorkLocation param reads. Moved `import math` to module level.
+- `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - Moved `import math` to module level (was inside `_draw_angled_arrow` function body). Wrapped `sm.updated` access in try/except in `update()`.
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` - Added try/except around nav widget `update()` and `render()` calls so any nav widget exception cannot propagate and crash the UI process.
+- `sunnypilot/navd/nav_webserver.py` - Added `reuse_address=True` to `web.run_app()` to prevent port 8888 TCP TIME_WAIT bind failures on rapid restart.
+
 ### v1.0.0 Changes
 
 - `sunnypilot/navd/nav_web/` - Completely redesigned UI: true dark mode (`#000`), replaced system emojis with inline SVGs, integrated sleek map tile inversion filtering, and modernized layout components (status badge, search box, dest panel).

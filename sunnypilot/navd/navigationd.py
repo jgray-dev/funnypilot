@@ -9,7 +9,7 @@ import json
 import time
 
 import cereal.messaging as messaging
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.sunnypilot.navd.nav_state import NavState
 from openpilot.sunnypilot.navd.routing.osrm_client import get_route
 from openpilot.sunnypilot.navd.routing.route_cache import RouteCache, BreadcrumbTracker, build_rejoin_route
@@ -50,6 +50,12 @@ def main():
   last_gps_lat: float = 0.0
   last_gps_lon: float = 0.0
   gps_valid: bool = False
+  nav_destination_supported = True
+
+  try:
+    params.check_key("NavDestination")
+  except UnknownKeyName:
+    nav_destination_supported = False
 
   def fetch_online_route(start_lat: float, start_lon: float, dest: dict) -> dict | None:
     route = get_route(start_lat, start_lon, dest["lat"], dest["lon"])
@@ -80,8 +86,15 @@ def main():
       gps_valid = True
 
     # --- Check for new/cleared destination ---
-    dest_json = params.get("NavDestination")
-    dest_str = dest_json.decode() if isinstance(dest_json, bytes) else dest_json
+    dest_str = None
+    if nav_destination_supported:
+      try:
+        dest_json = params.get("NavDestination")
+        dest_str = dest_json.decode() if isinstance(dest_json, bytes) else dest_json
+      except UnknownKeyName:
+        nav_destination_supported = False
+      except Exception:
+        dest_str = None
 
     if dest_str != last_dest_json:
       last_dest_json = dest_str
@@ -110,7 +123,11 @@ def main():
 
       # Arrival check
       if nav_state.is_arrived(last_gps_lat, last_gps_lon):
-        params.remove("NavDestination")
+        if nav_destination_supported:
+          try:
+            params.remove("NavDestination")
+          except UnknownKeyName:
+            nav_destination_supported = False
         nav_state.clear()
         last_dest_json = None
 
