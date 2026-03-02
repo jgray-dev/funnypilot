@@ -84,6 +84,23 @@ def _load_destination(dest_str: str | None) -> dict | None:
     return None
 
 
+def _load_params_gps(params: Params) -> tuple[float, float] | None:
+  for key in ("LastGPSPosition", "LastGPSPositionLLK"):
+    raw = nav_get_raw(params, key)
+    if raw is None:
+      continue
+    try:
+      payload = raw.decode() if isinstance(raw, bytes) else raw
+      data = json.loads(payload)
+      lat = float(data.get("latitude", data.get("lat", 0.0)))
+      lon = float(data.get("longitude", data.get("lon", 0.0)))
+      if lat != 0.0 or lon != 0.0:
+        return lat, lon
+    except Exception:
+      continue
+  return None
+
+
 def main():
   params = Params()
   pm = messaging.PubMaster(["navInstruction", "navigationStateSP"])
@@ -123,10 +140,19 @@ def main():
     # --- Poll GPS ---
     sm.update(0)
     gps = sm["gpsLocationExternal"]
-    if gps.horizontalAccuracy < 50.0 and (gps.latitude != 0.0 or gps.longitude != 0.0):
-      last_gps_lat = gps.latitude
-      last_gps_lon = gps.longitude
-      gps_valid = True
+    gps_valid = False
+    if sm.updated["gpsLocationExternal"]:
+      horiz_acc = float(gps.horizontalAccuracy)
+      if (gps.latitude != 0.0 or gps.longitude != 0.0) and (horiz_acc == 0.0 or horiz_acc < 100.0):
+        last_gps_lat = gps.latitude
+        last_gps_lon = gps.longitude
+        gps_valid = True
+
+    if not gps_valid:
+      params_gps = _load_params_gps(params)
+      if params_gps is not None:
+        last_gps_lat, last_gps_lon = params_gps
+        gps_valid = True
 
     # --- Check for new/cleared destination ---
     dest_str = None
