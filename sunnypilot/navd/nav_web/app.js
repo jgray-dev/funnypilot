@@ -11,6 +11,7 @@ let lastRouteKey = '';
 let routeFetchInFlight = false;
 let lastKnownGps = null;
 let lastKnownDest = null;
+let centeredOnDevice = false;
 
 const ROUTE_SOURCE_ID = 'active-route-source';
 const ROUTE_LAYER_GLOW_ID = 'active-route-glow';
@@ -129,13 +130,28 @@ async function initMap() {
   }
 
   mapboxgl.accessToken = config.mapboxPublicToken;
+
+  let initialCenter = [-122.0, 37.4];
+  let initialZoom = 12;
+  try {
+    const gps = await fetchJson('/api/gps');
+    const lat = getLat(gps);
+    const lon = getLon(gps);
+    if (lat !== null && lon !== null) {
+      lastKnownGps = { lat, lon };
+      centeredOnDevice = true;
+      initialCenter = [lon, lat];
+      initialZoom = 13;
+    }
+  } catch (_) {}
+
   mapAvailable = true;
   map = new mapboxgl.Map({
     container: 'map',
     style: 'mapbox://styles/mapbox/dark-v11',
     projection: 'globe',
-    center: [-122.0, 37.4],
-    zoom: 12,
+    center: initialCenter,
+    zoom: initialZoom,
     attributionControl: true,
     antialias: true,
   });
@@ -154,11 +170,11 @@ async function initMap() {
   });
 
   gpsMarker = new mapboxgl.Marker({ element: markerElement('#e94560', '#ffffff'), anchor: 'center' })
-    .setLngLat([-122.0, 37.4])
+    .setLngLat(initialCenter)
     .addTo(map);
 
   destMarker = new mapboxgl.Marker({ element: markerElement('#49f4ff', '#0d1a24'), anchor: 'center' })
-    .setLngLat([-122.0, 37.4])
+    .setLngLat(initialCenter)
     .addTo(map);
   destMarker.getElement().style.display = 'none';
 }
@@ -259,6 +275,10 @@ async function pollStatus() {
       lastKnownGps = { lat: gpsLat, lon: gpsLon };
       setMarkerPosition(gpsMarker, gpsLon, gpsLat);
       gpsMarker.getElement().style.display = 'block';
+      if (!centeredOnDevice && map) {
+        centeredOnDevice = true;
+        map.flyTo({ center: [gpsLon, gpsLat], zoom: 13, essential: true, speed: 0.7 });
+      }
     }
 
     if (mapAvailable && data.active && destLat !== null && destLon !== null) {
@@ -266,8 +286,10 @@ async function pollStatus() {
       setMarkerPosition(destMarker, destLon, destLat);
       destMarker.getElement().style.display = 'block';
 
-      if (gpsLat !== null && gpsLon !== null) {
-        await updateRoutePreview(gpsLat, gpsLon, destLat, destLon);
+      const routeGpsLat = gpsLat !== null ? gpsLat : (lastKnownGps ? lastKnownGps.lat : null);
+      const routeGpsLon = gpsLon !== null ? gpsLon : (lastKnownGps ? lastKnownGps.lon : null);
+      if (routeGpsLat !== null && routeGpsLon !== null) {
+        await updateRoutePreview(routeGpsLat, routeGpsLon, destLat, destLon);
       }
     } else if (mapAvailable) {
       lastKnownDest = null;
