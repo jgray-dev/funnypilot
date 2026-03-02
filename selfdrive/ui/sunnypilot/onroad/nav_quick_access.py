@@ -10,7 +10,10 @@ import time
 import pyray as rl
 
 from cereal import car
-from openpilot.common.params import Params, UnknownKeyName
+from openpilot.common.params import Params
+from openpilot.sunnypilot.navd.nav_params import get_raw as nav_get_raw
+from openpilot.sunnypilot.navd.nav_params import put_json as nav_put_json
+from openpilot.sunnypilot.navd.nav_params import remove as nav_remove
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -138,30 +141,13 @@ class NavQuickAccess(Widget):
       self.has_work = work_raw is not None and work_raw != b""
 
   def _safe_get(self, key: str):
-    try:
-      return self._params.get(key)
-    except UnknownKeyName:
-      return None
-    except Exception:
-      return None
+    return nav_get_raw(self._params, key)
 
   def _safe_put_json(self, key: str, data: dict) -> bool:
-    try:
-      self._params.put(key, json.dumps(data))
-      return True
-    except UnknownKeyName:
-      return False
-    except Exception:
-      return False
+    return nav_put_json(self._params, key, data)
 
   def _safe_remove(self, key: str) -> bool:
-    try:
-      self._params.remove(key)
-      return True
-    except UnknownKeyName:
-      return False
-    except Exception:
-      return False
+    return nav_remove(self._params, key)
 
   def _render(self, rect: rl.Rectangle) -> None:
     total_w = 3 * BTN_W + 2 * BTN_GAP
