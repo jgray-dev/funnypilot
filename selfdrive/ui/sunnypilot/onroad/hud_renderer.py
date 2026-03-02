@@ -62,8 +62,11 @@ class HudRendererSP(HudRenderer):
     self.turn_signal_controller.update()
     self.circular_alerts_renderer.update()
     self.speed_renderer.update()
-    self.navigation_panel.update()
-    self.nav_quick_access.update()
+    try:
+      self.navigation_panel.update()
+      self.nav_quick_access.update()
+    except Exception:
+      pass
 
   def _get_icbm_status(self):
     if not self.pcm_cruise_speed and ui_state.sm['carControl'].enabled:
@@ -142,5 +145,8 @@ class HudRendererSP(HudRenderer):
     self.turn_signal_controller.render(rect)
     self.circular_alerts_renderer.render(rect)
     self.rocket_fuel.render(rect, ui_state.sm)
-    self.navigation_panel.render(rect)
-    self.nav_quick_access.render(rect)
+    try:
+      self.navigation_panel.render(rect)
+      self.nav_quick_access.render(rect)
+    except Exception:
+      pass

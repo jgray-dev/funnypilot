@@ -1,3 +1,20 @@
+FunnyPilot v1.0.1 (2026-03-02)
+========================
+* Fix: onroad UI crash on every offroad→onroad transition (boot loop bug).
+  - NavQuickAccess was setting `self.visible` (custom attr) instead of `Widget.set_visible()`,
+    causing Widget's internal `_is_visible` to always be True. Mouse events fired on every frame
+    even when the widget was supposed to be hidden, leading to crashes on onroad entry.
+  - Fixed: use `self.set_visible(not in_drive)` so Widget's visibility system correctly
+    short-circuits rendering and mouse event processing.
+  - Throttled NavHomeLocation/NavWorkLocation param reads from every render frame (20+ Hz)
+    to every 5 seconds, preventing excessive filesystem I/O in the UI hot loop.
+  - Moved `import math` in nav_quick_access.py and navigation_panel.py to module level
+    (was inside function bodies, re-imported on every render call).
+  - Added defensive try/except around nav widget update() and render() calls in HudRendererSP
+    so any future nav widget exception cannot crash the entire UI process.
+  - Added `reuse_address=True` to nav_webserver aiohttp run_app to prevent port 8888
+    TCP TIME_WAIT bind failures on rapid process restart.
+
 FunnyPilot v1.0.0 (2026-03-01)
 ========================
 * Consolidated and promoted all post-v0.9.7 updates (v0.9.7h, v0.9.8, v0.9.8h, v0.9.9) into a single release branch.

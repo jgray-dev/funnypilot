@@ -3,6 +3,7 @@ FunnyPilot NavigationPanel — turn-by-turn onroad overlay.
 
 Bottom-left position, shown only when navigation is active.
 """
+import math
 import pyray as rl
 
 from openpilot.common.constants import CV
@@ -79,7 +80,6 @@ def _draw_turn_arrow(cx: float, cy: float, size: float, modifier: str) -> None:
 
 def _draw_angled_arrow(cx: float, cy: float, size: float, angle_deg: float) -> None:
   """Draw a turning arrow — shaft goes up then curves to direction."""
-  import math
   s = size
   half = s * 0.5
 
@@ -147,20 +147,23 @@ class NavigationPanel(Widget):
   def update(self):
     sm = ui_state.sm
 
-    # Read navigationStateSP
-    if sm.updated.get("navigationStateSP", False):
-      ns = sm["navigationStateSP"]
-      self.nav_active = ns.active
-      self.distance_remaining = ns.distanceRemaining
-      self.time_remaining = ns.timeRemaining
+    try:
+      # Read navigationStateSP
+      if sm.updated.get("navigationStateSP", False):
+        ns = sm["navigationStateSP"]
+        self.nav_active = ns.active
+        self.distance_remaining = ns.distanceRemaining
+        self.time_remaining = ns.timeRemaining
 
-    # Read navInstruction
-    if sm.updated.get("navInstruction", False):
-      ni = sm["navInstruction"]
-      self.maneuver_text = ni.maneuverPrimaryText
-      self.maneuver_type = ni.maneuverType
-      self.maneuver_modifier = ni.maneuverModifier or "straight"
-      self.distance_to_maneuver = ni.maneuverDistance
+      # Read navInstruction
+      if sm.updated.get("navInstruction", False):
+        ni = sm["navInstruction"]
+        self.maneuver_text = ni.maneuverPrimaryText
+        self.maneuver_type = ni.maneuverType
+        self.maneuver_modifier = ni.maneuverModifier or "straight"
+        self.distance_to_maneuver = ni.maneuverDistance
+    except Exception:
+      pass
 
   def _render(self, rect: rl.Rectangle) -> None:
     if not self.nav_active:

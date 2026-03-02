@@ -13,7 +13,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.sunnypilot.navd.routing.geocoder import autocomplete as geocode_autocomplete
 
 PORT = 8888
@@ -21,7 +21,12 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
 
 
 def _params_get_json(params: Params, key: str) -> dict | None:
-  val = params.get(key)
+  try:
+    val = params.get(key)
+  except UnknownKeyName:
+    return None
+  except Exception:
+    return None
   if val is None:
     return None
   try:
@@ -31,8 +36,14 @@ def _params_get_json(params: Params, key: str) -> dict | None:
     return None
 
 
-def _params_put_json(params: Params, key: str, data: dict) -> None:
-  params.put(key, json.dumps(data))
+def _params_put_json(params: Params, key: str, data: dict) -> bool:
+  try:
+    params.put(key, json.dumps(data))
+    return True
+  except UnknownKeyName:
+    return False
+  except Exception:
+    return False
 
 
 async def index(request):
@@ -71,14 +82,20 @@ async def api_set_destination(request):
       "name": str(body.get("name", "")),
       "address": str(body.get("address", "")),
     }
-    Params().put("NavDestination", json.dumps(dest))
+    if not _params_put_json(Params(), "NavDestination", dest):
+      return web.json_response({"error": "Nav destination param unavailable"}, status=503)
     return web.json_response({"ok": True})
   except Exception as e:
     return web.json_response({"error": str(e)}, status=400)
 
 
 async def api_clear_destination(request):
-  Params().remove("NavDestination")
+  try:
+    Params().remove("NavDestination")
+  except UnknownKeyName:
+    return web.json_response({"error": "Nav destination param unavailable"}, status=503)
+  except Exception as e:
+    return web.json_response({"error": str(e)}, status=400)
   return web.json_response({"ok": True})
 
 
@@ -90,7 +107,8 @@ async def api_get_home(request):
 async def api_set_home(request):
   try:
     body = await request.json()
-    _params_put_json(Params(), "NavHomeLocation", body)
+    if not _params_put_json(Params(), "NavHomeLocation", body):
+      return web.json_response({"error": "Home location param unavailable"}, status=503)
     return web.json_response({"ok": True})
   except Exception as e:
     return web.json_response({"error": str(e)}, status=400)
@@ -104,7 +122,8 @@ async def api_get_work(request):
 async def api_set_work(request):
   try:
     body = await request.json()
-    _params_put_json(Params(), "NavWorkLocation", body)
+    if not _params_put_json(Params(), "NavWorkLocation", body):
+      return web.json_response({"error": "Work location param unavailable"}, status=503)
     return web.json_response({"ok": True})
   except Exception as e:
     return web.json_response({"error": str(e)}, status=400)
@@ -146,7 +165,8 @@ def main():
   app.router.add_get("/api/autocomplete", api_autocomplete)
   app.router.add_get("/api/gps", api_gps)
 
-  web.run_app(app, host="0.0.0.0", port=PORT, access_log=None)
+  # reuse_address prevents TIME_WAIT bind failures on rapid restart
+  web.run_app(app, host="0.0.0.0", port=PORT, access_log=None, reuse_address=True, reuse_port=False)
 
 
 if __name__ == "__main__":
