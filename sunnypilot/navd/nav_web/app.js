@@ -10,6 +10,7 @@ let mapAvailable = false;
 let lastRouteKey = '';
 let routeFetchInFlight = false;
 let lastKnownGps = null;
+let lastKnownDest = null;
 
 const ROUTE_SOURCE_ID = 'active-route-source';
 const ROUTE_LAYER_GLOW_ID = 'active-route-glow';
@@ -103,6 +104,11 @@ function maybeFitRoute(gpsLon, gpsLat, destLon, destLat) {
   bounds.extend([gpsLon, gpsLat]);
   bounds.extend([destLon, destLat]);
   map.fitBounds(bounds, { padding: 56, duration: 900, maxZoom: 14 });
+}
+
+function recenterToRoute() {
+  if (!map || !lastKnownGps || !lastKnownDest) return;
+  maybeFitRoute(lastKnownGps.lon, lastKnownGps.lat, lastKnownDest.lon, lastKnownDest.lat);
 }
 
 async function initMap() {
@@ -256,6 +262,7 @@ async function pollStatus() {
     }
 
     if (mapAvailable && data.active && destLat !== null && destLon !== null) {
+      lastKnownDest = { lat: destLat, lon: destLon };
       setMarkerPosition(destMarker, destLon, destLat);
       destMarker.getElement().style.display = 'block';
 
@@ -263,6 +270,7 @@ async function pollStatus() {
         await updateRoutePreview(gpsLat, gpsLon, destLat, destLon);
       }
     } else if (mapAvailable) {
+      lastKnownDest = null;
       destMarker.getElement().style.display = 'none';
       clearRoute();
     }
@@ -484,4 +492,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btn-cancel').addEventListener('click', cancelNav);
   document.getElementById('btn-save-home').addEventListener('click', saveAsHome);
   document.getElementById('btn-save-work').addEventListener('click', saveAsWork);
+  document.getElementById('btn-recenter').addEventListener('click', recenterToRoute);
 });

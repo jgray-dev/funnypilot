@@ -13,7 +13,6 @@ from cereal import car
 from openpilot.common.params import Params
 from openpilot.sunnypilot.navd.nav_params import get_raw as nav_get_raw
 from openpilot.sunnypilot.navd.nav_params import put_json as nav_put_json
-from openpilot.sunnypilot.navd.nav_params import remove as nav_remove
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -146,17 +145,13 @@ class NavQuickAccess(Widget):
   def _safe_put_json(self, key: str, data: dict) -> bool:
     return nav_put_json(self._params, key, data)
 
-  def _safe_remove(self, key: str) -> bool:
-    return nav_remove(self._params, key)
-
   def _render(self, rect: rl.Rectangle) -> None:
-    total_w = 3 * BTN_W + 2 * BTN_GAP
+    total_w = 2 * BTN_W + BTN_GAP
     start_x = rect.x + (rect.width - total_w) / 2
     btn_y = rect.y + rect.height - BTN_H - 80
 
     buttons = [
       ("Home", "home", self.has_home),
-      ("Refresh", "refresh", True),
       ("Work", "work", self.has_work),
     ]
 
@@ -217,15 +212,5 @@ class NavQuickAccess(Widget):
         try:
           data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
           self._safe_put_json("NavDestination", data)
-        except Exception:
-          pass
-    elif icon_type == "refresh":
-      # Force re-route by toggling destination: clear then re-write
-      raw = self._safe_get("NavDestination")
-      if raw:
-        try:
-          data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-          if self._safe_remove("NavDestination"):
-            self._safe_put_json("NavDestination", data)
         except Exception:
           pass
