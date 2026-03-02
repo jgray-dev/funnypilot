@@ -37,7 +37,7 @@ ROUTES_NO_CONNECTIVITY_MAX = 84
 HOURS_NO_CONNECTIVITY_PROMPT = 23
 ROUTES_NO_CONNECTIVITY_PROMPT = 80
 FUNNYPILOT_REMOTE = "funnypilot"
-FUNNYPILOT_BRANCH_RE = re.compile(r"^funnypilot-\d+\.\d+\.\d+[a-z]?$")
+FUNNYPILOT_BRANCH_RE = re.compile(r"^(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]|-[a-z0-9._-]+)?$")
 
 
 class UserRequest:

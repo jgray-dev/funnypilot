@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+
 import numpy as np
 
 import cereal.messaging as messaging
@@ -28,9 +29,9 @@ _TURNING_LAT_ACC_TH = 1.6  # Lat Acc threshold to trigger turning state.
 _LEAVING_LAT_ACC_TH = 1.3  # Lat Acc threshold to trigger leaving turn state.
 _FINISH_LAT_ACC_TH = 1.1  # Lat Acc threshold to trigger the end of the turn cycle.
 
-_A_LAT_REG_MAX = 2.  # Maximum lateral acceleration
+_A_LAT_REG_MAX = 2.0  # Maximum lateral acceleration
 
-_NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on a_target when not overshooting.
+_NO_OVERSHOOT_TIME_HORIZON = 4.0  # s. Time to use for velocity desired based on a_target when not overshooting.
 
 # Lookup table for the minimum smooth deceleration during the ENTERING state
 # depending on the actual maximum absolute lateral acceleration predicted on the turn ahead.
@@ -41,23 +42,23 @@ _ENTERING_SMOOTH_DECEL_BP = [1.0, 2.0, 3.5]  # Extended range
 # Lookup table for the acceleration for the TURNING state
 # depending on the current lateral acceleration of the vehicle.
 # FunnyPilot: More conservative turning acceleration
-_TURNING_ACC_V = [0.3, 0., -0.2]  # Was [0.5, 0., -0.4]
-_TURNING_ACC_BP = [1.5, 2.3, 3.]  # absolute value of current lat acc
+_TURNING_ACC_V = [0.3, 0.0, -0.2]  # Was [0.5, 0., -0.4]
+_TURNING_ACC_BP = [1.5, 2.3, 3.0]  # absolute value of current lat acc
 
 _LEAVING_ACC = 0.3  # FunnyPilot: Gentler (was 0.5)
 
 # FunnyPilot: Gas gating parameters
-_GAS_GATE_LAT_ACC_THRESHOLD = 0.8  # Cut gas earlier
+_GAS_GATE_LAT_ACC_THRESHOLD = 1.0
 _GAS_GATE_LOOKAHEAD_TIME = 3.0  # seconds
 
 
 class SmartCruiseControlVision:
   v_target: float = 0
-  a_target: float = 0.
-  v_ego: float = 0.
-  a_ego: float = 0.
+  a_target: float = 0.0
+  v_ego: float = 0.0
+  a_ego: float = 0.0
   output_v_target: float = V_CRUISE_UNSET
-  output_a_target: float = 0.
+  output_a_target: float = 0.0
 
   def __init__(self):
     self.params = Params()
@@ -67,12 +68,12 @@ class SmartCruiseControlVision:
     self.is_enabled = False
     self.is_active = False
     self.enabled = self.params.get_bool("SmartCruiseControlVision")
-    self.v_cruise_setpoint = 0.
+    self.v_cruise_setpoint = 0.0
     self.gas_gating_active = False  # FunnyPilot: expose gas gate status for UI
 
     self.state = VisionState.disabled
-    self.current_lat_acc = 0.
-    self.max_pred_lat_acc = 0.
+    self.current_lat_acc = 0.0
+    self.max_pred_lat_acc = 0.0
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
@@ -89,7 +90,14 @@ class SmartCruiseControlVision:
 
   def should_cut_gas(self, sm: messaging.SubMaster) -> bool:
     """FunnyPilot: Determine if gas should be cut based on upcoming curve"""
-    if not self.long_enabled:
+    if not self.long_enabled or not self.enabled or self.long_override:
+      return False
+
+    if self.v_ego <= MIN_V:
+      return False
+
+    # Only mark gas gating when this logic is actively suppressing positive accel.
+    if self.a_target <= 0.05:
       return False
 
     rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
@@ -112,7 +120,7 @@ class SmartCruiseControlVision:
       if len(rate_plan) == 0 or len(vel_plan) == 0:
         return
 
-      self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
+      self.current_lat_acc = self.v_ego**2 * abs(sm['controlsState'].curvature)
 
       # get the maximum lat accel from the model
       predicted_lat_accels = rate_plan * vel_plan
@@ -209,8 +217,7 @@ class SmartCruiseControlVision:
 
     return a_target
 
-  def update(self, sm: messaging.SubMaster, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
-             v_cruise_setpoint: float) -> None:
+  def update(self, sm: messaging.SubMaster, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_setpoint: float) -> None:
     self.long_enabled = long_enabled
     self.long_override = long_override
     self.v_ego = v_ego

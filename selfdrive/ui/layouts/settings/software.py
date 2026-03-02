@@ -86,6 +86,13 @@ class SoftwareLayout(Widget):
       spacing=0,
     )
 
+  @staticmethod
+  def _signal_updated(fetch: bool) -> None:
+    signal_opt = "-SIGHUP" if fetch else "-SIGUSR1"
+    for pattern in ("system.updated.updated", "updated.py"):
+      if os.system(f"pkill {signal_opt} -f {pattern}") == 0:
+        break
+
   def show_event(self):
     self._scroller.show_event()
 
@@ -165,12 +172,12 @@ class SoftwareLayout(Widget):
       # Start checking for updates
       self._waiting_for_updater = True
       self._waiting_start_ts = time.monotonic()
-      os.system("pkill -SIGUSR1 -f system.updated.updated")
+      self._signal_updated(fetch=False)
     else:
       # Start downloading
       self._waiting_for_updater = True
       self._waiting_start_ts = time.monotonic()
-      os.system("pkill -SIGHUP -f system.updated.updated")
+      self._signal_updated(fetch=True)
 
   def _on_uninstall(self):
     def handle_uninstall_confirmation(result):
@@ -205,7 +212,7 @@ class SoftwareLayout(Widget):
         selection = self._branch_dialog.selection
         ui_state.params.put("UpdaterTargetBranch", selection)
         self._branch_btn.action_item.set_value(selection)
-        os.system("pkill -SIGUSR1 -f system.updated.updated")
+        self._signal_updated(fetch=False)
       self._branch_dialog = None
 
     gui_app.set_modal_overlay(self._branch_dialog, callback=handle_selection)
