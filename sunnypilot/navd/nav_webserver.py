@@ -14,8 +14,11 @@ import os
 
 from aiohttp import web
 
-from openpilot.common.params import Params, UnknownKeyName
+from openpilot.common.params import Params
 from openpilot.sunnypilot.navd.mapbox_config import load_mapbox_tokens
+from openpilot.sunnypilot.navd.nav_params import get_raw as nav_get_raw
+from openpilot.sunnypilot.navd.nav_params import put_json as nav_put_json
+from openpilot.sunnypilot.navd.nav_params import remove as nav_remove
 from openpilot.sunnypilot.navd.routing.osrm_client import get_route
 from openpilot.sunnypilot.navd.routing.geocoder import autocomplete as geocode_autocomplete
 
@@ -24,12 +27,7 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
 
 
 def _params_get_json(params: Params, key: str) -> dict | None:
-  try:
-    val = params.get(key)
-  except UnknownKeyName:
-    return None
-  except Exception:
-    return None
+  val = nav_get_raw(params, key)
   if val is None:
     return None
   try:
@@ -40,13 +38,7 @@ def _params_get_json(params: Params, key: str) -> dict | None:
 
 
 def _params_put_json(params: Params, key: str, data: dict) -> bool:
-  try:
-    params.put(key, json.dumps(data))
-    return True
-  except UnknownKeyName:
-    return False
-  except Exception:
-    return False
+  return nav_put_json(params, key, data)
 
 
 async def index(request):
@@ -110,12 +102,8 @@ async def api_set_destination(request):
 
 
 async def api_clear_destination(request):
-  try:
-    Params().remove("NavDestination")
-  except UnknownKeyName:
+  if not nav_remove(Params(), "NavDestination"):
     return web.json_response({"error": "Nav destination param unavailable"}, status=503)
-  except Exception as e:
-    return web.json_response({"error": str(e)}, status=400)
   return web.json_response({"ok": True})
 
 
