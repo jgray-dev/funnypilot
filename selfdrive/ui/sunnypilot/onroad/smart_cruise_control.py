@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+
 import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -54,9 +55,7 @@ class SmartCruiseControlRenderer(Widget):
 
     rl.draw_rectangle_rounded(rl.Rectangle(box_x, box_y, box_width, box_height), 0.2, 10, box_color)
 
-    rl.draw_text_ex(self.font, name,
-                    rl.Vector2(box_x + (box_width - sz.x) / 2, box_y + (box_height - sz.y) / 2),
-                    font_size, 0, rl.BLACK)
+    rl.draw_text_ex(self.font, name, rl.Vector2(box_x + (box_width - sz.x) / 2, box_y + (box_height - sz.y) / 2), font_size, 0, rl.BLACK)
 
   def _render(self, rect: rl.Rectangle):
     x_offset = -260
@@ -77,10 +76,8 @@ class SmartCruiseControlRenderer(Widget):
       idx += 1
 
     # FunnyPilot: only visible when active (red) or gas gating (orange)
-    if self.vision_active or self.vision_gas_gating:
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V",
-                      gas_gating=self.vision_gas_gating)
+    if self.vision_enabled and self.vision_active:
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V", gas_gating=self.vision_gas_gating)
 
-    if self.map_active or self.map_gas_gating:
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M",
-                      gas_gating=self.map_gas_gating)
+    if self.map_enabled and self.map_active:
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M", gas_gating=self.map_gas_gating)

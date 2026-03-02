@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+
 import pyray as rl
 
 from openpilot.common.constants import CV
@@ -128,6 +129,9 @@ class HudRendererSP(HudRenderer):
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     self.speed_renderer.render(rect)
+
+  def user_interacting(self) -> bool:
+    return super().user_interacting() or self.nav_quick_access.is_pressed
 
   def _render(self, rect: rl.Rectangle) -> None:
     super()._render(rect)

@@ -112,6 +112,7 @@ class NavQuickAccess(Widget):
     self.font = gui_app.font(FontWeight.BOLD)
     self._params = Params()
     self._last_params_check: float = 0.0
+    self._button_hitboxes: list[tuple[str, bool, rl.Rectangle]] = []
 
   def update(self):
     sm = ui_state.sm
@@ -173,9 +174,12 @@ class NavQuickAccess(Widget):
       ("Work", "work", self.has_work),
     ]
 
+    self._button_hitboxes = []
+
     for i, (label, icon_type, enabled) in enumerate(buttons):
       bx = start_x + i * (BTN_W + BTN_GAP)
       brect = rl.Rectangle(bx, btn_y, BTN_W, BTN_H)
+      self._button_hitboxes.append((icon_type, enabled, brect))
 
       bg = BG_COLOR if enabled else BG_DISABLED
       border = BORDER_ACTIVE if enabled else BORDER_COLOR
@@ -206,17 +210,11 @@ class NavQuickAccess(Widget):
         text_col,
       )
 
-    # Handle taps
-    if rl.is_mouse_button_released(rl.MouseButton.MOUSE_BUTTON_LEFT):
-      mouse = rl.get_mouse_position()
-      for i, (label, icon_type, enabled) in enumerate(buttons):
-        if not enabled:
-          continue
-        bx = start_x + i * (BTN_W + BTN_GAP)
-        brect = rl.Rectangle(bx, btn_y, BTN_W, BTN_H)
-        if rl.check_collision_point_rec(mouse, brect):
-          self._on_tap(icon_type)
-          break
+  def _handle_mouse_release(self, mouse_pos) -> None:
+    for icon_type, enabled, brect in self._button_hitboxes:
+      if enabled and rl.check_collision_point_rec(mouse_pos, brect):
+        self._on_tap(icon_type)
+        break
 
   def _on_tap(self, icon_type: str) -> None:
     if icon_type == "home":
@@ -242,7 +240,6 @@ class NavQuickAccess(Widget):
         try:
           data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
           if self._safe_remove("NavDestination"):
-            time.sleep(0.1)
             self._safe_put_json("NavDestination", data)
         except Exception:
           pass

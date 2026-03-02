@@ -73,14 +73,15 @@ class SoftwareLayoutSP(SoftwareLayout):
 
   @staticmethod
   def _is_funnypilot_version_branch(branch: str) -> bool:
-    return re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]?", branch) is not None
+    return re.fullmatch(r"(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]|-[a-z0-9._-]+)?", branch) is not None
 
   @staticmethod
   def _branch_sort_key(branch: str) -> tuple[int, int, int, int, str]:
-    m = re.fullmatch(r"funnypilot-(\d+)\.(\d+)\.(\d+)([a-z]?)", branch)
+    m = re.fullmatch(r"(?:funnypilot-)?(\d+)\.(\d+)\.(\d+)([a-z]|-[a-z0-9._-]+)?", branch)
     if m is None:
       return (0, 0, 0, 0, "")
-    major, minor, patch, suffix = m.groups()
+    major, minor, patch, suffix_raw = m.groups()
+    suffix = suffix_raw or ""
     suffix_rank = 1 if suffix else 0
     return (int(major), int(minor), int(patch), suffix_rank, suffix)
 
@@ -115,13 +116,34 @@ class SoftwareLayoutSP(SoftwareLayout):
   def _refresh_branch_list(self):
     self._waiting_for_updater = True
     self._waiting_start_ts = time.monotonic()
-    os.system("pkill -SIGUSR1 -f system.updated.updated")
+    self._signal_updated(fetch=False)
+
+  @staticmethod
+  def _normalize_branch_name(branch: str) -> str:
+    b = branch.strip()
+    if not b:
+      return ""
+    if b.startswith("refs/heads/"):
+      b = b[len("refs/heads/") :]
+    if "/" in b and not b.startswith("funnypilot-"):
+      tail = b.rsplit("/", 1)[-1]
+      if re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]?", tail):
+        b = tail
+    return b
 
   def _build_funnypilot_branch_map(self) -> dict[str, str]:
-    branches_str = ui_state.params.get("UpdaterAvailableBranches") or ""
-    branches = [b.strip() for b in branches_str.split(",") if b.strip()]
+    branches_raw = ui_state.params.get("UpdaterAvailableBranches") or ""
+    branches_str = branches_raw.decode("utf-8", "replace") if isinstance(branches_raw, bytes) else str(branches_raw)
+    branches = [self._normalize_branch_name(b) for b in branches_str.split(",") if b.strip()]
     fp_branches = [b for b in branches if self._is_funnypilot_version_branch(b)]
-    fp_branches.sort(key=self._branch_sort_key, reverse=True)
+    fp_branches = sorted(set(fp_branches), key=self._branch_sort_key, reverse=True)
+
+    if not fp_branches:
+      current_target = ui_state.params.get("UpdaterTargetBranch") or ui_state.params.get("GitBranch") or ""
+      normalized_current = self._normalize_branch_name(current_target)
+      if self._is_funnypilot_version_branch(normalized_current):
+        fp_branches = [normalized_current]
+
     return {self._display_branch_name(branch): branch for branch in fp_branches}
 
   def _handle_reboot(self, result):
@@ -157,7 +179,7 @@ class SoftwareLayoutSP(SoftwareLayout):
           self._branch_btn.action_item.set_value(selected_display)
           self._waiting_for_updater = True
           self._waiting_start_ts = time.monotonic()
-          os.system("pkill -SIGHUP -f system.updated.updated")
+          self._signal_updated(fetch=False)
       self._branch_dialog = None
 
     gui_app.set_modal_overlay(self._branch_dialog, callback=handle_selection)

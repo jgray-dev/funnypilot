@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 
 from aiohttp import web
@@ -85,12 +86,19 @@ async def api_config(request):
 async def api_set_destination(request):
   try:
     body = await request.json()
-    required = ("lat", "lon")
-    if not all(k in body for k in required):
+    lat_raw = body.get("lat", body.get("latitude"))
+    lon_raw = body.get("lon", body.get("longitude"))
+    if lat_raw is None or lon_raw is None:
       return web.json_response({"error": "Missing lat/lon"}, status=400)
+
+    lat = float(lat_raw)
+    lon = float(lon_raw)
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+      return web.json_response({"error": "Invalid lat/lon"}, status=400)
+
     dest = {
-      "lat": float(body["lat"]),
-      "lon": float(body["lon"]),
+      "lat": lat,
+      "lon": lon,
       "name": str(body.get("name", "")),
       "address": str(body.get("address", "")),
     }

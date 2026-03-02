@@ -174,15 +174,28 @@ function hasNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+function asFiniteNumber(v) {
+  if (hasNumber(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const parsed = Number(v);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function getLat(obj) {
-  if (hasNumber(obj?.lat)) return obj.lat;
-  if (hasNumber(obj?.latitude)) return obj.latitude;
+  const lat = asFiniteNumber(obj?.lat);
+  if (lat !== null) return lat;
+  const latitude = asFiniteNumber(obj?.latitude);
+  if (latitude !== null) return latitude;
   return null;
 }
 
 function getLon(obj) {
-  if (hasNumber(obj?.lon)) return obj.lon;
-  if (hasNumber(obj?.longitude)) return obj.longitude;
+  const lon = asFiniteNumber(obj?.lon);
+  if (lon !== null) return lon;
+  const longitude = asFiniteNumber(obj?.longitude);
+  if (longitude !== null) return longitude;
   return null;
 }
 
@@ -340,12 +353,17 @@ async function setDestination(item) {
       body: JSON.stringify({ lat, lon, name: item.name, address: item.address }),
     });
     if (!r.ok) {
-      alert('Failed to set destination');
+      let errMsg = 'Failed to set destination';
+      try {
+        const err = await r.json();
+        if (err && err.error) errMsg = 'Failed to set destination: ' + err.error;
+      } catch (_) {}
+      alert(errMsg);
       return;
     }
     await pollStatus();
     if (mapAvailable && map) {
-      map.setView([lat, lon], 14);
+      map.flyTo({ center: [lon, lat], zoom: 14, essential: true, speed: 0.8 });
     }
   } catch (e) {
     alert('Error: ' + e.message);
