@@ -67,6 +67,14 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.4ar Changes
+
+- `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - Replaced the boxed nav card with a minimal AR-style overlay: projected lane ribbon, target lane highlight, horizon turn cue, compact textual guidance, and lane-change status.
+- `selfdrive/ui/onroad/model_renderer.py` - Added camera-calibrated AR navigation markers projected in road space (turn chevrons + guide line + compact distance/ETA label) using the existing model path transform.
+- `sunnypilot/navd/navigationd.py` - Increased nav daemon loop rate from 3 Hz to 5 Hz for snappier on-device updates.
+- `cereal/services.py` - Raised `navInstruction` and `navigationStateSP` service metadata from 1 Hz to 5 Hz to match higher-rate publishing.
+- `FUNNYPILOT_VERSION`, `CHANGELOG.md` - Bumped branch version marker to `1.0.4ar` and documented the AR navigation + responsiveness update, including UI-side dead-reckoned distance smoothing.
+
 ### v1.0.2m Changes
 
 - `sunnypilot/navd/mapbox_config.py` - New token loader for Mapbox credentials; reads from env (`MAPBOX_PUBLIC_TOKEN`, `MAPBOX_SECRET_TOKEN`) or secret files (`.nav_secrets/mapbox_tokens.json` and device paths) without committing keys.

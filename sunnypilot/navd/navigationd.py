@@ -20,7 +20,7 @@ from openpilot.sunnypilot.navd.nav_state import NavState
 from openpilot.sunnypilot.navd.routing.osrm_client import get_route
 from openpilot.sunnypilot.navd.routing.route_cache import RouteCache, BreadcrumbTracker, build_rejoin_route
 
-LOOP_HZ = 3
+LOOP_HZ = 5
 REROUTE_COOLDOWN_S = 10.0
 
 
