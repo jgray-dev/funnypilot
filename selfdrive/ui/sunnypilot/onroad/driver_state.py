@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+
 import numpy as np
 
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
@@ -15,6 +16,7 @@ class DriverStateRendererSP(DriverStateRenderer):
   def __init__(self):
     super().__init__()
     self.dev_ui_offset = DeveloperUiRenderer.get_bottom_dev_ui_offset()
+    self.set_visible(False)
 
   def _pre_calculate_drawing_elements(self):
     """Pre-calculate all drawing elements based on the current rectangle"""
@@ -37,13 +39,11 @@ class DriverStateRendererSP(DriverStateRenderer):
     # Horizontal arc
     h_width = abs(delta_x)
     self.h_arc_data = self._calculate_arc_data(
-      delta_x, h_width, self.position_x, self.position_y - ARC_LENGTH / 2,
-      self.driver_pose_sins[1], self.driver_pose_diff[1], is_horizontal=True
+      delta_x, h_width, self.position_x, self.position_y - ARC_LENGTH / 2, self.driver_pose_sins[1], self.driver_pose_diff[1], is_horizontal=True
     )
 
     # Vertical arc
     v_height = abs(delta_y)
     self.v_arc_data = self._calculate_arc_data(
-      delta_y, v_height, self.position_x - ARC_LENGTH / 2, self.position_y,
-      self.driver_pose_sins[0], self.driver_pose_diff[0], is_horizontal=False
+      delta_y, v_height, self.position_x - ARC_LENGTH / 2, self.position_y, self.driver_pose_sins[0], self.driver_pose_diff[0], is_horizontal=False
     )

@@ -239,10 +239,40 @@ class Sidebar(Widget, SidebarSP):
     text_pos = rl.Vector2(rect.x + 58, text_y)
     rl.draw_text_ex(self._font_regular, tr(self._net_type), text_pos, FONT_SIZE, 0, Colors.WHITE)
 
-    # FunnyPilot: show nav web server IP so user can connect from any network
+    # FunnyPilot: show nav web UI address prominently when sidebar is open
     if self._nav_ip:
       ip_text = f"{self._nav_ip}:{NAV_WEB_PORT}"
-      rl.draw_text_ex(self._font_regular, ip_text, rl.Vector2(rect.x + 58, text_y + 40), 25, 0, Colors.WHITE_DIM)
+      title = "NAV WEB UI"
+      panel_w = rect.width - 34
+      panel_h = 112
+      panel_x = rect.x + (rect.width - panel_w) / 2
+      panel_y = rect.y + rect.height * 0.5 - panel_h / 2
+      panel_rect = rl.Rectangle(panel_x, panel_y, panel_w, panel_h)
+
+      rl.draw_rectangle_rounded(panel_rect, 0.14, 10, rl.Color(18, 22, 30, 228))
+      rl.draw_rectangle_rounded_lines_ex(panel_rect, 0.14, 10, 2, rl.Color(255, 255, 255, 95))
+
+      title_size = 23
+      title_w = measure_text_cached(self._font_regular, title, title_size).x
+      rl.draw_text_ex(
+        self._font_regular,
+        title,
+        rl.Vector2(panel_x + (panel_w - title_w) / 2, panel_y + 14),
+        title_size,
+        0,
+        Colors.WHITE_DIM,
+      )
+
+      ip_size = 34
+      ip_w = measure_text_cached(self._font_bold, ip_text, ip_size).x
+      rl.draw_text_ex(
+        self._font_bold,
+        ip_text,
+        rl.Vector2(panel_x + (panel_w - ip_w) / 2, panel_y + 50),
+        ip_size,
+        0,
+        Colors.WHITE,
+      )
 
   def _draw_metrics(self, rect: rl.Rectangle):
     if gui_app.sunnypilot_ui():
