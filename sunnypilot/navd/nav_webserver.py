@@ -12,6 +12,7 @@ import json
 import math
 import os
 
+import cereal.messaging as messaging
 from aiohttp import web
 
 from openpilot.common.params import Params
@@ -24,6 +25,12 @@ from openpilot.sunnypilot.navd.routing.geocoder import autocomplete as geocode_a
 
 PORT = 8888
 WEB_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
+
+
+try:
+  _GPS_SM = messaging.SubMaster(["gpsLocationExternal"])
+except Exception:
+  _GPS_SM = None
 
 
 def _params_get_json(params: Params, key: str) -> dict | None:
@@ -41,6 +48,52 @@ def _params_put_json(params: Params, key: str, data: dict) -> bool:
   return nav_put_json(params, key, data)
 
 
+def _gps_from_params(params: Params) -> dict | None:
+  for key in ("LastGPSPosition", "LastGPSPositionLLK"):
+    data = _params_get_json(params, key)
+    if not isinstance(data, dict):
+      continue
+    lat = data.get("latitude", data.get("lat"))
+    lon = data.get("longitude", data.get("lon"))
+    if lat is None or lon is None:
+      continue
+    try:
+      lat_f = float(lat)
+      lon_f = float(lon)
+    except Exception:
+      continue
+    if lat_f != 0.0 or lon_f != 0.0:
+      data["latitude"] = lat_f
+      data["longitude"] = lon_f
+      return data
+  return None
+
+
+def _gps_live() -> dict | None:
+  if _GPS_SM is None:
+    return None
+  try:
+    _GPS_SM.update(0)
+    gps = _GPS_SM["gpsLocationExternal"]
+    lat = float(gps.latitude)
+    lon = float(gps.longitude)
+    if (lat == 0.0 and lon == 0.0) or float(gps.horizontalAccuracy) >= 100.0:
+      return None
+    return {
+      "latitude": lat,
+      "longitude": lon,
+      "accuracy": float(gps.horizontalAccuracy),
+      "speed": float(gps.speed),
+      "bearingDeg": float(gps.bearingDeg),
+    }
+  except Exception:
+    return None
+
+
+def _gps_best(params: Params) -> dict | None:
+  return _gps_from_params(params) or _gps_live()
+
+
 async def index(request):
   return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
 
@@ -48,7 +101,7 @@ async def index(request):
 async def api_status(request):
   params = Params()
   dest = _params_get_json(params, "NavDestination")
-  gps = _params_get_json(params, "LastGPSPosition")
+  gps = _gps_best(params)
   dest_lat = dest.get("lat", dest.get("latitude", 0.0)) if dest else 0.0
   dest_lon = dest.get("lon", dest.get("longitude", 0.0)) if dest else 0.0
   dest_name = dest.get("name", dest.get("place_name", "")) if dest else ""
@@ -154,7 +207,7 @@ async def api_autocomplete(request):
 
 
 async def api_gps(request):
-  data = _params_get_json(Params(), "LastGPSPosition")
+  data = _gps_best(Params())
   return web.json_response(data or {})
 
 
