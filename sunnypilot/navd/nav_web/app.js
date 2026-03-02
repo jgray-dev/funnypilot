@@ -9,6 +9,7 @@ let currentResults = [];
 let mapAvailable = false;
 let lastRouteKey = '';
 let routeFetchInFlight = false;
+let lastKnownGps = null;
 
 const ROUTE_SOURCE_ID = 'active-route-source';
 const ROUTE_LAYER_GLOW_ID = 'active-route-glow';
@@ -170,6 +171,17 @@ function fmtTime(seconds) {
   return h + 'h ' + rem + 'm';
 }
 
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => deg * Math.PI / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2))
+    * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function hasNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
@@ -205,6 +217,19 @@ async function pollStatus() {
     if (!r.ok) return;
     const data = await r.json();
 
+    let gpsLat = asFiniteNumber(data.gps_lat);
+    let gpsLon = asFiniteNumber(data.gps_lon);
+    if (gpsLat === null || gpsLon === null) {
+      try {
+        const gps = await fetchJson('/api/gps');
+        gpsLat = getLat(gps);
+        gpsLon = getLon(gps);
+      } catch (_) {}
+    }
+
+    const destLat = asFiniteNumber(data.dest_lat);
+    const destLon = asFiniteNumber(data.dest_lon);
+
     const strip = document.getElementById('status-strip');
     const stripText = document.getElementById('status-text');
     const destPanel = document.getElementById('dest-panel');
@@ -224,17 +249,18 @@ async function pollStatus() {
       destPanel.classList.remove('visible');
     }
 
-    if (mapAvailable && hasNumber(data.gps_lat) && hasNumber(data.gps_lon)) {
-      setMarkerPosition(gpsMarker, data.gps_lon, data.gps_lat);
+    if (mapAvailable && gpsLat !== null && gpsLon !== null) {
+      lastKnownGps = { lat: gpsLat, lon: gpsLon };
+      setMarkerPosition(gpsMarker, gpsLon, gpsLat);
       gpsMarker.getElement().style.display = 'block';
     }
 
-    if (mapAvailable && data.active && hasNumber(data.dest_lat) && hasNumber(data.dest_lon)) {
-      setMarkerPosition(destMarker, data.dest_lon, data.dest_lat);
+    if (mapAvailable && data.active && destLat !== null && destLon !== null) {
+      setMarkerPosition(destMarker, destLon, destLat);
       destMarker.getElement().style.display = 'block';
 
-      if (hasNumber(data.gps_lat) && hasNumber(data.gps_lon)) {
-        await updateRoutePreview(data.gps_lat, data.gps_lon, data.dest_lat, data.dest_lon);
+      if (gpsLat !== null && gpsLon !== null) {
+        await updateRoutePreview(gpsLat, gpsLon, destLat, destLon);
       }
     } else if (mapAvailable) {
       destMarker.getElement().style.display = 'none';
@@ -284,10 +310,16 @@ async function autocomplete(q) {
     return;
   }
   let url = '/api/autocomplete?q=' + encodeURIComponent(q);
+  let gpsForSort = null;
   try {
     const gps = await fetch('/api/gps').then(r => r.json()).catch(() => ({}));
-    if (hasNumber(gps.latitude) && hasNumber(gps.longitude)) {
-      url += '&lat=' + gps.latitude + '&lon=' + gps.longitude;
+    const gpsLat = getLat(gps);
+    const gpsLon = getLon(gps);
+    if (gpsLat !== null && gpsLon !== null) {
+      gpsForSort = { lat: gpsLat, lon: gpsLon };
+      url += '&lat=' + gpsLat + '&lon=' + gpsLon;
+    } else if (lastKnownGps) {
+      gpsForSort = lastKnownGps;
     }
   } catch (_) {}
 
@@ -295,6 +327,16 @@ async function autocomplete(q) {
     const r = await fetch(url);
     if (!r.ok) return;
     currentResults = await r.json();
+    if (Array.isArray(currentResults) && gpsForSort) {
+      currentResults = currentResults
+        .map((item) => {
+          const lat = getLat(item);
+          const lon = getLon(item);
+          if (lat === null || lon === null) return { ...item, _distM: Number.POSITIVE_INFINITY };
+          return { ...item, _distM: distanceMeters(gpsForSort.lat, gpsForSort.lon, lat, lon) };
+        })
+        .sort((a, b) => a._distM - b._distM);
+    }
     if (!Array.isArray(currentResults) || !currentResults.length) {
       closeDropdown();
       return;
@@ -311,7 +353,8 @@ function renderDropdown(results) {
   results.forEach((item, i) => {
     const div = document.createElement('div');
     div.className = 'autocomplete-item';
-    div.innerHTML = `<div class="item-name">${escHtml(item.name)}</div><div class="item-addr">${escHtml(item.address)}</div>`;
+    const distText = Number.isFinite(item._distM) ? ` • ${fmtDist(item._distM)}` : '';
+    div.innerHTML = `<div class="item-name">${escHtml(item.name)}</div><div class="item-addr">${escHtml(item.address)}${distText}</div>`;
     div.addEventListener('click', () => selectResult(i));
     list.appendChild(div);
   });
