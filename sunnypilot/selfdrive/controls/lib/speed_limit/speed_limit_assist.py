@@ -92,6 +92,7 @@ class SpeedLimitAssist:
     self._plus_hold = 0.0
     self._minus_hold = 0.0
     self._last_carstate_ts = 0.0
+    self._last_user_cruise_change_ts = 0.0
 
     # FunnyPilot: Dynamic SLA locking
     self._sla_locked = False  # True once SLA has been activated; cleared only on disable
@@ -144,6 +145,10 @@ class SpeedLimitAssist:
 
   def _update_locked_offset(self) -> None:
     """FunnyPilot: Recalculate dynamic offset when user adjusts cruise while locked."""
+    # Only update if the user recently pressed a cruise adjustment button (within last 3 seconds)
+    if time.monotonic() - self._last_user_cruise_change_ts > 3.0:
+      return
+
     if self._has_speed_limit and self._speed_limit_final_last > 0 and self.v_cruise_cluster > 0:
       ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
       # Cap to ±50% to prevent extreme effective targets from bad data
@@ -184,11 +189,13 @@ class SpeedLimitAssist:
     self._last_carstate_ts = now
 
     for b in CS.buttonEvents:
-      if not b.pressed:
+      if b.pressed:
         if b.type in CRUISE_BUTTONS_PLUS:
           self._plus_hold = max(self._plus_hold, now + CRUISE_BUTTON_CONFIRM_HOLD)
+          self._last_user_cruise_change_ts = now
         elif b.type in CRUISE_BUTTONS_MINUS:
           self._minus_hold = max(self._minus_hold, now + CRUISE_BUTTON_CONFIRM_HOLD)
+          self._last_user_cruise_change_ts = now
 
   def _get_button_release(self, req_plus: bool, req_minus: bool) -> bool:
     now = time.monotonic()

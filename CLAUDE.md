@@ -67,6 +67,13 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.5 Changes
+
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Fixed dynamic speed limit assist resetting to 0% on speed limit changes. Prevented the offset ratio from recalculating when the system automatically sets the `v_cruise_cluster` value, requiring manual user interaction to update the ratio.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` - Added call to `self.sla.update_car_state(CS)` so button states and cruise changes can be accurately monitored.
+- `selfdrive/ui/onroad/model_renderer.py` - Safely access `navInstruction.lanes` using `getattr` to prevent UI crash on unpopulated fields.
+- `system/updated/updated.py`, `selfdrive/ui/sunnypilot/layouts/settings/software.py` - Updated `_is_funnypilot_branch` to also allow fetching and selecting upstream `main`, `dev`, and `staging` branches. Fixed regex to support branch suffixes properly.
+
 ### v1.0.4ar Changes
 
 - `selfdrive/ui/sunnypilot/onroad/navigation_panel.py` - Replaced the boxed nav card with a minimal AR-style overlay: projected lane ribbon, target lane highlight, horizon turn cue, compact textual guidance, and lane-change status.

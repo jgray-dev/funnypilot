@@ -73,11 +73,19 @@ class SoftwareLayoutSP(SoftwareLayout):
 
   @staticmethod
   def _is_funnypilot_version_branch(branch: str) -> bool:
-    return re.fullmatch(r"(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]|-[a-z0-9._-]+)?", branch) is not None
+    if branch in ("dev", "staging", "main"):
+      return True
+    return re.fullmatch(r"(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]+|-[a-z0-9._-]+)?", branch) is not None
 
   @staticmethod
   def _branch_sort_key(branch: str) -> tuple[int, int, int, int, str]:
-    m = re.fullmatch(r"(?:funnypilot-)?(\d+)\.(\d+)\.(\d+)([a-z]|-[a-z0-9._-]+)?", branch)
+    if branch == "dev":
+      return (0, 0, 0, 0, "c")
+    if branch == "staging":
+      return (0, 0, 0, 0, "b")
+    if branch == "main":
+      return (0, 0, 0, 0, "a")
+    m = re.fullmatch(r"(?:funnypilot-)?(\d+)\.(\d+)\.(\d+)([a-z]+|-[a-z0-9._-]+)?", branch)
     if m is None:
       return (0, 0, 0, 0, "")
     major, minor, patch, suffix_raw = m.groups()
@@ -127,7 +135,7 @@ class SoftwareLayoutSP(SoftwareLayout):
       b = b[len("refs/heads/") :]
     if "/" in b and not b.startswith("funnypilot-"):
       tail = b.rsplit("/", 1)[-1]
-      if re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]?", tail):
+      if re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]*", tail):
         b = tail
     return b
 

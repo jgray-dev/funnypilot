@@ -1,3 +1,11 @@
+FunnyPilot v1.0.5 (2026-03-07)
+========================
+* Bugfixes and refinements:
+  - Fixed an issue where the dynamic speed limit offset (percentage) was incorrectly reset to 0% when entering a new speed limit zone if the car's cruise speed automatically adapted to the new limit.
+  - Hardened the `model_renderer.py` AR navigation logic to safely parse navigation lane data from cereal, preventing potential UI crashes on older or incomplete navigation payloads.
+  - Updated the `Updater` and `SoftwareLayoutSP` branch filtering logic. The branch selector in the UI will now accurately list all available `funnypilot-*` version branches, as well as `main`, `dev`, and `staging`.
+  - Cleaned up the remote repository by removing over 190 stale test/dev branches, keeping only the essential release and staging branches to make the in-car branch selector clean and responsive.
+
 FunnyPilot v1.0.4ar (2026-03-02)
 ========================
 * Onroad navigation UI rewritten as an AR-style overlay (no bottom-left box):
