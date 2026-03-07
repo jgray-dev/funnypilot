@@ -67,9 +67,11 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._camera_offset = ui_state.params.get("CameraOffset", return_default=True) if ui_state.active_bundle else 0.0
     # Initialize ModelPoints objects
     self._path = ModelPoints()
+    self._nav_path = ModelPoints()
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
+    self._nav_target_lines = []
 
     # Transform matrix (3x3 for car space to screen space)
     self._car_space_transform = np.zeros((3, 3), dtype=np.float32)
@@ -191,9 +193,23 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     max_distance = np.clip(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
     max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
 
+    # Determine nav target lines if active
+    self._nav_target_lines = []
+    if self._nav_active:
+      shift = self._nav_lane_shift()
+      if shift >= 1:
+        self._nav_target_lines = [0, 1]
+      elif shift <= -1:
+        self._nav_target_lines = [2, 3]
+      else:
+        self._nav_target_lines = [1, 2]
+
     # Update lane lines using raw points
     for i, lane_line in enumerate(self._lane_lines):
-      lane_line.projected_points = self._map_line_to_polygon(lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance)
+      thickness = 0.025 * self._lane_line_probs[i]
+      if self._nav_active and i in self._nav_target_lines:
+        thickness = 0.05  # Make nav lane lines thicker
+      lane_line.projected_points = self._map_line_to_polygon(lane_line.raw_points, thickness, 0.0, max_idx, max_distance)
 
     # Update road edges using raw points
     for road_edge in self._road_edges:
@@ -206,6 +222,16 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
     self._path.projected_points = self._map_line_to_polygon(self._path.raw_points, 0.9, self._path_offset_z, max_idx, max_distance, allow_invert=False)
+
+    # Update nav path using raw points shifted to the target lane
+    if self._nav_active:
+      lane_shift = self._nav_lane_shift()
+      lane_width = self._estimate_lane_width()
+      nav_raw_points = self._path.raw_points.copy()
+      nav_raw_points[:, 1] += lane_shift * lane_width
+      self._nav_path.projected_points = self._map_line_to_polygon(nav_raw_points, 0.9, self._path_offset_z, max_idx, max_distance, allow_invert=False)
+    else:
+      self._nav_path.projected_points = np.empty((0, 2), dtype=np.float32)
 
     self._update_experimental_gradient()
 
@@ -285,7 +311,42 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
         continue
 
       alpha = np.clip(self._lane_line_probs[i], 0.0, 0.7)
-      color = rl.Color(255, 255, 255, int(alpha * 255))
+
+      if self._nav_active and i in self._nav_target_lines:
+        alpha = np.clip(alpha + 0.3, 0.0, 1.0)
+
+        # Calculate distance-based color shift (turn approaches)
+        dist_factor = np.clip(self._nav_distance / 200.0, 0.0, 1.0)
+
+        # Calculate pulse for lane changes (slow pulsing)
+        pulse = 0.5 + 0.5 * np.sin(time.monotonic() * 4.0)  # Pulse frequency
+
+        # Determine the base color
+        modifier = (self._nav_modifier or "").lower()
+        if "left" in modifier or "right" in modifier or "turn" in modifier:
+          # Shift color to warmer tone (like a turn signal) as we get closer
+          r = int(np.interp(dist_factor, [0.0, 1.0], [255, NAV_GUIDE_COLOR.r]))
+          g = int(np.interp(dist_factor, [0.0, 1.0], [150, NAV_GUIDE_COLOR.g]))
+          b = int(np.interp(dist_factor, [0.0, 1.0], [0, NAV_GUIDE_COLOR.b]))
+
+          # Add pulse if it's a lane change (turn modifier with lateral shift)
+          if self._nav_lane_shift() != 0:
+            alpha_pulse = np.clip(alpha * (0.6 + 0.4 * pulse), 0.0, 1.0)
+          else:
+            alpha_pulse = alpha
+
+          color = rl.Color(r, g, b, int(alpha_pulse * 255))
+        else:
+          # Just regular navigation guidance color, maybe pulse if we need to change lanes
+          if self._nav_lane_shift() != 0:
+            alpha_pulse = np.clip(alpha * (0.6 + 0.4 * pulse), 0.0, 1.0)
+          else:
+            alpha_pulse = alpha
+
+          color = rl.Color(NAV_GUIDE_COLOR.r, NAV_GUIDE_COLOR.g, NAV_GUIDE_COLOR.b, int(alpha_pulse * 255))
+      else:
+        color = rl.Color(255, 255, 255, int(alpha * 255))
+
       draw_polygon(self._rect, lane_line.projected_points, color)
 
     for i, road_edge in enumerate(self._road_edges):
@@ -365,35 +426,16 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     if not self._nav_active or self._path.raw_points.size == 0:
       return
 
-    lane_shift = self._nav_lane_shift()
-    lane_width = self._estimate_lane_width()
-    lateral_offset = lane_shift * lane_width + self._camera_offset
-
+    # Use the path to find where to put the label
     first_distance = float(np.clip(self._nav_distance, 8.0, 28.0))
-    mark_distances = [first_distance, min(first_distance + 10.0, 45.0), min(first_distance + 20.0, 60.0)]
+    path_idx = self._get_path_length_idx(self._path.raw_points[:, 0], first_distance)
+    z = self._path.raw_points[path_idx, 2] if path_idx < len(self._path.raw_points) else 0.0
 
-    points = []
-    for idx, distance in enumerate(mark_distances):
-      path_idx = self._get_path_length_idx(self._path.raw_points[:, 0], distance)
-      z = self._path.raw_points[path_idx, 2] if path_idx < len(self._path.raw_points) else 0.0
-      screen_point = self._map_to_screen(distance, lateral_offset, z + self._path_offset_z)
-      if screen_point is None:
-        continue
+    # Put label in the center of the lane
+    screen_point = self._map_to_screen(first_distance, self._camera_offset, z + self._path_offset_z)
 
-      alpha = int(np.interp(idx, [0, 2], [235, 100]))
-      size = float(np.interp(distance, [8.0, 60.0], [24.0, 11.0]))
-      self._draw_nav_marker(screen_point[0], screen_point[1], size, alpha)
-      points.append(screen_point)
-
-    if len(points) >= 2:
-      for i in range(len(points) - 1):
-        a = points[i]
-        b = points[i + 1]
-        color = NAV_GUIDE_COLOR if i == 0 else NAV_GUIDE_FADE
-        rl.draw_line_ex(rl.Vector2(a[0], a[1]), rl.Vector2(b[0], b[1]), 3.0 - i, color)
-
-    if points:
-      lead_x, lead_y = points[0]
+    if screen_point:
+      lead_x, lead_y = screen_point
       dist_text = self._format_distance(self._nav_distance)
       eta_text = self._format_eta(self._nav_time_remaining)
       label = f"{dist_text}  {self._nav_primary[:26]}"
@@ -404,19 +446,6 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       rl.draw_text(label, int(label_x + 2), int(label_y + 2), 30, rl.Color(0, 0, 0, 175))
       rl.draw_text(label, int(label_x), int(label_y), 30, NAV_TEXT_COLOR)
       rl.draw_text(f"ETA {eta_text}", int(label_x), int(label_y + 28), 22, rl.Color(184, 220, 238, 225))
-
-  def _draw_nav_marker(self, x: float, y: float, size: float, alpha: int) -> None:
-    direction_bias = self._turn_bias()
-    color = rl.Color(NAV_GUIDE_COLOR.r, NAV_GUIDE_COLOR.g, NAV_GUIDE_COLOR.b, alpha)
-    tip = rl.Vector2(x + direction_bias * size * 0.26, y - size)
-    left = rl.Vector2(x - size * 0.6, y + size * 0.45)
-    right = rl.Vector2(x + size * 0.6, y + size * 0.45)
-    inner_tip = rl.Vector2(x + direction_bias * size * 0.2, y - size * 0.35)
-    inner_left = rl.Vector2(x - size * 0.28, y + size * 0.24)
-    inner_right = rl.Vector2(x + size * 0.28, y + size * 0.24)
-
-    rl.draw_triangle(left, tip, right, color)
-    rl.draw_triangle(inner_left, inner_tip, inner_right, rl.Color(7, 30, 38, min(255, alpha + 10)))
 
   def _estimate_lane_width(self) -> float:
     left = self._lane_lines[1].raw_points
