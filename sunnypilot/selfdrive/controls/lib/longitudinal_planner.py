@@ -33,8 +33,8 @@ class LongitudinalPlannerSP:
     self.source = LongitudinalPlanSource.cruise
     self.e2e_alerts_helper = E2EAlertsHelper()
 
-    self.output_v_target = 0.
-    self.output_a_target = 0.
+    self.output_v_target = 0.0
+    self.output_a_target = 0.0
 
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
     experimental_mode = sm['selfdriveState'].experimentalMode
@@ -58,9 +58,20 @@ class LongitudinalPlannerSP:
     self.resolver.update(v_ego, sm)
 
     # Speed Limit Assist
+    self.sla.update_car_state(CS)
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
-    self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
-                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
+    self.sla.update(
+      long_enabled,
+      long_override,
+      v_ego,
+      a_ego,
+      v_cruise_cluster,
+      self.resolver.speed_limit,
+      self.resolver.speed_limit_final_last,
+      has_speed_limit,
+      self.resolver.distance,
+      self.events_sp,
+    )
 
     targets = {
       LongitudinalPlanSource.cruise: (v_cruise, a_ego),
@@ -134,7 +145,7 @@ class LongitudinalPlannerSP:
     assist.active = self.sla.is_active
     assist.vTarget = float(self.sla.output_v_target)
     assist.aTarget = float(self.sla.output_a_target)
-    assist.slaLocked = bool(self.sla.sla_locked)             # FunnyPilot: dynamic SLA lock
+    assist.slaLocked = bool(self.sla.sla_locked)  # FunnyPilot: dynamic SLA lock
     assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)  # FunnyPilot: offset ratio
 
     # E2E Alerts

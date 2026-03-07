@@ -351,8 +351,9 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       self._nav_modifier = ni.maneuverModifier or "straight"
       self._nav_primary = ni.maneuverPrimaryText or ""
       self._nav_distance = float(ni.maneuverDistance)
-      self._nav_lane_count = len(ni.lanes)
-      self._nav_lanes_active = [i for i, lane in enumerate(ni.lanes) if getattr(lane, 'active', False)]
+      lanes = getattr(ni, 'lanes', [])
+      self._nav_lane_count = len(lanes)
+      self._nav_lanes_active = [i for i, lane in enumerate(lanes) if getattr(lane, 'active', False)]
 
     if self._nav_active and dt > 0.0:
       v_ego = float(sm['carState'].vEgo)
