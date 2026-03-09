@@ -1,3 +1,14 @@
+FunnyPilot v1.0.5.3 (2026-03-09)
+========================
+* Rebased onto upstream `sunnypilot` dev branch, bringing in latest core updates and fixes.
+* Prioritized `funnypilot` custom code to ensure our modifications (nav stack, dynamic SLA, custom follow distances) remain intact.
+
+FunnyPilot v1.0.5.2 (2026-03-09)
+========================
+* Rebased onto upstream `sunnypilot` dev branch, bringing in latest core updates and fixes.
+* Adjusted following distance profiles in `longitudinal_mpc_lib` to provide a more natural and comfortable driving experience across all speeds.
+* Renamed 1.0.3-spark and 1.0.4ar branches to follow the `funnypilot-` semantic version for branch naming.
+
 FunnyPilot v1.0.5 (2026-03-07)
 ========================
 * Bugfixes and refinements:
