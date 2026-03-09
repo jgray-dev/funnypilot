@@ -93,6 +93,7 @@ class SpeedLimitAssist:
     self._minus_hold = 0.0
     self._last_carstate_ts = 0.0
     self._last_user_cruise_change_ts = 0.0
+    self._last_speed_limit_change_ts = 0.0
 
     # FunnyPilot: Dynamic SLA locking
     self._sla_locked = False  # True once SLA has been activated; cleared only on disable
@@ -145,14 +146,25 @@ class SpeedLimitAssist:
 
   def _update_locked_offset(self) -> None:
     """FunnyPilot: Recalculate dynamic offset when user adjusts cruise while locked."""
-    # Only update if the user recently pressed a cruise adjustment button (within last 3 seconds)
-    if time.monotonic() - self._last_user_cruise_change_ts > 3.0:
+    if not self._has_speed_limit or self._speed_limit_final_last <= 0 or self.v_cruise_cluster <= 0:
       return
 
-    if self._has_speed_limit and self._speed_limit_final_last > 0 and self.v_cruise_cluster > 0:
-      ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
-      # Cap to ±50% to prevent extreme effective targets from bad data
-      self._dynamic_offset_ratio = max(-0.5, min(0.5, ratio))
+    recent_speed_limit_change = time.monotonic() - self._last_speed_limit_change_ts < 4.0
+    recent_user_press = time.monotonic() - self._last_user_cruise_change_ts < 3.0
+
+    if recent_speed_limit_change and not recent_user_press:
+      speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
+      v_cruise_conv = round(self.v_cruise_cluster * speed_conv)
+      base_limit_conv = round(self._speed_limit_final_last * speed_conv)
+
+      # If the system automatically resets v_cruise exactly to the bare speed limit
+      # shortly after entering a new zone, ignore it so we don't wipe out the user's dynamic offset.
+      if v_cruise_conv == base_limit_conv:
+        return
+
+    ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
+    # Cap to ±50% to prevent extreme effective targets from bad data
+    self._dynamic_offset_ratio = max(-0.5, min(0.5, ratio))
 
   def update_active_event(self, events_sp: EventsSP) -> None:
     if self.v_cruise_cluster_below_confirm_speed_threshold:
@@ -504,6 +516,9 @@ class SpeedLimitAssist:
     self.long_enabled = long_enabled
     self.v_ego = v_ego
     self.a_ego = a_ego
+
+    if self._speed_limit_final_last != speed_limit_final_last:
+      self._last_speed_limit_change_ts = time.monotonic()
 
     self._has_speed_limit = has_speed_limit
     self._speed_limit = speed_limit

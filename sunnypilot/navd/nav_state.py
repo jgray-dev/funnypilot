@@ -26,6 +26,7 @@ class NavState:
     self.time_remaining: float = 0.0
     self.total_route_duration: float = 0.0
     self.total_route_distance: float = 0.0
+    self._min_dist_to_maneuver: float = 100000.0
 
   def set_route(self, route: dict, dest_lat: float, dest_lon: float, dest_name: str = "", dest_addr: str = "") -> None:
     """Load a new route from OSRM response."""
@@ -39,6 +40,7 @@ class NavState:
     self.distance_remaining = self.total_route_distance
     self.time_remaining = self.total_route_duration
     self.distance_to_maneuver = 0.0
+    self._min_dist_to_maneuver = 100000.0
 
     coords = route.get("geometry", {}).get("coordinates", [])
     self.geometry_coords = [Coordinate(c[1], c[0]) for c in coords]
@@ -53,6 +55,7 @@ class NavState:
     self.distance_to_maneuver = 0.0
     self.distance_remaining = 0.0
     self.time_remaining = 0.0
+    self._min_dist_to_maneuver = 100000.0
 
   @property
   def active(self) -> bool:
@@ -79,9 +82,18 @@ class NavState:
       maneuver_coord = Coordinate(maneuver_loc[1], maneuver_loc[0])
       dist_to_maneuver = pos.distance_to(maneuver_coord)
 
-      if dist_to_maneuver < 30.0:
+      # If we are within 35m, or we got within 150m and are now moving away (passed it)
+      passed_maneuver = False
+      if dist_to_maneuver < 35.0:
+        passed_maneuver = True
+      elif self._min_dist_to_maneuver < 150.0 and dist_to_maneuver > self._min_dist_to_maneuver + 25.0:
+        passed_maneuver = True
+
+      if passed_maneuver:
         self.step_index += 1
+        self._min_dist_to_maneuver = 100000.0
       else:
+        self._min_dist_to_maneuver = min(self._min_dist_to_maneuver, dist_to_maneuver)
         self.distance_to_maneuver = dist_to_maneuver
         break
     else:
