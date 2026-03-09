@@ -75,7 +75,7 @@ class SoftwareLayoutSP(SoftwareLayout):
   def _is_funnypilot_version_branch(branch: str) -> bool:
     if branch in ("dev", "staging", "main"):
       return True
-    return re.fullmatch(r"(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]+|-[a-z0-9._-]+)?", branch) is not None
+    return re.fullmatch(r"(?:funnypilot-)?\d+\.\d+\.\d+(?:\.\d+)?(?:[a-z]+|-[a-z0-9._-]+)?", branch) is not None
 
   @staticmethod
   def _branch_sort_key(branch: str) -> tuple[int, int, int, int, str]:
@@ -85,19 +85,33 @@ class SoftwareLayoutSP(SoftwareLayout):
       return (0, 0, 0, 0, "b")
     if branch == "main":
       return (0, 0, 0, 0, "a")
-    m = re.fullmatch(r"(?:funnypilot-)?(\d+)\.(\d+)\.(\d+)([a-z]+|-[a-z0-9._-]+)?", branch)
+    m = re.fullmatch(r"(?:funnypilot-)?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?([a-z]+|-[a-z0-9._-]+)?", branch)
     if m is None:
       return (0, 0, 0, 0, "")
-    major, minor, patch, suffix_raw = m.groups()
+    major, minor, patch, revision_raw, suffix_raw = m.groups()
+    revision = int(revision_raw) if revision_raw else 0
     suffix = suffix_raw or ""
     suffix_rank = 1 if suffix else 0
-    return (int(major), int(minor), int(patch), suffix_rank, suffix)
+    return (int(major), int(minor), int(patch), revision, suffix_rank, suffix)
 
   @staticmethod
   def _display_branch_name(branch: str) -> str:
+    display = branch
     if branch.startswith("funnypilot-"):
-      return branch[len("funnypilot-") :]
-    return branch
+      display = branch[len("funnypilot-") :]
+
+    # Mark old branches before the updater was fixed
+    if (
+      display.startswith("0.")
+      or display.startswith("1.0.0")
+      or display.startswith("1.0.1")
+      or display.startswith("1.0.2")
+      or display.startswith("1.0.3")
+      or display.startswith("1.0.4")
+    ):
+      display += " (Legacy Updater)"
+
+    return display
 
   @staticmethod
   def _parse_updater_state(state: str) -> tuple[str, int, str]:
@@ -135,7 +149,7 @@ class SoftwareLayoutSP(SoftwareLayout):
       b = b[len("refs/heads/") :]
     if "/" in b and not b.startswith("funnypilot-"):
       tail = b.rsplit("/", 1)[-1]
-      if re.fullmatch(r"funnypilot-\d+\.\d+\.\d+[a-z]*", tail):
+      if re.fullmatch(r"funnypilot-\d+\.\d+\.\d+(?:\.\d+)?[a-z]*", tail):
         b = tail
     return b
 

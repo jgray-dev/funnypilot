@@ -37,7 +37,7 @@ ROUTES_NO_CONNECTIVITY_MAX = 84
 HOURS_NO_CONNECTIVITY_PROMPT = 23
 ROUTES_NO_CONNECTIVITY_PROMPT = 80
 FUNNYPILOT_REMOTE = "funnypilot"
-FUNNYPILOT_BRANCH_RE = re.compile(r"^(?:funnypilot-)?\d+\.\d+\.\d+(?:[a-z]+|-[a-z0-9._-]+)?$")
+FUNNYPILOT_BRANCH_RE = re.compile(r"^(?:funnypilot-)?\d+\.\d+\.\d+(?:\.\d+)?(?:[a-z]+|-[a-z0-9._-]+)?$")
 
 
 class UserRequest:
@@ -257,8 +257,18 @@ class Updater:
     except subprocess.CalledProcessError:
       return False
 
+  @staticmethod
+  def _ensure_funnypilot_remote() -> bool:
+    if Updater._remote_exists(FUNNYPILOT_REMOTE):
+      return True
+    try:
+      run(["git", "remote", "add", FUNNYPILOT_REMOTE, "https://github.com/jgray-dev/funnypilot.git"], OVERLAY_MERGED)
+      return True
+    except subprocess.CalledProcessError:
+      return False
+
   def _get_fetch_remote(self, branch: str) -> str:
-    if self._is_funnypilot_branch(branch) and self._remote_exists(FUNNYPILOT_REMOTE):
+    if self._is_funnypilot_branch(branch) and self._ensure_funnypilot_remote():
       return FUNNYPILOT_REMOTE
     return "origin"
 
@@ -377,7 +387,7 @@ class Updater:
     setup_git_options(OVERLAY_MERGED)
 
     remote = "origin"
-    if self._remote_exists(FUNNYPILOT_REMOTE):
+    if self._ensure_funnypilot_remote():
       remote = FUNNYPILOT_REMOTE
 
     try:
