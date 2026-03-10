@@ -12,7 +12,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist, V_CRUISE_UNSET
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
@@ -73,11 +73,23 @@ class LongitudinalPlannerSP:
       self.events_sp,
     )
 
+    # FunnyPilot: When SLA is locked and active (dynamic offset mode), use the effective SLA target
+    # as the cruise reference. The normal min() logic only allows SLA to limit speed downward;
+    # when the speed limit increases, the raw v_cruise (car's ECU value) stays at the old/bare
+    # limit and wins the min(), completely ignoring the user's dynamic offset. Replacing v_cruise
+    # with the SLA effective target ensures the offset is honoured in both directions while still
+    # letting SCC (lead/curve) pull the speed lower when needed.
+    sla_v = self.sla.output_v_target
+    if self.sla.sla_locked and self.sla.is_active and sla_v < V_CRUISE_UNSET:
+      effective_cruise = sla_v
+    else:
+      effective_cruise = v_cruise
+
     targets = {
-      LongitudinalPlanSource.cruise: (v_cruise, a_ego),
+      LongitudinalPlanSource.cruise: (effective_cruise, a_ego),
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
-      LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
+      LongitudinalPlanSource.speedLimitAssist: (sla_v, self.sla.output_a_target),
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])

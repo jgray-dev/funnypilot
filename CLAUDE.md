@@ -33,6 +33,10 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.5.5 Changes
+
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` - Fixed dynamic SLA offset being ignored when entering a higher speed limit zone. When `sla_locked` and active, the SLA effective target now replaces `v_cruise` in the planner's target-selection dict so `min()` can't bypass the offset upward. SCC can still override lower for leads/curves.
+
 ### v1.0.5.4 Changes
 
 - `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` - Removed `NavigationPanel` (fake AR ribbon overlay from 1.0.4ar that was never cleaned up). Navigation guidance now rendered exclusively by `model_renderer.py` (real AR lane coloring + projected text). `NavQuickAccess` pre-drive buttons unaffected.

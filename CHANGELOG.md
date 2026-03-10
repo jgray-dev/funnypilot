@@ -1,3 +1,9 @@
+FunnyPilot v1.0.5.5 (2026-03-10)
+========================
+* Fixed dynamic SLA offset not applying when entering a higher speed limit zone.
+  - Root cause: the planner's target selection uses `min()` across all sources, so SLA only ever acted as a speed *limiter*. When the limit increased (e.g. 30→40 mph) the car's ECU cruise value (40 mph bare limit) was lower than SLA's effective target (48 mph with 20% offset), so cruise always won and the offset was silently discarded.
+  - Fix: when SLA is locked and active, substitute the SLA effective target as the cruise reference in the target-selection dict. SCC (lead vehicle, curves) can still pull the speed lower; the dynamic offset is now honoured in both directions.
+
 FunnyPilot v1.0.5.4 (2026-03-10)
 ========================
 * Removed the fake AR-style navigation ribbon overlay (`NavigationPanel`) that was added in 1.0.4ar and never cleaned up.
