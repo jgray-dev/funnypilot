@@ -1,3 +1,13 @@
+FunnyPilot v1.0.6.1 (2026-03-10)
+========================
+* Fixed dynamic SLA offset being ignored when entering a higher speed limit zone (second, more complete fix).
+  - Root cause 1 (guard logic): `_update_locked_offset()` had a complex timestamp+equality guard that was unreliable. Simplified to: only recalculate the stored ratio when there is a recent user button press. Automatic system-driven cruise changes (zone entry, PCM tracking) no longer overwrite the offset.
+  - Root cause 2 (non-PCM cruise): `update_speed_limit_assist_v_cruise_non_pcm()` was resetting `v_cruise_kph` to the bare new speed limit on zone entry, ignoring the dynamic ratio entirely. Now uses the SLA's effective target (`assist.vTarget`, bare limit × dynamic ratio) when SLA is locked.
+* Added real-time memory usage indicator to developer UI (bottom bar, always visible when dev UI enabled).
+  - Reads `/proc/meminfo` each frame; displays used/total in GB (e.g. `1.5/3.8G`).
+  - White when usage is below 75%, orange 75–90%, red above 90%.
+  - Useful for diagnosing "memory low" reboot errors.
+
 FunnyPilot v1.0.5.5 (2026-03-10)
 ========================
 * Fixed dynamic SLA offset not applying when entering a higher speed limit zone.

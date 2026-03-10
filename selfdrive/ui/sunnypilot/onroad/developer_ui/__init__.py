@@ -10,7 +10,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
-  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement
+  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
+  MemoryUsageElement
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -44,6 +45,7 @@ class DeveloperUiRenderer(Widget):
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
     self.altitude_elem = AltitudeElement()
+    self.memory_elem = MemoryUsageElement()
 
   @staticmethod
   def get_bottom_dev_ui_offset():
@@ -134,6 +136,7 @@ class DeveloperUiRenderer(Widget):
     elements = [
       self.a_ego_elem.update(sm, ui_state.is_metric),
       self.lead_speed_elem.update(sm, ui_state.is_metric),
+      self.memory_elem.update(sm, ui_state.is_metric),
     ]
 
     # Add torque-specific elements if using torque control

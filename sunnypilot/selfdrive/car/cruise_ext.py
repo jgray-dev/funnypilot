@@ -63,6 +63,9 @@ class VCruiseHelperSP:
     self.prev_speed_limit_final_last_kph = 0.
     self.req_plus = False
     self.req_minus = False
+    # FunnyPilot: Dynamic SLA locked state and effective target (with dynamic offset applied)
+    self.sla_locked = False
+    self.sla_v_target_kph = 0.
 
   def read_custom_set_speed_params(self) -> None:
     self.custom_acc_enabled = self.params.get_bool("CustomAccIncrementsEnabled")
@@ -113,6 +116,10 @@ class VCruiseHelperSP:
     self.speed_limit_final_last = LP_SP.speedLimit.resolver.speedLimitFinalLast
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
+    # FunnyPilot: Track SLA lock state and effective target (bare limit × dynamic offset ratio)
+    self.sla_locked = LP_SP.speedLimit.assist.slaLocked
+    assist_v_target = LP_SP.speedLimit.assist.vTarget
+    self.sla_v_target_kph = assist_v_target * CV.MS_TO_KPH if assist_v_target > 0 else 0.
     self.req_plus, self.req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
                                                            self.speed_limit_final_last, is_metric)
 
@@ -132,7 +139,13 @@ class VCruiseHelperSP:
   def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
     if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
                                                 self.update_speed_limit_final_last_changed):
-      self.v_cruise_kph = np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
+      # FunnyPilot: When SLA is locked (dynamic offset mode), use the effective target
+      # (bare limit × dynamic ratio) so the set speed reflects the user's chosen offset
+      # rather than snapping to the bare new speed limit on zone entry.
+      if self.sla_locked and self.sla_v_target_kph > 0:
+        self.v_cruise_kph = np.clip(round(self.sla_v_target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
+      else:
+        self.v_cruise_kph = np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
     self.prev_sla_state = self.sla_state
     self.prev_speed_limit_final_last_kph = self.speed_limit_final_last_kph

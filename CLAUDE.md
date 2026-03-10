@@ -33,6 +33,13 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.6.1 Changes
+
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Simplified `_update_locked_offset()` guard: removed the complex timestamp+equality check, replaced with a single "recent user button press within 3 seconds" gate. Automatic cruise changes (zone entry, system-driven) no longer corrupt the stored dynamic offset ratio.
+- `sunnypilot/selfdrive/car/cruise_ext.py` - Added `sla_locked` and `sla_v_target_kph` fields. `update_speed_limit_assist()` now reads `LP_SP.speedLimit.assist.slaLocked` and `assist.vTarget`. `update_speed_limit_assist_v_cruise_non_pcm()` now uses the SLA effective target (bare limit × ratio) when `sla_locked`, instead of the bare limit, so the set speed correctly reflects the dynamic offset on zone entry.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` - Added `MemoryUsageElement` that reads `/proc/meminfo` and displays used/total RAM in GB with color-coded thresholds (white <75%, orange 75-90%, red >90%).
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` - Added `MemoryUsageElement` to bottom dev UI bar (always visible when dev UI is on).
+
 ### v1.0.5.5 Changes
 
 - `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` - Fixed dynamic SLA offset being ignored when entering a higher speed limit zone. When `sla_locked` and active, the SLA effective target now replaces `v_cruise` in the planner's target-selection dict so `min()` can't bypass the offset upward. SCC can still override lower for leads/curves.

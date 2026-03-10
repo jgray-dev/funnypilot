@@ -149,18 +149,11 @@ class SpeedLimitAssist:
     if not self._has_speed_limit or self._speed_limit_final_last <= 0 or self.v_cruise_cluster <= 0:
       return
 
-    recent_speed_limit_change = time.monotonic() - self._last_speed_limit_change_ts < 4.0
-    recent_user_press = time.monotonic() - self._last_user_cruise_change_ts < 3.0
-
-    if recent_speed_limit_change and not recent_user_press:
-      speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
-      v_cruise_conv = round(self.v_cruise_cluster * speed_conv)
-      base_limit_conv = round(self._speed_limit_final_last * speed_conv)
-
-      # If the system automatically resets v_cruise exactly to the bare speed limit
-      # shortly after entering a new zone, ignore it so we don't wipe out the user's dynamic offset.
-      if v_cruise_conv == base_limit_conv:
-        return
+    # Only recalculate ratio on recent user-initiated cruise changes.
+    # Automatic adjustments (system tracking a new speed limit zone) must not overwrite
+    # the stored offset — those show up as v_cruise_cluster_changed without a user press.
+    if time.monotonic() - self._last_user_cruise_change_ts > 3.0:
+      return
 
     ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
     # Cap to ±50% to prevent extreme effective targets from bad data
