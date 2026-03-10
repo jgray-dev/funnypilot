@@ -33,6 +33,10 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.5.4 Changes
+
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` - Removed `NavigationPanel` (fake AR ribbon overlay from 1.0.4ar that was never cleaned up). Navigation guidance now rendered exclusively by `model_renderer.py` (real AR lane coloring + projected text). `NavQuickAccess` pre-drive buttons unaffected.
+
 ### v1.0.5 Changes
 
 - `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Fixed dynamic speed limit assist resetting to 0% on speed limit changes. Prevented the offset ratio from recalculating when the system automatically sets the `v_cruise_cluster` value, requiring manual user interaction to update the ratio.

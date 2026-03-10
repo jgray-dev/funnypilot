@@ -17,7 +17,6 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.smart_cruise_control import SmartC
 from openpilot.selfdrive.ui.sunnypilot.onroad.turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.sunnypilot.onroad.circular_alerts import CircularAlertsRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_renderer import SpeedRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.navigation_panel import NavigationPanel
 from openpilot.selfdrive.ui.sunnypilot.onroad.nav_quick_access import NavQuickAccess
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer, UI_CONFIG, FONT_SIZES, COLORS, CRUISE_DISABLED_CHAR
@@ -38,7 +37,6 @@ class HudRendererSP(HudRenderer):
     self.circular_alerts_renderer = CircularAlertsRenderer()
     self.speed_renderer = SpeedRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
-    self.navigation_panel = NavigationPanel()
     self.nav_quick_access = NavQuickAccess()
 
     self.pcm_cruise_speed: bool = True
@@ -64,7 +62,6 @@ class HudRendererSP(HudRenderer):
     self.circular_alerts_renderer.update()
     self.speed_renderer.update()
     try:
-      self.navigation_panel.update()
       self.nav_quick_access.update()
     except Exception:
       pass
@@ -150,7 +147,6 @@ class HudRendererSP(HudRenderer):
     self.circular_alerts_renderer.render(rect)
     self.rocket_fuel.render(rect, ui_state.sm)
     try:
-      self.navigation_panel.render(rect)
       self.nav_quick_access.render(rect)
     except Exception:
       pass

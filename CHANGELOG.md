@@ -1,3 +1,10 @@
+FunnyPilot v1.0.5.4 (2026-03-10)
+========================
+* Removed the fake AR-style navigation ribbon overlay (`NavigationPanel`) that was added in 1.0.4ar and never cleaned up.
+  - The screen-space lane ribbon, turn cue, and duplicate distance/maneuver text were still rendering over the real AR nav.
+  - Navigation guidance is now handled exclusively by `model_renderer.py`: camera-calibrated lane line coloring, projected distance/maneuver text labels, and nav-aware lane highlighting in road space.
+  - Pre-drive Home/Work quick-access buttons (`NavQuickAccess`) are unaffected.
+
 FunnyPilot v1.0.5.3 (2026-03-09)
 ========================
 * Rebased onto upstream `sunnypilot` dev branch, bringing in latest core updates and fixes.
