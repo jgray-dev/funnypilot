@@ -64,6 +64,7 @@ def _mapbox_autocomplete(query: str, lat: float | None = None, lon: float | None
         "lat": float(lat_v),
         "lon": float(lon_v),
         "type": feature.get("place_type", [""])[0] if feature.get("place_type") else "",
+        "relevance": float(feature.get("relevance", 0.5)),
       }
     )
 
@@ -131,6 +132,7 @@ def autocomplete(query: str, lat: float | None = None, lon: float | None = None,
         "lat": coords[1],
         "lon": coords[0],
         "type": props.get("osm_value", props.get("type", "")),
+        "relevance": 0.5,
       }
     )
 

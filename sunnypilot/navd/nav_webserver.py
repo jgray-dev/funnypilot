@@ -211,6 +211,14 @@ async def api_gps(request):
   return web.json_response(data or {})
 
 
+async def api_nav_status(request):
+  raw = nav_get_raw(Params(), "NavStatusJSON")
+  if raw:
+    s = raw.decode() if isinstance(raw, bytes) else raw
+    return web.Response(text=s, content_type='application/json')
+  return web.json_response({"active": False})
+
+
 async def api_route_preview(request):
   try:
     q = request.rel_url.query
@@ -250,6 +258,7 @@ def main():
   app.router.add_get("/api/autocomplete", api_autocomplete)
   app.router.add_get("/api/gps", api_gps)
   app.router.add_get("/api/route_preview", api_route_preview)
+  app.router.add_get("/api/nav_status", api_nav_status)
 
   # reuse_address prevents TIME_WAIT bind failures on rapid restart
   web.run_app(app, host="0.0.0.0", port=PORT, access_log=None, reuse_address=True, reuse_port=False)

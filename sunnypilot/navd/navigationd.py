@@ -8,6 +8,7 @@ and publishes navInstruction + navigationStateSP via cereal.
 from __future__ import annotations
 
 import json
+import math
 import time
 
 import cereal.messaging as messaging
@@ -114,6 +115,11 @@ def main():
   last_gps_lat: float = 0.0
   last_gps_lon: float = 0.0
   gps_valid: bool = False
+  dr_lat: float = 0.0
+  dr_lon: float = 0.0
+  dr_speed: float = 0.0
+  dr_bearing_rad: float = 0.0
+  dr_last_ts: float = 0.0
   nav_destination_supported = True
   nav_destination_supported = nav_key_available(params, "NavDestination")
 
@@ -147,6 +153,11 @@ def main():
         last_gps_lat = gps.latitude
         last_gps_lon = gps.longitude
         gps_valid = True
+        dr_lat = last_gps_lat
+        dr_lon = last_gps_lon
+        dr_speed = max(0.0, float(gps.speed))
+        dr_bearing_rad = math.radians(float(gps.bearingDeg))
+        dr_last_ts = t_start
 
     if not gps_valid:
       params_gps = _load_params_gps(params)
@@ -180,13 +191,28 @@ def main():
         if route:
           nav_state.set_route(route, dest["lat"], dest["lon"], dest["name"], dest["address"])
 
+    # --- Dead-reckoning position between GPS fixes ---
+    if not gps_valid and dr_last_ts > 0.0 and dr_speed > 1.0:
+      dt_dr = t_start - dr_last_ts
+      if 0.0 < dt_dr < 2.0:
+        dist = dr_speed * dt_dr
+        R = 6371000.0
+        dr_lat += math.degrees(dist * math.cos(dr_bearing_rad) / R)
+        dr_lon += math.degrees(dist * math.sin(dr_bearing_rad) / (R * math.cos(math.radians(dr_lat)) + 1e-9))
+      dr_last_ts = t_start
+
+    # Use best available position for nav updates
+    nav_lat = last_gps_lat if gps_valid else (dr_lat if dr_last_ts > 0.0 else 0.0)
+    nav_lon = last_gps_lon if gps_valid else (dr_lon if dr_last_ts > 0.0 else 0.0)
+    nav_pos_valid = gps_valid or (dr_last_ts > 0.0 and nav_lat != 0.0)
+
     # --- Update progress ---
-    if nav_state.active and gps_valid:
-      breadcrumb_tracker.add(last_gps_lat, last_gps_lon)
-      nav_state.update(last_gps_lat, last_gps_lon)
+    if nav_state.active and nav_pos_valid:
+      breadcrumb_tracker.add(nav_lat, nav_lon)
+      nav_state.update(nav_lat, nav_lon)
 
       # Arrival check
-      if nav_state.is_arrived(last_gps_lat, last_gps_lon):
+      if nav_state.is_arrived(nav_lat, nav_lon):
         if nav_destination_supported:
           if not nav_remove(params, "NavDestination"):
             nav_destination_supported = False
@@ -194,24 +220,47 @@ def main():
         last_dest_json = None
 
       # Off-route re-route
-      elif nav_state.is_off_route(last_gps_lat, last_gps_lon):
+      elif nav_state.is_off_route(nav_lat, nav_lon):
         now = time.monotonic()
         if now - last_reroute_time > REROUTE_COOLDOWN_S and dest_str:
           last_reroute_time = now
           dest = _load_destination(dest_str)
           if dest is not None:
-            route = fetch_online_route(last_gps_lat, last_gps_lon, dest)
+            route = fetch_online_route(nav_lat, nav_lon, dest)
             if route:
               nav_state.set_route(route, dest["lat"], dest["lon"], dest["name"], dest["address"])
               breadcrumb_tracker.clear()
             else:
-              recovery = build_rejoin_route(last_gps_lat, last_gps_lon, breadcrumb_tracker.points(), nav_state.geometry_coords)
+              recovery = build_rejoin_route(nav_lat, nav_lon, breadcrumb_tracker.points(), nav_state.geometry_coords)
               if recovery:
                 nav_state.set_route(recovery, dest["lat"], dest["lon"], dest["name"], dest["address"])
               else:
-                cached = route_cache.load_best_route(last_gps_lat, last_gps_lon, dest["lat"], dest["lon"])
+                cached = route_cache.load_best_route(nav_lat, nav_lon, dest["lat"], dest["lon"])
                 if cached:
                   nav_state.set_route(cached, dest["lat"], dest["lon"], dest["name"], dest["address"])
+
+    # --- Publish NavStatusJSON param for web UI ---
+    if nav_state.active:
+      nav_status_json = json.dumps({
+        "active": True,
+        "step_index": nav_state.step_index,
+        "total_steps": len(nav_state.steps),
+        "distance_to_maneuver": nav_state.distance_to_maneuver,
+        "distance_remaining": nav_state.distance_remaining,
+        "time_remaining": nav_state.time_remaining,
+        "steps": [
+          {
+            "primary": s.get("name", ""),
+            "type": s.get("maneuver", {}).get("type", ""),
+            "modifier": s.get("maneuver", {}).get("modifier", "straight"),
+            "distance": s.get("distance", 0.0),
+          }
+          for s in nav_state.steps
+        ],
+      })
+    else:
+      nav_status_json = '{"active":false}'
+    params.put_nonblocking("NavStatusJSON", nav_status_json)
 
     # --- Publish navInstruction ---
     nav_msg = messaging.new_message("navInstruction")

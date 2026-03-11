@@ -33,6 +33,17 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.6.2 Changes
+
+- `selfdrive/ui/onroad/model_renderer.py` - Added `_draw_nav_road_glow()`: symmetric teal ambient glow (alpha 35, width 2.0m) behind lane lines using near-field path polygon (~25m). Replaced `_draw_nav_ar_overlay()` with `_draw_nav_distance_pill()`: top-center floating pill with 52pt distance text, street name, ETA, and a teal directional triangle. Draw order: road_glow → lane_lines → path → distance_pill.
+- `sunnypilot/navd/nav_state.py` - Fixed step advancement thresholds: direct 35m → 60m, proximity gate 150m → 200m, hysteresis margin 25m → 45m. Eliminates 1–2 mile lag after passing a turn.
+- `sunnypilot/navd/navigationd.py` - Added GPS dead-reckoning between fixes (tracks speed+bearing, integrates position every 5 Hz tick). Added `NavStatusJSON` param publishing each iteration with step list, step_index, distance_to_maneuver, etc.
+- `sunnypilot/navd/nav_webserver.py` - Added `/api/nav_status` GET endpoint reading `NavStatusJSON` param.
+- `sunnypilot/navd/routing/geocoder.py` - Mapbox results now include `"relevance"` field; Photon fallback defaults to `0.5`.
+- `sunnypilot/navd/nav_web/app.js` - Blended autocomplete scoring (50% Mapbox relevance + 30% text + 20% distance). Directions panel: `renderDirections()`, `pollNavStatus()` at 4s, step list with active/done styles.
+- `sunnypilot/navd/nav_web/index.html` - Added `#directions-panel` with header and `#directions-list`.
+- `sunnypilot/navd/nav_web/style.css` - Directions panel styles: dark surface, step list, red active step, dimmed done steps, numbered badges.
+
 ### v1.0.6.1 Changes
 
 - `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Simplified `_update_locked_offset()` guard: removed the complex timestamp+equality check, replaced with a single "recent user button press within 3 seconds" gate. Automatic cruise changes (zone entry, system-driven) no longer corrupt the stored dynamic offset ratio.

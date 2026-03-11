@@ -150,9 +150,10 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       self._transform_dirty = False
 
     # Draw elements
+    self._draw_nav_road_glow(rect)
     self._draw_lane_lines()
     self._draw_path(sm)
-    self._draw_nav_ar_overlay(rect)
+    self._draw_nav_distance_pill(rect)
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
@@ -422,30 +423,84 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       self._nav_distance_remaining = max(0.0, self._nav_distance_remaining - v_ego * dt)
       self._nav_time_remaining = max(0.0, self._nav_time_remaining - dt)
 
-  def _draw_nav_ar_overlay(self, rect: rl.Rectangle) -> None:
+  def _draw_nav_road_glow(self, rect: rl.Rectangle) -> None:
     if not self._nav_active or self._path.raw_points.size == 0:
       return
+    glow_distance = 25.0
+    path_x = self._path.raw_points[:, 0]
+    glow_idx = self._get_path_length_idx(path_x, glow_distance)
+    glow_pts = self._map_line_to_polygon(
+      self._path.raw_points, 2.0, self._path_offset_z,
+      glow_idx, glow_distance, allow_invert=False,
+    )
+    if glow_pts.size == 0:
+      return
+    draw_polygon(self._rect, glow_pts, rl.Color(0, 210, 190, 35))
 
-    # Use the path to find where to put the label
-    first_distance = float(np.clip(self._nav_distance, 8.0, 28.0))
-    path_idx = self._get_path_length_idx(self._path.raw_points[:, 0], first_distance)
-    z = self._path.raw_points[path_idx, 2] if path_idx < len(self._path.raw_points) else 0.0
+  def _draw_nav_distance_pill(self, rect: rl.Rectangle) -> None:
+    if not self._nav_active:
+      return
 
-    # Put label in the center of the lane
-    screen_point = self._map_to_screen(first_distance, self._camera_offset, z + self._path_offset_z)
+    dist_text = self._format_distance(self._nav_distance)
+    street = (self._nav_primary[:28] if self._nav_primary else "").strip()
+    eta_text = f"ETA {self._format_eta(self._nav_time_remaining)}"
 
-    if screen_point:
-      lead_x, lead_y = screen_point
-      dist_text = self._format_distance(self._nav_distance)
-      eta_text = self._format_eta(self._nav_time_remaining)
-      label = f"{dist_text}  {self._nav_primary[:26]}"
-      label_w = rl.measure_text(label, 30)
-      label_x = float(np.clip(lead_x - label_w / 2, rect.x + 10, rect.x + rect.width - label_w - 10))
-      label_y = lead_y - 54
+    dist_size = 52
+    street_size = 24
+    eta_size = 22
+    pad_x, pad_y, gap = 28, 14, 6
 
-      rl.draw_text(label, int(label_x + 2), int(label_y + 2), 30, rl.Color(0, 0, 0, 175))
-      rl.draw_text(label, int(label_x), int(label_y), 30, NAV_TEXT_COLOR)
-      rl.draw_text(f"ETA {eta_text}", int(label_x), int(label_y + 28), 22, rl.Color(184, 220, 238, 225))
+    dist_w = rl.measure_text(dist_text, dist_size)
+    street_w = rl.measure_text(street, street_size) if street else 0
+    eta_w = rl.measure_text(eta_text, eta_size)
+
+    content_w = max(dist_w, street_w if street else 0, eta_w)
+    pill_w = content_w + pad_x * 2
+    pill_h = pad_y + dist_size + gap + (street_size + gap if street else 0) + eta_size + pad_y
+
+    cx = rect.x + rect.width / 2
+    pill_x = cx - pill_w / 2
+    pill_y = rect.y + 38
+
+    # Directional triangle indicator above pill
+    bias = self._turn_bias()
+    tri_size = 14
+    tri_cx = int(cx)
+    tri_y = int(pill_y) - 6
+    if bias < 0:  # left
+      v1 = rl.Vector2(tri_cx - tri_size, tri_y)
+      v2 = rl.Vector2(tri_cx + tri_size // 2, tri_y - tri_size)
+      v3 = rl.Vector2(tri_cx + tri_size // 2, tri_y + tri_size)
+    elif bias > 0:  # right
+      v1 = rl.Vector2(tri_cx + tri_size, tri_y)
+      v2 = rl.Vector2(tri_cx - tri_size // 2, tri_y - tri_size)
+      v3 = rl.Vector2(tri_cx - tri_size // 2, tri_y + tri_size)
+    else:  # straight
+      v1 = rl.Vector2(tri_cx, tri_y - tri_size)
+      v2 = rl.Vector2(tri_cx - tri_size, tri_y + tri_size // 2)
+      v3 = rl.Vector2(tri_cx + tri_size, tri_y + tri_size // 2)
+    rl.draw_triangle(v1, v2, v3, rl.Color(0, 210, 190, 220))
+
+    # Pill background: subtle teal border glow, then dark fill
+    rl.draw_rectangle_rounded(rl.Rectangle(pill_x - 1, pill_y, pill_w + 2, pill_h + 2), 0.3, 8, rl.Color(0, 210, 190, 40))
+    rl.draw_rectangle_rounded(rl.Rectangle(pill_x, pill_y, pill_w, pill_h), 0.3, 8, rl.Color(0, 0, 0, 185))
+
+    # Distance text (centered, with shadow)
+    cur_y = int(pill_y + pad_y)
+    text_x = int(cx - dist_w / 2)
+    rl.draw_text(dist_text, text_x + 2, cur_y + 2, dist_size, rl.Color(0, 0, 0, 140))
+    rl.draw_text(dist_text, text_x, cur_y, dist_size, NAV_TEXT_COLOR)
+    cur_y += dist_size + gap
+
+    # Street name
+    if street:
+      sub_x = int(cx - street_w / 2)
+      rl.draw_text(street, sub_x, cur_y, street_size, rl.Color(180, 218, 235, 210))
+      cur_y += street_size + gap
+
+    # ETA
+    eta_x = int(cx - eta_w / 2)
+    rl.draw_text(eta_text, eta_x, cur_y, eta_size, rl.Color(140, 190, 210, 175))
 
   def _estimate_lane_width(self) -> float:
     left = self._lane_lines[1].raw_points

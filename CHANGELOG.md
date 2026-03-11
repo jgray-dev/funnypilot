@@ -1,3 +1,26 @@
+FunnyPilot v1.0.6.2 (2026-03-11)
+========================
+* Concept H navigation overhaul:
+  - Replaced the tiny projected AR text label at the end of the driving path with a large floating pill
+    at top-center of the driving view: large distance text (52pt), street name, and ETA. A teal directional
+    triangle indicator floats above the pill pointing left/right/straight based on the upcoming maneuver.
+  - Added subtle ambient teal road-surface glow (symmetric, no lateral bias) rendered behind the lane lines.
+    The glow follows the near-field path (~25m) at very low opacity (alpha 35) for a gentle visual cue.
+  - Fixed step advancement thresholds in the nav state machine: direct pass threshold raised 35m → 60m,
+    proximity gate raised 150m → 200m, hysteresis margin raised 25m → 45m. This eliminates the 1–2 mile
+    lag before the next step loads after passing a turn.
+  - Added GPS dead-reckoning to `navigationd.py`: between GPS fixes, position is estimated from last
+    known speed and bearing so `nav_state.update()` is called every loop tick (5 Hz), not just on GPS events.
+  - Added `NavStatusJSON` param publishing in `navigationd.py` with full step list, current step index,
+    distance to maneuver, distance remaining, and time remaining.
+  - Added `/api/nav_status` endpoint to the web server that reads `NavStatusJSON` and returns it as JSON.
+  - Web UI now shows a step-by-step directions panel (collapsed when no route, expanded when navigating).
+    Current step is highlighted in red, completed steps are dimmed, distance and ETA shown in the header.
+    Panel updates every 4 seconds via `/api/nav_status`.
+  - Autocomplete results now ranked by a blended score (50% Mapbox relevance + 30% text match + 20%
+    distance) instead of purely by distance. Mapbox `relevance` field now passed through to the client;
+    Photon fallback defaults to 0.5.
+
 FunnyPilot v1.0.6.1 (2026-03-10)
 ========================
 * Fixed dynamic SLA offset being ignored when entering a higher speed limit zone (second, more complete fix).

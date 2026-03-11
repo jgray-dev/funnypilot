@@ -6,6 +6,7 @@ let destMarker;
 let routeLoaded = false;
 let debounceTimer = null;
 let currentResults = [];
+let currentQuery = '';
 let mapAvailable = false;
 let lastRouteKey = '';
 let routeFetchInFlight = false;
@@ -233,6 +234,124 @@ function getLon(obj) {
   return null;
 }
 
+// --- Blended autocomplete scoring ---
+
+function textRelevance(text, query) {
+  const t = text.toLowerCase();
+  const q = query.toLowerCase().trim();
+  if (!q) return 0.5;
+  if (t.startsWith(q)) return 1.0;
+  if (t.includes(q)) return 0.8;
+  const words = q.split(/\s+/).filter(Boolean);
+  if (!words.length) return 0.5;
+  const matched = words.filter(w => t.includes(w)).length;
+  return (matched / words.length) * 0.5;
+}
+
+function blendedScore(item, query) {
+  const combinedText = (item.name || '') + ' ' + (item.address || '');
+  const tScore = textRelevance(combinedText, query);
+  const apiRel = typeof item.relevance === 'number' ? item.relevance : 0.5;
+  let distScore = 0.5;
+  if (lastKnownGps) {
+    const lat = getLat(item);
+    const lon = getLon(item);
+    if (lat !== null && lon !== null) {
+      const distKm = distanceMeters(lastKnownGps.lat, lastKnownGps.lon, lat, lon) / 1000;
+      distScore = 1 - Math.min(distKm / 100, 1);
+    }
+  }
+  return 0.5 * apiRel + 0.3 * tScore + 0.2 * distScore;
+}
+
+// --- Directions panel ---
+
+function fmtDistShort(meters) {
+  if (!Number.isFinite(meters) || meters <= 0) return '';
+  if (meters < 1000) return Math.round(meters) + ' m';
+  return (meters / 1000).toFixed(1) + ' km';
+}
+
+function maneuverLabel(type, modifier) {
+  const t = (type || '').toLowerCase();
+  const m = (modifier || '').toLowerCase();
+  if (t === 'arrive') return 'Arrive';
+  if (t === 'depart') return 'Depart';
+  if (t === 'roundabout' || t === 'rotary') return 'Roundabout';
+  if (m === 'left') return 'Turn left';
+  if (m === 'right') return 'Turn right';
+  if (m === 'slight left') return 'Bear left';
+  if (m === 'slight right') return 'Bear right';
+  if (m === 'sharp left') return 'Sharp left';
+  if (m === 'sharp right') return 'Sharp right';
+  if (m === 'uturn') return 'U-turn';
+  if (t === 'merge') return 'Merge';
+  if (t === 'fork') return 'Keep';
+  if (t === 'off ramp') return 'Take exit';
+  if (t === 'on ramp') return 'Take ramp';
+  return 'Continue';
+}
+
+function renderDirections(steps, stepIndex, distToManeuver, timeRemaining) {
+  const panel = document.getElementById('directions-panel');
+  const list = document.getElementById('directions-list');
+  const progress = document.getElementById('nav-progress');
+
+  if (!steps || !steps.length) {
+    panel.classList.remove('visible');
+    return;
+  }
+
+  panel.classList.add('visible');
+
+  // Progress header: distance to next + ETA
+  const etaStr = timeRemaining > 0 ? fmtTime(timeRemaining) : '';
+  const nextDist = fmtDistShort(distToManeuver);
+  progress.textContent = [nextDist ? '→ ' + nextDist : '', etaStr ? 'ETA ' + etaStr : ''].filter(Boolean).join('  ');
+
+  list.innerHTML = '';
+  // Skip last step if it's just the destination (often blank name)
+  steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    const isActive = i === stepIndex;
+    const isDone = i < stepIndex;
+    if (isActive) li.className = 'dir-active';
+    else if (isDone) li.className = 'dir-done';
+
+    const label = maneuverLabel(step.type, step.modifier);
+    const name = step.primary ? escHtml(step.primary) : label;
+    const dist = fmtDistShort(step.distance);
+    const meta = isActive && distToManeuver > 0
+      ? fmtDistShort(distToManeuver)
+      : (dist || '');
+
+    li.innerHTML = `<div class="dir-step-num">${i + 1}</div>` +
+      `<div class="dir-step-body">` +
+      `<div class="dir-step-name">${name}</div>` +
+      `<div class="dir-step-meta">${escHtml(label)}${meta ? ' · ' + escHtml(meta) : ''}</div>` +
+      `</div>`;
+    list.appendChild(li);
+  });
+
+  // Scroll active step into view
+  const activeLi = list.querySelector('.dir-active');
+  if (activeLi) activeLi.scrollIntoView({ block: 'nearest' });
+}
+
+async function pollNavStatus() {
+  try {
+    const data = await fetchJson('/api/nav_status');
+    if (data && data.active && Array.isArray(data.steps) && data.steps.length) {
+      renderDirections(data.steps, data.step_index || 0, data.distance_to_maneuver || 0, data.time_remaining || 0);
+    } else {
+      const panel = document.getElementById('directions-panel');
+      panel.classList.remove('visible');
+    }
+  } catch (_) {
+    // ignore — directions panel stays as-is on error
+  }
+}
+
 async function pollStatus() {
   try {
     const r = await fetch('/api/status');
@@ -339,17 +458,15 @@ async function autocomplete(q) {
     closeDropdown();
     return;
   }
+  currentQuery = q;
   let url = '/api/autocomplete?q=' + encodeURIComponent(q);
-  let gpsForSort = null;
   try {
     const gps = await fetch('/api/gps').then(r => r.json()).catch(() => ({}));
     const gpsLat = getLat(gps);
     const gpsLon = getLon(gps);
     if (gpsLat !== null && gpsLon !== null) {
-      gpsForSort = { lat: gpsLat, lon: gpsLon };
+      lastKnownGps = lastKnownGps || { lat: gpsLat, lon: gpsLon };
       url += '&lat=' + gpsLat + '&lon=' + gpsLon;
-    } else if (lastKnownGps) {
-      gpsForSort = lastKnownGps;
     }
   } catch (_) {}
 
@@ -357,15 +474,10 @@ async function autocomplete(q) {
     const r = await fetch(url);
     if (!r.ok) return;
     currentResults = await r.json();
-    if (Array.isArray(currentResults) && gpsForSort) {
+    if (Array.isArray(currentResults) && currentResults.length) {
       currentResults = currentResults
-        .map((item) => {
-          const lat = getLat(item);
-          const lon = getLon(item);
-          if (lat === null || lon === null) return { ...item, _distM: Number.POSITIVE_INFINITY };
-          return { ...item, _distM: distanceMeters(gpsForSort.lat, gpsForSort.lon, lat, lon) };
-        })
-        .sort((a, b) => a._distM - b._distM);
+        .map(item => ({ ...item, _score: blendedScore(item, q) }))
+        .sort((a, b) => b._score - a._score);
     }
     if (!Array.isArray(currentResults) || !currentResults.length) {
       closeDropdown();
@@ -383,7 +495,14 @@ function renderDropdown(results) {
   results.forEach((item, i) => {
     const div = document.createElement('div');
     div.className = 'autocomplete-item';
-    const distText = Number.isFinite(item._distM) ? ` • ${fmtDist(item._distM)}` : '';
+    let distText = '';
+    if (lastKnownGps) {
+      const lat = getLat(item), lon = getLon(item);
+      if (lat !== null && lon !== null) {
+        const distM = distanceMeters(lastKnownGps.lat, lastKnownGps.lon, lat, lon);
+        distText = ` • ${fmtDist(distM)}`;
+      }
+    }
     div.innerHTML = `<div class="item-name">${escHtml(item.name)}</div><div class="item-addr">${escHtml(item.address)}${distText}</div>`;
     div.addEventListener('click', () => selectResult(i));
     list.appendChild(div);
@@ -446,6 +565,7 @@ async function setDestination(item) {
 async function cancelNav() {
   await fetch('/api/destination', { method: 'DELETE' });
   document.getElementById('search-input').value = '';
+  document.getElementById('directions-panel').classList.remove('visible');
   clearRoute();
   if (mapAvailable && destMarker) destMarker.getElement().style.display = 'none';
   await pollStatus();
@@ -498,7 +618,9 @@ async function saveAsWork() {
 document.addEventListener('DOMContentLoaded', async () => {
   await initMap();
   pollStatus();
+  pollNavStatus();
   setInterval(pollStatus, 3000);
+  setInterval(pollNavStatus, 4000);
 
   const input = document.getElementById('search-input');
   input.addEventListener('input', () => {

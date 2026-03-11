@@ -82,11 +82,11 @@ class NavState:
       maneuver_coord = Coordinate(maneuver_loc[1], maneuver_loc[0])
       dist_to_maneuver = pos.distance_to(maneuver_coord)
 
-      # If we are within 35m, or we got within 150m and are now moving away (passed it)
+      # If we are within 60m, or we got within 200m and are now moving away (passed it)
       passed_maneuver = False
-      if dist_to_maneuver < 35.0:
+      if dist_to_maneuver < 60.0:
         passed_maneuver = True
-      elif self._min_dist_to_maneuver < 150.0 and dist_to_maneuver > self._min_dist_to_maneuver + 25.0:
+      elif self._min_dist_to_maneuver < 200.0 and dist_to_maneuver > self._min_dist_to_maneuver + 45.0:
         passed_maneuver = True
 
       if passed_maneuver:
