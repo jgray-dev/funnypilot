@@ -347,3 +347,36 @@ class AltitudeElement(GpsInfoElement):
 
     value = f"{altitude:.1f}" if gps_accuracy != 0.0 else "-"
     return UiElement(value, "ALT.", self.unit, rl.WHITE)
+
+
+class MemoryUsageElement:
+  """Displays system RAM usage: used/total in GB with color thresholds."""
+
+  def __init__(self):
+    self.unit = ""
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    try:
+      with open('/proc/meminfo', 'r') as f:
+        lines = f.readlines()
+      info = {}
+      for line in lines:
+        parts = line.split()
+        if len(parts) >= 2:
+          info[parts[0].rstrip(':')] = int(parts[1])
+      total_kb = info.get('MemTotal', 0)
+      avail_kb = info.get('MemAvailable', 0)
+      used_kb = total_kb - avail_kb
+      total_gb = total_kb / 1048576
+      used_gb = used_kb / 1048576
+      ratio = used_kb / total_kb if total_kb > 0 else 0.0
+      value = f"{used_gb:.1f}/{total_gb:.1f}G"
+      if ratio > 0.90:
+        color = rl.Color(255, 50, 50, 255)    # red
+      elif ratio > 0.75:
+        color = rl.Color(255, 165, 0, 255)   # orange
+      else:
+        color = rl.Color(255, 255, 255, 255)  # white
+      return UiElement(value, "MEM", self.unit, color)
+    except Exception:
+      return UiElement("MEM?", "MEM", self.unit, rl.Color(128, 128, 128, 255))

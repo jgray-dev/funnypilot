@@ -217,6 +217,32 @@ def handle_agnos_update() -> None:
 
 
 
+FUNNYPILOT_REMOTE_NAME = "funnypilot"
+FUNNYPILOT_REMOTE_URL = "https://github.com/jgray-dev/funnypilot.git"
+FUNNYPILOT_BRANCH_RE = re.compile(r'^funnypilot-\d+\.\d+')
+
+
+def _is_funnypilot_branch(branch: str) -> bool:
+  return bool(FUNNYPILOT_BRANCH_RE.match(branch))
+
+
+def _ensure_funnypilot_remote(cwd: str) -> None:
+  """Add the funnypilot remote if it is not already configured."""
+  try:
+    result = subprocess.run(
+      ["git", "remote", "get-url", FUNNYPILOT_REMOTE_NAME],
+      capture_output=True, text=True, cwd=cwd,
+    )
+    if result.returncode != 0:
+      cloudlog.info(f"adding {FUNNYPILOT_REMOTE_NAME} remote")
+      subprocess.run(
+        ["git", "remote", "add", FUNNYPILOT_REMOTE_NAME, FUNNYPILOT_REMOTE_URL],
+        capture_output=True, cwd=cwd,
+      )
+  except Exception:
+    cloudlog.exception("failed to ensure funnypilot remote")
+
+
 class Updater:
   def __init__(self):
     self.params = Params()
@@ -341,14 +367,28 @@ class Updater:
       self._has_internet = False
 
     setup_git_options(OVERLAY_MERGED)
-    output = run(["git", "ls-remote", "--heads"], OVERLAY_MERGED)
+    _ensure_funnypilot_remote(OVERLAY_MERGED)
+
+    # Fetch branches from origin (sunnypilot upstream)
+    output = run(["git", "ls-remote", "--heads", "origin"], OVERLAY_MERGED)
 
     self.branches = defaultdict(lambda: None)
+    ls_remotes_re = r'(?P<commit_sha>\b[0-9a-f]{5,40}\b)(\s+)(refs\/heads\/)(?P<branch_name>.*$)'
     for line in output.split('\n'):
-      ls_remotes_re = r'(?P<commit_sha>\b[0-9a-f]{5,40}\b)(\s+)(refs\/heads\/)(?P<branch_name>.*$)'
       x = re.fullmatch(ls_remotes_re, line.strip())
       if x is not None and x.group('branch_name') not in excluded_branches:
         self.branches[x.group('branch_name')] = x.group('commit_sha')
+
+    # Also fetch funnypilot-* branches from the funnypilot remote
+    try:
+      fp_output = run(["git", "ls-remote", "--heads", FUNNYPILOT_REMOTE_NAME,
+                       "refs/heads/funnypilot-*"], OVERLAY_MERGED)
+      for line in fp_output.split('\n'):
+        x = re.fullmatch(ls_remotes_re, line.strip())
+        if x is not None and _is_funnypilot_branch(x.group('branch_name')):
+          self.branches[x.group('branch_name')] = x.group('commit_sha')
+    except subprocess.CalledProcessError:
+      cloudlog.warning("could not fetch funnypilot remote branches")
 
     cur_branch = self.get_branch(OVERLAY_MERGED)
     cur_commit = self.get_commit_hash(OVERLAY_MERGED)
@@ -369,17 +409,19 @@ class Updater:
     self.params.put_bool("UpdateAvailable", False)
 
     setup_git_options(OVERLAY_MERGED)
+    _ensure_funnypilot_remote(OVERLAY_MERGED)
 
     run(["git", "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], OVERLAY_MERGED)
 
     branch = self.target_branch
-    git_fetch_output = run(["git", "fetch", "origin", branch], OVERLAY_MERGED)
+    remote = FUNNYPILOT_REMOTE_NAME if _is_funnypilot_branch(branch) else "origin"
+    git_fetch_output = run(["git", "fetch", remote, branch], OVERLAY_MERGED)
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
     cmds = [
       ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
-      ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
+      ["git", "branch", "--set-upstream-to", f"{remote}/{branch}"],
       ["git", "reset", "--hard"],
       ["git", "clean", "-xdff"],
       ["git", "submodule", "sync"],

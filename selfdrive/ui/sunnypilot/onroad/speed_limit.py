@@ -196,6 +196,24 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
+      self._draw_sla_lock_badge(sign_rect)
+
+  def _draw_sla_lock_badge(self, sign_rect: rl.Rectangle):
+    sm = ui_state.sm
+    if not sm.updated["longitudinalPlanSP"]:
+      return
+    lp_sp = sm["longitudinalPlanSP"]
+    if not lp_sp.speedLimit.assist.slaLocked:
+      return
+    offset_pct = lp_sp.speedLimit.assist.slaDynamicOffset * 100
+    offset_str = f"+{offset_pct:.0f}%" if offset_pct >= 0 else f"{offset_pct:.0f}%"
+    label = f"SLA {offset_str}"
+    font_size = 20
+    label_w = rl.measure_text(label, font_size)
+    badge_x = int(sign_rect.x + sign_rect.width / 2 - (label_w + 16) / 2)
+    badge_y = int(sign_rect.y + sign_rect.height + 4)
+    rl.draw_rectangle_rounded(rl.Rectangle(badge_x, badge_y, label_w + 16, font_size + 8), 0.5, 6, rl.Color(20, 20, 20, 200))
+    rl.draw_text(label, badge_x + 8, badge_y + 4, font_size, rl.Color(255, 255, 255, 230))
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode >= SpeedLimitMode.warning

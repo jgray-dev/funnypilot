@@ -19,12 +19,13 @@ class SmartCruiseControlRenderer(Widget):
     super().__init__()
     self.vision_enabled = False
     self.vision_active = False
+    self.vision_gas_gating = False
+    self.vision_a_target = 0.0
     self.map_enabled = False
     self.map_active = False
+    self.map_gas_gating = False
+    self.map_a_target = 0.0
     self.long_override = False
-
-    self._vision_fade = AlertFadeAnimator(gui_app.target_fps)
-    self._map_fade = AlertFadeAnimator(gui_app.target_fps)
 
     self.font = gui_app.font(FontWeight.BOLD)
 
@@ -37,16 +38,21 @@ class SmartCruiseControlRenderer(Widget):
 
       self.vision_enabled = vision.enabled
       self.vision_active = vision.active
+      self.vision_gas_gating = vision.gasGating
+      self.vision_a_target = vision.aTarget
       self.map_enabled = map_.enabled
       self.map_active = map_.active
+      self.map_gas_gating = map_.gasGating
+      self.map_a_target = map_.aTarget
 
     if sm.updated["carControl"]:
       self.long_override = sm["carControl"].cruiseControl.override
 
-    self._vision_fade.update(self.vision_active)
-    self._map_fade.update(self.map_active)
+  def _draw_icon(self, rect_center_x, rect_height, x_offset, y_offset, name, is_active, is_gas_gating, a_target):
+    # Hide badge when inactive
+    if not is_active:
+      return
 
-  def _draw_icon(self, rect_center_x, rect_height, x_offset, y_offset, name, alpha=1.0):
     text = name
     font_size = 36
     padding_v = 5
@@ -57,26 +63,27 @@ class SmartCruiseControlRenderer(Widget):
 
     if self.long_override:
       color = COLORS.OVERRIDE
-      box_color = rl.Color(color.r, color.g, color.b, int(alpha * 255))
+      box_color = rl.Color(color.r, color.g, color.b, 230)
+    elif is_gas_gating:
+      box_color = rl.Color(255, 140, 0, 230)
+    elif a_target < -0.1:
+      box_color = rl.Color(220, 50, 50, 230)
     else:
-      box_color = rl.Color(0, 255, 0, int(alpha * 255))
+      box_color = rl.Color(220, 50, 50, 230)
 
-    text_color = rl.Color(0, 0, 0, int(alpha * 255))
+    text_color = rl.Color(0, 0, 0, 255)
 
     screen_y = rect_height / 4 + y_offset
 
     box_x = rect_center_x + x_offset - box_width / 2
     box_y = screen_y - box_height / 2
 
-    # Draw rounded background box
-    if alpha > 0.01:
-      rl.draw_rectangle_rounded(rl.Rectangle(box_x, box_y, box_width, box_height), 0.2, 10, box_color)
+    rl.draw_rectangle_rounded(rl.Rectangle(box_x, box_y, box_width, box_height), 0.2, 10, box_color)
 
-      # Draw text centered in the box (black color for contrast against bright green/grey)
-      text_pos_x = box_x + (box_width - sz.x) / 2
-      text_pos_y = box_y + (box_height - sz.y) / 2
+    text_pos_x = box_x + (box_width - sz.x) / 2
+    text_pos_y = box_y + (box_height - sz.y) / 2
 
-      rl.draw_text_ex(self.font, text, rl.Vector2(text_pos_x, text_pos_y), font_size, 0, text_color)
+    rl.draw_text_ex(self.font, text, rl.Vector2(text_pos_x, text_pos_y), font_size, 0, text_color)
 
   def _render(self, rect: rl.Rectangle):
     x_offset = -260
@@ -97,9 +104,9 @@ class SmartCruiseControlRenderer(Widget):
       idx += 1
 
     if self.vision_enabled:
-      alpha = self._vision_fade.alpha if self.vision_active else 1.0
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V", alpha)
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_v, "SCC-V",
+                      self.vision_active, self.vision_gas_gating, self.vision_a_target)
 
     if self.map_enabled:
-      alpha = self._map_fade.alpha if self.map_active else 1.0
-      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M", alpha)
+      self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M",
+                      self.map_active, self.map_gas_gating, self.map_a_target)

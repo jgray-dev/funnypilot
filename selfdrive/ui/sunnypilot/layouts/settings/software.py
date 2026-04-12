@@ -5,6 +5,7 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 import os
+import re
 
 from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -50,24 +51,34 @@ class SoftwareLayoutSP(SoftwareLayout):
     dialog = ConfirmDialog(tr("System reboot required for changes to take effect. Reboot now?"), tr("Reboot"), callback=self._handle_reboot)
     gui_app.push_widget(dialog)
 
+  @staticmethod
+  def _is_funnypilot_branch(branch: str) -> bool:
+    return bool(re.match(r'^funnypilot-\d+\.\d+', branch))
+
   def _on_select_branch(self):
     current_git_branch = ui_state.params.get("GitBranch") or ""
     branches_str = ui_state.params.get("UpdaterAvailableBranches") or ""
     branches = [b for b in branches_str.split(",") if b]
     current_target = ui_state.params.get("UpdaterTargetBranch") or ""
-    top_level_branches = [current_git_branch, "release-mici", "release-tizi", "staging", "dev", "master"]
+    top_level_branches = [current_git_branch, "release-mici", "release-tizi", "staging", "dev", "master", "main"]
 
     if HARDWARE.get_device_type() == "tici":
       top_level_branches = ["release-tici", "staging-tici"]
-      branches = [b for b in branches if b.endswith("-tici")]
+      branches = [b for b in branches if b.endswith("-tici") or self._is_funnypilot_branch(b)]
 
+    funnypilot_branches = sorted(
+      [b for b in branches if self._is_funnypilot_branch(b)],
+      reverse=True,
+    )
     top_level_nodes = [TreeNode(b, {'display_name': b}) for b in top_level_branches if b in branches]
-    remaining_branches = [b for b in branches if b not in top_level_branches]
+    funnypilot_nodes = [TreeNode(b, {'display_name': b}) for b in funnypilot_branches]
+    remaining_branches = [b for b in branches if b not in top_level_branches and not self._is_funnypilot_branch(b)]
     prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if b.endswith("-prebuilt")]
     non_prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if not b.endswith("-prebuilt")]
 
     folders = [
       TreeFolder("", top_level_nodes),
+      TreeFolder("FunnyPilot Branches", funnypilot_nodes),
       TreeFolder("Prebuilt Branches", prebuilt_nodes),
       TreeFolder("Non-Prebuilt Branches", non_prebuilt_nodes),
     ]

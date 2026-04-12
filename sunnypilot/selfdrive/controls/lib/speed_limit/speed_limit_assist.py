@@ -92,6 +92,11 @@ class SpeedLimitAssist:
     self._minus_hold = 0.
     self._last_carstate_ts = 0.
 
+    self._sla_locked = False
+    self._dynamic_offset_ratio = 0.0
+    self._last_user_cruise_change_ts = 0.0
+    self._prev_v_cruise_cluster = 0.0
+
     # TODO-SP: SLA's own output_a_target for planner
     # Solution functions mapped to respective states
     self.acceleration_solutions = {
@@ -212,12 +217,40 @@ class SpeedLimitAssist:
   def get_active_state_target_acceleration(self) -> float:
     return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
 
+  def _effective_speed_limit_target(self) -> float:
+    """Apply stored dynamic ratio to current speed limit for locked SLA."""
+    if self._speed_limit_final_last <= 0:
+      return self._speed_limit_final_last
+    return self._speed_limit_final_last * (1.0 + self._dynamic_offset_ratio)
+
+  def _update_locked_offset(self) -> None:
+    """Recalculate dynamic offset ratio only on recent user cruise button press."""
+    if not self._has_speed_limit or self._speed_limit_final_last <= 0 or self.v_cruise_cluster <= 0:
+      return
+    if time.monotonic() - self._last_user_cruise_change_ts > 3.0:
+      return
+    ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
+    self._dynamic_offset_ratio = max(-0.5, min(0.5, ratio))
+
+  @property
+  def sla_locked(self) -> bool:
+    return self._sla_locked
+
+  @property
+  def dynamic_offset(self) -> float:
+    return self._dynamic_offset_ratio
+
   def _update_confirmed_state(self):
     if self._has_speed_limit:
       if self.v_offset < LIMIT_SPEED_OFFSET_TH:
         self.state = SpeedLimitAssistState.adapting
       else:
         self.state = SpeedLimitAssistState.active
+      # On first activation, preserve current speed by storing ratio
+      if not self._sla_locked and self.v_cruise_cluster > 0 and self._speed_limit_final_last > 0:
+        self._dynamic_offset_ratio = (self.v_cruise_cluster - self._speed_limit_final_last) / self._speed_limit_final_last
+        self._dynamic_offset_ratio = max(-0.5, min(0.5, self._dynamic_offset_ratio))
+      self._sla_locked = True
     else:
       self.state = SpeedLimitAssistState.pending
 
@@ -389,6 +422,11 @@ class SpeedLimitAssist:
     self._speed_limit_final_last = speed_limit_final_last
     self._distance = distance
 
+    # Track user cruise changes for dynamic offset updates
+    if abs(v_cruise_cluster - self._prev_v_cruise_cluster) > 0.5:
+      self._last_user_cruise_change_ts = time.monotonic()
+    self._prev_v_cruise_cluster = v_cruise_cluster
+
     self.update_params()
     self.update_calculations(v_cruise_cluster)
 
@@ -397,6 +435,15 @@ class SpeedLimitAssist:
       self.is_enabled, self.is_active = self.update_state_machine_pcm_op_long()
     else:
       self.is_enabled, self.is_active = self.update_state_machine_non_pcm_long()
+
+    # Clear lock on disable
+    if not long_enabled or not self.enabled:
+      self._sla_locked = False
+      self._dynamic_offset_ratio = 0.0
+
+    # Update dynamic offset ratio if user recently pressed cruise button
+    if self._sla_locked:
+      self._update_locked_offset()
 
     self.update_events(events_sp)
 

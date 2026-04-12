@@ -658,8 +658,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.seatbeltNotLatched: {
-    ET.SOFT_DISABLE: user_soft_disable_alert("Seatbelt Unlatched"),
-    ET.NO_ENTRY: NoEntryAlert("Seatbelt Unlatched"),
+    ET.PERMANENT: NormalPermanentAlert("Seatbelt Unlatched"),
   },
 
   EventName.espDisabled: {
@@ -828,12 +827,11 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   # When the car is driving faster than most cars in the training data, the model outputs can be unpredictable.
   EventName.speedTooHigh: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Speed Too High",
       "Model uncertain at this speed",
-      AlertStatus.userPrompt, AlertSize.mid,
-      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 4.),
-    ET.NO_ENTRY: NoEntryAlert("Slow down to engage"),
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOWER, VisualAlert.none, AudibleAlert.none, .2),
   },
 
   EventName.vehicleSensorsInvalid: {

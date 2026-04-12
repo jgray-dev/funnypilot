@@ -83,6 +83,7 @@ class SmartCruiseControlMap:
     self.target_lat = 0.0
     self.target_lon = 0.0
     self.frame = -1
+    self.gas_gating_active = False
 
     self.last_position = coordinate_from_param("LastGPSPosition", self.mem_params) or Coordinate(0.0, 0.0)
     self.target_velocities = velocities_from_param("MapTargetVelocities", self.mem_params) or []
@@ -254,6 +255,7 @@ class SmartCruiseControlMap:
     self.update_calculations()
 
     self.is_enabled, self.is_active = self._update_state_machine()
+    self.gas_gating_active = self.state in ACTIVE_STATES and (self.output_a_target < -0.1)
 
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()

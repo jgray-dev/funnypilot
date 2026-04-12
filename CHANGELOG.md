@@ -1,3 +1,27 @@
+FunnyPilot Version 1.0.8 (2026-04-12)
+========================
+* Rebased on latest sunnypilot origin/dev
+* Longitudinal: Speed-dependent follow distance (aggressive ~1s highway, relaxed ~2s, standard interpolated)
+* Longitudinal: Speed-dependent acceleration cap (full 0–25 mph, tapers to 50% at 75 mph)
+* Longitudinal: Brake jerk limiter (4 m/s³ max decel-direction change rate)
+* Longitudinal: Lead-loss grace period (2.5s hold at last lead speed + 2.0s linear release)
+* Longitudinal: Personality transition gas gating
+* Longitudinal: Increased braking force (CRUISE_MIN_ACCEL -1.2 → -3.0)
+* Longitudinal: Max cruise speed raised to 210 kph (130 mph)
+* Lateral: Lane change torque ramp 20% → 100% over 5s (gentler initial, smoother merge)
+* Lateral: Faster smooth stop taper below 6.7 mph; removed lead vehicle smoothing
+* SLA: Dynamic lock with on-activation ratio capture (no speed jump on enable)
+* SLA: Speed limit approach prediction — gas gate within 250m of upcoming lower limit
+* SCC: Gas gating indicator for vision and map controllers
+* UI: Speed limit badge redesigned — dark pill, white text (no teal)
+* UI: SCC badge hidden when inactive, red for braking, orange for gas gating, no pulsing
+* UI: Developer UI memory usage element (used/total RAM, color-coded thresholds)
+* UI: FunnyPilot version on home screen
+* Monitoring: 9× driver monitoring timeouts (270s passive, 99s active)
+* Events: speedTooHigh → silent static banner (no disengage, no audio)
+* Events: seatbeltNotLatched → permanent silent banner only (no soft disable)
+* Updater: FunnyPilot branches appear in branch picker; funnypilot remote auto-added
+
 sunnypilot Version 2026.001.000 (2026-03-xx)
 ========================
 * What's Changed (sunnypilot/sunnypilot)

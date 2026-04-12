@@ -65,6 +65,7 @@ class SmartCruiseControlVision:
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
     self.max_pred_lat_acc = 0.
+    self.gas_gating_active = False
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
@@ -85,6 +86,9 @@ class SmartCruiseControlVision:
     else:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
       vel_plan = np.array(sm['modelV2'].velocity.x)
+
+      if len(rate_plan) == 0 or len(vel_plan) == 0:
+        return
 
       self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
 
@@ -196,6 +200,7 @@ class SmartCruiseControlVision:
 
     self.is_enabled, self.is_active = self._update_state_machine()
     self.a_target = self._update_solution()
+    self.gas_gating_active = self.state in ACTIVE_STATES and self.a_target < -0.1
 
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()

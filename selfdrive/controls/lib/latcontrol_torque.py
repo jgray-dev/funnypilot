@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 from collections import deque
 
@@ -49,6 +50,11 @@ class LatControlTorque(LatControl):
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
+
+    # FunnyPilot: lane change torque ramp
+    self._lc_start_ts = 0.0
+    self._LC_RAMP_TIME = 5.0    # seconds to ramp from 20% to 100%
+    self._LC_INIT_FACTOR = 0.20
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -117,6 +123,22 @@ class LatControlTorque(LatControl):
       pid_log.desiredLateralAccel = float(setpoint)
       pid_log.desiredLateralJerk = float(desired_lateral_jerk)
       pid_log.saturated = bool(self._check_saturation(self.steer_max - abs(output_torque) < 1e-3, CS, steer_limited_by_safety, curvature_limited))
+
+    # FunnyPilot: lane change torque ramp (detect via blinker state)
+    in_lc = CS.leftBlinker or CS.rightBlinker
+    if in_lc:
+      if self._lc_start_ts == 0.0:
+        self._lc_start_ts = time.monotonic()
+      elapsed = time.monotonic() - self._lc_start_ts
+      lc_factor = self._LC_INIT_FACTOR + (1.0 - self._LC_INIT_FACTOR) * min(1.0, elapsed / self._LC_RAMP_TIME)
+      output_torque *= lc_factor
+    else:
+      self._lc_start_ts = 0.0
+
+    # FunnyPilot: smooth stop — taper torque as speed approaches zero
+    if CS.vEgo < 6.7:  # below 15 mph
+      smooth_factor = float(np.interp(CS.vEgo, [0.0, 4.47, 6.7], [0.0, 0.5, 1.0]))
+      output_torque *= smooth_factor
 
     # TODO left is positive in this convention
     return -output_torque, 0.0, pid_log

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 
 import cereal.messaging as messaging
@@ -19,6 +20,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
+
+# FunnyPilot: speed-dependent accel cap (full below 25mph, tapers to 50% at 75mph)
+_ACCEL_CAP_BP_MPS = [0.0, 11.176, 33.528]  # 0, 25, 75 mph
+_ACCEL_CAP_VALS = [1.0, 1.0, 0.5]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
@@ -66,6 +71,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
 
+    # FunnyPilot: brake jerk limiter
+    self._prev_a_desired = 0.0
+    self._jerk_limit_decel = 4.0  # m/s^3
+
+    # FunnyPilot: lead-loss grace period
+    self._lead_last_v = None
+    self._lead_grace_ts = 0.0
+    self._LEAD_GRACE_HOLD = 2.5    # seconds to hold cap
+    self._LEAD_GRACE_RELEASE = 2.0  # seconds to release cap
+
   @staticmethod
   def parse_model(model_msg):
     if (len(model_msg.position.x) == ModelConstants.IDX_N and
@@ -110,7 +125,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
-    accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
+    a_cruise_max = get_max_accel(v_ego)
+    accel_cap = float(np.interp(v_ego, _ACCEL_CAP_BP_MPS, _ACCEL_CAP_VALS))
+    a_cruise_max = a_cruise_max * accel_cap
+    accel_clip = [ACCEL_MIN, a_cruise_max]
     steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
     accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
 
@@ -133,6 +151,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Get new v_cruise and a_desired from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
 
+    # FunnyPilot: lead-loss coast grace period
+    _now = time.monotonic()
+    _lead_one = sm['radarState'].leadOne if sm.valid.get('radarState') else None
+    if _lead_one and _lead_one.status:
+      self._lead_last_v = _lead_one.vLead
+      self._lead_grace_ts = _now
+    elif self._lead_last_v is not None:
+      _elapsed = _now - self._lead_grace_ts
+      if _elapsed < self._LEAD_GRACE_HOLD:
+        v_cruise = min(v_cruise, self._lead_last_v)
+      elif _elapsed < self._LEAD_GRACE_HOLD + self._LEAD_GRACE_RELEASE:
+        _t = (_elapsed - self._LEAD_GRACE_HOLD) / self._LEAD_GRACE_RELEASE
+        v_cruise = min(v_cruise, self._lead_last_v + _t * (v_cruise - self._lead_last_v))
+      else:
+        self._lead_last_v = None
+
     if force_slow_decel:
       v_cruise = 0.0
 
@@ -152,6 +186,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Interpolate 0.05 seconds and save as starting point for next iteration
     a_prev = self.a_desired
     self.a_desired = float(np.interp(self.dt, CONTROL_N_T_IDX, self.a_desired_trajectory))
+
+    # FunnyPilot: brake jerk limiter — limit rate of deceleration onset
+    if self.a_desired < self._prev_a_desired and self._prev_a_desired >= 0.0:
+      max_decel_change = self._jerk_limit_decel * self.dt
+      self.a_desired = max(self.a_desired, self._prev_a_desired - max_decel_change)
+    self._prev_a_desired = self.a_desired
+
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.a_desired + a_prev) / 2.0
 
     action_t =  self.CP.longitudinalActuatorDelay + DT_MDL

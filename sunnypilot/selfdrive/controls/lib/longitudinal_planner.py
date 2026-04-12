@@ -62,11 +62,32 @@ class LongitudinalPlannerSP:
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
                     self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
 
+    # Use effective SLA target (with dynamic offset) when locked
+    sla_v = self.sla.output_v_target
+    if self.sla._sla_locked and self.sla._speed_limit_final_last > 0:
+      sla_v = self.sla._effective_speed_limit_target()
+
+    # Speed limit approach prediction: gas-gate before entering a lower-limit zone
+    # Reads ahead speed limit from live map data to begin slowing smoothly before the sign
+    _APPROACH_DIST_M = 250.0
+    approach_v = v_cruise
+    try:
+      map_data = sm['liveMapDataSP']
+      if (map_data.speedLimitAheadValid and map_data.speedLimitAheadDistance < _APPROACH_DIST_M
+          and map_data.speedLimitAheadDistance > 0):
+        ahead_ms = map_data.speedLimitAhead * CV.KPH_TO_MS
+        if ahead_ms > 0 and ahead_ms < v_ego * 0.92:  # only when noticeably lower than current speed
+          # Apply dynamic ratio if SLA locked, otherwise bare limit
+          ratio = self.sla._dynamic_offset_ratio if self.sla._sla_locked else 0.0
+          approach_v = min(v_cruise, ahead_ms * (1.0 + ratio))
+    except Exception:
+      pass
+
     targets = {
       LongitudinalPlanSource.cruise: (v_cruise, a_ego),
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
-      LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
+      LongitudinalPlanSource.speedLimitAssist: (min(sla_v, approach_v), self.sla.output_a_target),
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])
@@ -106,6 +127,7 @@ class LongitudinalPlannerSP:
     sccVision.maxPredictedLateralAccel = float(self.scc.vision.max_pred_lat_acc)
     sccVision.enabled = self.scc.vision.is_enabled
     sccVision.active = self.scc.vision.is_active
+    sccVision.gasGating = getattr(self.scc.vision, 'gas_gating_active', False)
     # Map Control
     sccMap = smartCruiseControl.map
     sccMap.state = self.scc.map.state
@@ -113,6 +135,7 @@ class LongitudinalPlannerSP:
     sccMap.aTarget = float(self.scc.map.output_a_target)
     sccMap.enabled = self.scc.map.is_enabled
     sccMap.active = self.scc.map.is_active
+    sccMap.gasGating = getattr(self.scc.map, 'gas_gating_active', False)
 
     # Speed Limit
     speedLimit = longitudinalPlanSP.speedLimit
@@ -132,6 +155,8 @@ class LongitudinalPlannerSP:
     assist.active = self.sla.is_active
     assist.vTarget = float(self.sla.output_v_target)
     assist.aTarget = float(self.sla.output_a_target)
+    assist.slaLocked = self.sla._sla_locked
+    assist.slaDynamicOffset = float(self.sla._dynamic_offset_ratio)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts
