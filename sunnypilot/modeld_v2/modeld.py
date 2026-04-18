@@ -328,9 +328,13 @@ def main(demo=False):
     if "lateral_control_params" in model.numpy_inputs.keys():
       inputs['lateral_control_params'] = np.array([v_ego, lat_delay], dtype=np.float32)
 
+    if run_count == 1:
+      cloudlog.warning("modeld first frame: entering model.run()")
     mt1 = time.perf_counter()
     model_output = model.run(bufs, transforms, inputs, prepare_only)
     mt2 = time.perf_counter()
+    if run_count == 1:
+      cloudlog.warning(f"modeld first frame: model.run() returned in {(mt2-mt1)*1e3:.1f}ms")
     model_execution_time = mt2 - mt1
 
     if model_output is not None:

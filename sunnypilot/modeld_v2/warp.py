@@ -77,7 +77,6 @@ class Warp:
 
     self.jit_cache = {}
     self.full_buffers = {k: Tensor.zeros(self.img_buffer_shape, dtype='uint8').contiguous().realize() for k in ['img', 'big_img']}
-    self._blob_cache: dict[int, Tensor] = {}
     self._nv12_cache: dict[tuple[int, int], int] = {}
     self.transforms_np = {k: np.zeros((3, 3), dtype=np.float32) for k in ['img', 'big_img']}
     self.transforms = {k: Tensor(v, device='NPY').realize() for k, v in self.transforms_np.items()}
@@ -109,14 +108,14 @@ class Warp:
       self._nv12_cache[key] = get_nv12_info(cam_w, cam_h)[3]
     yuv_size = self._nv12_cache[key]
 
-    road_ptr = bufs[road].data.ctypes.data
-    wide_ptr = bufs[wide].data.ctypes.data
-    if road_ptr not in self._blob_cache:
-      self._blob_cache[road_ptr] = Tensor.from_blob(road_ptr, (yuv_size,), dtype='uint8')
-    if wide_ptr not in self._blob_cache:
-      self._blob_cache[wide_ptr] = Tensor.from_blob(wide_ptr, (yuv_size,), dtype='uint8')
-    road_blob = self._blob_cache[road_ptr]
-    wide_blob = self._blob_cache[wide_ptr] if wide_ptr != road_ptr else Tensor.from_blob(wide_ptr, (yuv_size,), dtype='uint8')
+    # Copy VisionIpc mmap'd buffers into regular numpy arrays so the QCOM GPU
+    # can DMA-access them. Passing mmap pointers directly via Tensor.from_blob
+    # hangs on QCOM because the GPU cannot DMA from VisionIpc shared memory.
+    road_np = np.asarray(bufs[road].data, dtype=np.uint8)[:yuv_size].copy()
+    wide_np = np.asarray(bufs[wide].data, dtype=np.uint8)[:yuv_size].copy()
+    road_blob = Tensor.from_blob(road_np.ctypes.data, (yuv_size,), dtype='uint8').realize()
+    wide_blob = Tensor.from_blob(wide_np.ctypes.data, (yuv_size,), dtype='uint8').realize()
+
     np.copyto(self.transforms_np['img'], transforms[road].reshape(3, 3))
     np.copyto(self.transforms_np['big_img'], transforms[wide].reshape(3, 3))
 
