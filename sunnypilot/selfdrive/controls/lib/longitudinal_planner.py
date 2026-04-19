@@ -12,7 +12,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist, V_CRUISE_UNSET
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
@@ -62,32 +62,20 @@ class LongitudinalPlannerSP:
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
                     self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
 
-    # Use effective SLA target (with dynamic offset) when locked
     sla_v = self.sla.output_v_target
-    if self.sla._sla_locked and self.sla._speed_limit_final_last > 0:
-      sla_v = self.sla._effective_speed_limit_target()
 
-    # Speed limit approach prediction: gas-gate before entering a lower-limit zone
-    # Reads ahead speed limit from live map data to begin slowing smoothly before the sign
-    _APPROACH_DIST_M = 250.0
-    approach_v = v_cruise
-    try:
-      map_data = sm['liveMapDataSP']
-      if (map_data.speedLimitAheadValid and map_data.speedLimitAheadDistance < _APPROACH_DIST_M
-          and map_data.speedLimitAheadDistance > 0):
-        ahead_ms = map_data.speedLimitAhead * CV.KPH_TO_MS
-        if ahead_ms > 0 and ahead_ms < v_ego * 0.92:  # only when noticeably lower than current speed
-          # Apply dynamic ratio if SLA locked, otherwise bare limit
-          ratio = self.sla._dynamic_offset_ratio if self.sla._sla_locked else 0.0
-          approach_v = min(v_cruise, ahead_ms * (1.0 + ratio))
-    except Exception:
-      pass
+    # When SLA is locked, use the effective (offset-adjusted) target as the cruise reference
+    # so the dynamic offset is honoured when speed limits increase, not just when they decrease.
+    if self.sla.sla_locked and self.sla.is_active and sla_v < V_CRUISE_UNSET:
+      effective_cruise = sla_v
+    else:
+      effective_cruise = v_cruise
 
     targets = {
-      LongitudinalPlanSource.cruise: (v_cruise, a_ego),
+      LongitudinalPlanSource.cruise: (effective_cruise, a_ego),
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
-      LongitudinalPlanSource.speedLimitAssist: (min(sla_v, approach_v), self.sla.output_a_target),
+      LongitudinalPlanSource.speedLimitAssist: (sla_v, self.sla.output_a_target),
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])

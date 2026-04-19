@@ -181,6 +181,9 @@ procs += [
 
   # locationd
   NativeProcess("locationd_llk", "sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),
+
+  # FunnyPilot: browser-based terminal (port 8888)
+  PythonProcess("terminal_server", "sunnypilot.navd.nav_webserver", always_run),
 ]
 
 if os.path.exists("./github_runner.sh"):

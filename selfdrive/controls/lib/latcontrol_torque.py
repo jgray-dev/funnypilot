@@ -53,8 +53,8 @@ class LatControlTorque(LatControl):
 
     # FunnyPilot: lane change torque ramp
     self._lc_start_ts = 0.0
-    self._LC_RAMP_TIME = 5.0    # seconds to ramp from 20% to 100%
-    self._LC_INIT_FACTOR = 0.20
+    self._LC_RAMP_TIME = 3.5    # seconds to ramp from 40% to 100%
+    self._LC_INIT_FACTOR = 0.40
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor

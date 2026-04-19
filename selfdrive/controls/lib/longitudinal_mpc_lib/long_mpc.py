@@ -53,9 +53,10 @@ T_IDXS_LST = [index_function(idx, max_val=MAX_T, max_idx=N) for idx in range(N+1
 T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
-COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 7.0
-CRUISE_MIN_ACCEL = -3.0
+# FunnyPilot: Tuned longitudinal constants for natural driving feel
+COMFORT_BRAKE = 2.0  # reduced from 2.5 — brake earlier and gentler
+STOP_DISTANCE = 8.5  # increased from 6.0 — more buffer at stops
+CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
 
@@ -70,21 +71,26 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
     raise NotImplementedError("Longitudinal personality not supported")
 
 
-# Speed-dependent follow distance breakpoints [0, 25, 45, 65, 80 mph in m/s]
-_T_FOLLOW_BP = [0.0, 11.2, 20.1, 29.1, 35.8]
-# Standard follow times at each speed breakpoint
-_T_FOLLOW_STANDARD = [2.2, 2.0, 1.7, 1.45, 1.38]
-# Personality multipliers
-_T_FOLLOW_MULT = {
-  log.LongitudinalPersonality.aggressive: 0.73,
-  log.LongitudinalPersonality.standard: 1.0,
-  log.LongitudinalPersonality.relaxed: 1.47,
-}
+# FunnyPilot: Variable follow distance breakpoints (speed in m/s)
+# Breakpoints: 0, 20, 35, 50, 65, 75 mph with smooth gradients
+# Standard (dist 2): 2.25s@≤20mph → 1.0s@≥75mph
+# Aggressive (dist 1): 15% shorter. Relaxed (dist 3): 15% longer.
+_T_FOLLOW_V_MPH = [0.0, 20.0, 35.0, 50.0, 65.0, 75.0]
+_T_FOLLOW_V_MPS = [v * 0.44704 for v in _T_FOLLOW_V_MPH]
+_T_FOLLOW_AGGRESSIVE = [1.9125, 1.9125, 1.53, 1.4875, 1.105, 0.85]
+_T_FOLLOW_STANDARD   = [2.25,   2.25,   1.8,  1.75,   1.3,   1.0]
+_T_FOLLOW_RELAXED    = [2.5875, 2.5875, 2.07, 2.0125, 1.495, 1.15]
 
 def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=0.0):
-  base = float(np.interp(v_ego, _T_FOLLOW_BP, _T_FOLLOW_STANDARD))
-  mult = _T_FOLLOW_MULT.get(personality, 1.0)
-  return base * mult
+  """FunnyPilot: Speed-dependent follow time headway."""
+  if personality == log.LongitudinalPersonality.relaxed:
+    return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_RELAXED))
+  elif personality == log.LongitudinalPersonality.standard:
+    return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_STANDARD))
+  elif personality == log.LongitudinalPersonality.aggressive:
+    return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_AGGRESSIVE))
+  else:
+    raise NotImplementedError("Longitudinal personality not supported")
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)

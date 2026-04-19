@@ -1,10 +1,24 @@
-FunnyPilot Version 1.0.8.1 (2026-04-19)
+FunnyPilot Version 1.0.8 (2026-04-19)
 ========================
-* Fix: modeld_tinygrad no longer hangs on QCOM — copy VisionIpc mmap buffers to numpy before tinygrad JIT (fixes all non-stock model calibration/inference)
-* Monitoring: Doubled DM timeouts to 18× original (540s passive, 198s active)
-* Events: seatbeltNotLatched → fully suppressed (no banner, no alert)
-
-FunnyPilot Version 1.0.8 (2026-04-12)
+* Rebased on latest sunnypilot origin/dev (2026-04-12)
+* Fix: modeld_tinygrad QCOM hang — VisionIpc mmap buffers copied to numpy before tinygrad JIT
+* Longitudinal: Speed-dependent follow distance (2.25s@≤20mph → 1.0s@≥75mph standard; aggressive 15% shorter, relaxed 15% longer)
+* Longitudinal: Speed-dependent accel cap (full 0–25mph, tapers to 50% at 75mph)
+* Longitudinal: Brake jerk limiter (4 m/s³ max decel-direction change rate)
+* Longitudinal: Lead-loss grace period (2.5s hold + 2.0s gradual release)
+* Longitudinal: Personality transition gas gating; STOP_DISTANCE 8.5m, COMFORT_BRAKE 2.0
+* Longitudinal: Max cruise speed raised to 210 kph (130 mph)
+* Lateral: Lane change torque ramp 40% → 100% over 3.5s
+* Lateral: Smooth stop taper below 15mph
+* SLA: Dynamic lock with on-activation ratio capture (speed stays proportional when crossing zones)
+* SCC: Gas gating indicator (orange badge); SCC badge hidden when inactive, red for active braking
+* UI: Developer UI memory usage element (used/total RAM, color-coded)
+* UI: FunnyPilot version on home screen; FunnyPilot branch picker in software settings
+* Monitoring: 9× driver monitoring timeouts (270s passive, 99s active)
+* Events: speedTooHigh → silent static banner (no disengage, no audio)
+* Events: seatbeltNotLatched → soft disable + no-entry (standard behavior)
+* Terminal: Browser-based terminal at http://<device-ip>:8888 — full bash shell, WebSocket-backed
+* Updater: FunnyPilot branches appear in branch picker; funnypilot remote auto-added
 ========================
 * Rebased on latest sunnypilot origin/dev
 * Longitudinal: Speed-dependent follow distance (aggressive ~1s highway, relaxed ~2s, standard interpolated)
