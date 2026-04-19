@@ -1,3 +1,9 @@
+FunnyPilot Version 1.0.8.1 (2026-04-19)
+========================
+* Fix: modeld_tinygrad no longer hangs on QCOM — copy VisionIpc mmap buffers to numpy before tinygrad JIT (fixes all non-stock model calibration/inference)
+* Monitoring: Doubled DM timeouts to 18× original (540s passive, 198s active)
+* Events: seatbeltNotLatched → fully suppressed (no banner, no alert)
+
 FunnyPilot Version 1.0.8 (2026-04-12)
 ========================
 * Rebased on latest sunnypilot origin/dev
