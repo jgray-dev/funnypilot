@@ -120,12 +120,15 @@ async def api_flash(request):
     return web.json_response({"error": "Invalid branch name"}, status=400)
 
   script = (
-    f"cd {shlex.quote(OPENPILOT_DIR)} && "
-    f"git remote add funnypilot {FUNNYPILOT_REMOTE} 2>/dev/null || true && "
-    f"git fetch funnypilot && "
-    f"git checkout {shlex.quote(branch)} && "
-    f"git reset --hard funnypilot/{shlex.quote(branch)} && "
-    f"sudo systemctl restart comma"
+    # Stop updated daemon first so it doesn't detect the git change and show a UI prompt
+    f"sudo systemctl stop updated 2>/dev/null; "
+    # Ensure funnypilot remote points to HTTPS (handles both add and existing SSH URL)
+    f"git -C {shlex.quote(OPENPILOT_DIR)} remote set-url funnypilot {FUNNYPILOT_REMOTE} 2>/dev/null "
+    f"|| git -C {shlex.quote(OPENPILOT_DIR)} remote add funnypilot {FUNNYPILOT_REMOTE}; "
+    f"git -C {shlex.quote(OPENPILOT_DIR)} fetch funnypilot && "
+    f"git -C {shlex.quote(OPENPILOT_DIR)} checkout {shlex.quote(branch)} && "
+    f"git -C {shlex.quote(OPENPILOT_DIR)} reset --hard funnypilot/{shlex.quote(branch)} && "
+    f"sudo reboot"
   )
 
   proc = await asyncio.create_subprocess_shell(
