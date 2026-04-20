@@ -1,3 +1,14 @@
+FunnyPilot v1.0.8.2 (2026-04-20)
+========================
+* Based on funnypilot-1.0.6.2 (sunnypilot v2026.03.08 base — OpenCL modeld, stable calibration).
+* Removed all navigation stack (navigationd, nav_webserver route/geocode/map APIs, Mapbox UI).
+* Replaced navigation web UI (port 8888) with a browser terminal:
+  - Full pty-backed bash shell over WebSocket (`/ws`).
+  - xterm.js UI with auto-reconnect after device reboots.
+  - "Flash Branch" panel: fetches funnypilot branches from GitHub API, shows dropdown,
+    flashes selected branch (git fetch + checkout + reset --hard + systemctl restart comma).
+* Reverted model_renderer.py nav overlays (road glow, distance pill) to upstream base.
+
 FunnyPilot v1.0.6.2 (2026-03-11)
 ========================
 * Concept H navigation overhaul:

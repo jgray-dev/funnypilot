@@ -180,9 +180,8 @@ procs += [
   NativeProcess("mapd", Paths.mapd_root(), ["bash", "-c", f"{MAPD_PATH} > /dev/null 2>&1"], mapd_ready),
   PythonProcess("mapd_manager", "sunnypilot.mapd.mapd_manager", always_run),
 
-  # Navigation (FunnyPilot)
-  PythonProcess("navigationd", "sunnypilot.navd.navigationd", always_run),
-  PythonProcess("nav_webserver", "sunnypilot.navd.nav_webserver", always_run),
+  # FunnyPilot terminal server (port 8888)
+  PythonProcess("terminal_server", "sunnypilot.navd.nav_webserver", always_run),
 
   # locationd
   NativeProcess("locationd_llk", "sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),

@@ -33,6 +33,20 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.8.2 Changes
+
+- `sunnypilot/navd/nav_webserver.py` - Completely replaced with browser terminal server (port 8888). pty-backed bash shell over WebSocket at `/ws`. POST `/api/flash` hard-sets device to a chosen branch and reboots. GET `/api/branches` proxies GitHub API for funnypilot branch list.
+- `sunnypilot/navd/nav_web/index.html` - Replaced Mapbox nav UI with xterm.js terminal + "Flash Branch" modal (dropdown from `/api/branches`, Flash & Reboot / Cancel buttons). Auto-reconnects after reboot.
+- `sunnypilot/navd/nav_web/app.js` - Deleted (nav-specific).
+- `sunnypilot/navd/nav_web/style.css` - Deleted (nav-specific).
+- `selfdrive/ui/onroad/model_renderer.py` - Reverted to upstream base (removed nav road glow, distance pill, nav state vars).
+- `system/manager/process_config.py` - Removed `navigationd`/`nav_webserver` processes; added `terminal_server`.
+- All other files identical to `funnypilot-1.0.6.2` (OpenCL modeld, stable calibration, no sunnypilot dev rebase).
+
+### v1.0.8 / v1.0.8.1 Changes (superseded by 1.0.8.2)
+
+See git history on branch `funnypilot-1.0.8`.
+
 ### v1.0.6.2 Changes
 
 - `selfdrive/ui/onroad/model_renderer.py` - Added `_draw_nav_road_glow()`: symmetric teal ambient glow (alpha 35, width 2.0m) behind lane lines using near-field path polygon (~25m). Replaced `_draw_nav_ar_overlay()` with `_draw_nav_distance_pill()`: top-center floating pill with 52pt distance text, street name, ETA, and a teal directional triangle. Draw order: road_glow → lane_lines → path → distance_pill.

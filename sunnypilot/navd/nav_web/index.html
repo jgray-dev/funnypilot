@@ -2,116 +2,230 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>FunnyPilot Navigation</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FunnyPilot Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0d0d0d; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px; background: #111; border-bottom: 1px solid #222;
+      height: 48px;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+    .brand svg { color: #4dd0c4; }
+    .brand span { color: #4dd0c4; }
+
+    .header-actions { display: flex; gap: 8px; }
+    .btn {
+      padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer;
+      font-size: 13px; font-weight: 500; transition: background 0.15s;
+    }
+    .btn-flash { background: #4dd0c4; color: #0d0d0d; }
+    .btn-flash:hover { background: #3bbfb3; }
+    .btn-secondary { background: #2a2a2a; color: #ccc; }
+    .btn-secondary:hover { background: #333; }
+    .btn-danger { background: #c0392b; color: #fff; }
+    .btn-danger:hover { background: #a93226; }
+
+    #terminal-wrap {
+      height: calc(100vh - 48px);
+      padding: 8px;
+      overflow: hidden;
+    }
+    #terminal { height: 100%; }
+
+    /* Flash modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      z-index: 100; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+      padding: 24px; width: 360px; max-width: 90vw;
+    }
+    .modal h2 { font-size: 17px; margin-bottom: 16px; color: #4dd0c4; }
+    .modal label { font-size: 13px; color: #aaa; display: block; margin-bottom: 6px; }
+    .modal select {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #333;
+      background: #111; color: #e0e0e0; font-size: 14px; margin-bottom: 16px;
+    }
+    .modal select:focus { outline: none; border-color: #4dd0c4; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .modal-status { font-size: 12px; color: #888; margin-bottom: 12px; min-height: 18px; }
+
+    .status-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #888; margin-right: 6px; vertical-align: middle;
+    }
+    .status-dot.connected { background: #4dd0c4; }
+    .status-dot.disconnected { background: #c0392b; }
+  </style>
 </head>
 <body>
   <header>
     <div class="brand">
-      <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
       </svg>
-      <div>FunnyPilot <span>Nav</span></div>
+      <div>FunnyPilot <span>Terminal</span></div>
     </div>
-    
-    <div id="status-strip">
-      <div class="pulse-dot"></div>
-      <span id="status-text">Standby</span>
+    <div class="header-actions">
+      <span id="conn-status"><span class="status-dot" id="dot"></span><span id="conn-text">Connecting…</span></span>
+      <button class="btn btn-flash" onclick="openFlash()">Flash Branch</button>
     </div>
   </header>
 
-  <div class="container">
-    <div class="search-section">
-      <div class="search-box">
-        <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
-        <input
-          id="search-input"
-          type="text"
-          placeholder="Where to?"
-          autocomplete="off"
-          autocorrect="off"
-          spellcheck="false"
-        >
+  <div id="terminal-wrap">
+    <div id="terminal"></div>
+  </div>
+
+  <!-- Flash modal -->
+  <div class="modal-overlay" id="flash-modal">
+    <div class="modal">
+      <h2>Flash Branch</h2>
+      <label for="branch-select">Select branch</label>
+      <select id="branch-select"><option value="">Loading…</option></select>
+      <div class="modal-status" id="flash-status"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeFlash()">Cancel</button>
+        <button class="btn btn-danger" id="btn-do-flash" onclick="doFlash()">Flash &amp; Reboot</button>
       </div>
-      <div id="autocomplete-list"></div>
-    </div>
-
-    <div class="map-wrapper">
-      <div id="map"></div>
-      <button id="btn-recenter" class="map-recenter" type="button" title="Recenter to route">
-        Recenter
-      </button>
-    </div>
-
-    <div class="hotkey-bar">
-      <button id="btn-home" class="hotkey-btn">
-        <div class="btn-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-            <polyline points="9 22 9 12 15 12 15 22"></polyline>
-          </svg>
-        </div>
-        Home
-      </button>
-      <button id="btn-work" class="hotkey-btn">
-        <div class="btn-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
-            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-          </svg>
-        </div>
-        Work
-      </button>
-      <button id="btn-cancel" class="hotkey-btn cancel">
-        <div class="btn-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </div>
-        Cancel
-      </button>
-    </div>
-
-    <div id="dest-panel" class="dest-panel">
-      <h3>Active Route</h3>
-      <div id="dest-name" class="dest-name"></div>
-      <div id="dest-addr" class="dest-addr"></div>
-      <div class="save-btns" id="save-btns" style="display:none">
-        <button id="btn-save-home" class="save-btn">
-          <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          Save Home
-        </button>
-        <button id="btn-save-work" class="save-btn">
-          <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          Save Work
-        </button>
-      </div>
-    </div>
-
-    <div id="directions-panel" class="directions-panel">
-      <div class="directions-header">
-        <span class="directions-title">Directions</span>
-        <div id="nav-progress" class="nav-progress"></div>
-      </div>
-      <ol id="directions-list" class="directions-list"></ol>
     </div>
   </div>
 
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    const term = new Terminal({
+      theme: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#4dd0c4' },
+      fontSize: 14,
+      fontFamily: 'JetBrains Mono, Consolas, monospace',
+      cursorBlink: true,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    const dot = document.getElementById('dot');
+    const connText = document.getElementById('conn-text');
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function setConnected(ok) {
+      dot.className = 'status-dot ' + (ok ? 'connected' : 'disconnected');
+      connText.textContent = ok ? 'Connected' : 'Disconnected';
+    }
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setConnected(true);
+        sendResize();
+      };
+
+      ws.onmessage = (e) => {
+        const data = e.data instanceof ArrayBuffer ? new Uint8Array(e.data) : e.data;
+        term.write(data);
+      };
+
+      ws.onclose = ws.onerror = () => {
+        setConnected(false);
+        ws = null;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+    }
+
+    term.onData(data => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(data));
+      }
+    });
+
+    function sendResize() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const rows = term.rows;
+      const cols = term.cols;
+      const buf = new Uint8Array(5);
+      buf[0] = 0xFF;
+      buf[1] = (rows >> 8) & 0xFF;
+      buf[2] = rows & 0xFF;
+      buf[3] = (cols >> 8) & 0xFF;
+      buf[4] = cols & 0xFF;
+      ws.send(buf);
+    }
+
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      sendResize();
+    });
+
+    connect();
+
+    // Flash modal
+    let branches = [];
+
+    async function openFlash() {
+      document.getElementById('flash-modal').classList.add('open');
+      document.getElementById('flash-status').textContent = 'Fetching branches…';
+      document.getElementById('btn-do-flash').disabled = true;
+      const sel = document.getElementById('branch-select');
+      sel.innerHTML = '<option value="">Loading…</option>';
+      try {
+        const resp = await fetch('/api/branches');
+        branches = await resp.json();
+        if (!Array.isArray(branches)) throw new Error(branches.error || 'Unknown error');
+        sel.innerHTML = branches.map(b => `<option value="${b}">${b}</option>`).join('');
+        document.getElementById('flash-status').textContent = `${branches.length} branch(es) found`;
+        document.getElementById('btn-do-flash').disabled = false;
+      } catch (e) {
+        document.getElementById('flash-status').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    function closeFlash() {
+      document.getElementById('flash-modal').classList.remove('open');
+    }
+
+    async function doFlash() {
+      const branch = document.getElementById('branch-select').value;
+      if (!branch) return;
+      if (!confirm(`Flash branch "${branch}" and reboot? This will disconnect the terminal.`)) return;
+      document.getElementById('btn-do-flash').disabled = true;
+      document.getElementById('flash-status').textContent = 'Flashing…';
+      try {
+        const resp = await fetch('/api/flash', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ branch }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          document.getElementById('flash-status').textContent = 'Flashing — device will reboot. Reconnecting…';
+          closeFlash();
+        } else {
+          document.getElementById('flash-status').textContent = 'Error: ' + (data.error || 'unknown');
+          document.getElementById('btn-do-flash').disabled = false;
+        }
+      } catch (e) {
+        document.getElementById('flash-status').textContent = 'Error: ' + e.message;
+        document.getElementById('btn-do-flash').disabled = false;
+      }
+    }
+
+    // Close modal on overlay click
+    document.getElementById('flash-modal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeFlash();
+    });
+  </script>
 </body>
 </html>
