@@ -1,3 +1,12 @@
+FunnyPilot v1.0.8.3 (2026-04-20)
+========================
+* Added "Post-Blinker Unwind" lateral control resume mode.
+  - New toggle in Steering → Post-Blinker Unwind. When enabled, lateral control stays paused
+    after the turn signal turns off until the steering wheel unwinds to within 20° of center,
+    instead of waiting a fixed number of seconds.
+  - The existing Post-Blinker Delay (time-based) is hidden when Unwind is active.
+  - Uses `carState.steeringAngleDeg` — the same value shown in the developer UI as "Real Steer".
+
 FunnyPilot v1.0.8.2 (2026-04-20)
 ========================
 * Based on funnypilot-1.0.6.2 (sunnypilot v2026.03.08 base — OpenCL modeld, stable calibration).

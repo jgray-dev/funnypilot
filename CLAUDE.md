@@ -33,6 +33,11 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.8.3 Changes
+
+- `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` - Added `unwind_mode` (reads `BlinkerLateralReengageUnwind` param). When enabled, uses `_blinker_was_on` flag: stays paused after blinker turns off until `|CS.steeringAngleDeg| < 20°`. Timer-based path unchanged when unwind is off.
+- `selfdrive/ui/sunnypilot/layouts/settings/steering.py` - Added `BlinkerLateralReengageUnwind` toggle below Post-Blinker Delay. Delay option hidden when Unwind is active. Both options hidden when Blinker Pause Lateral is off.
+
 ### v1.0.8.2 Changes
 
 - `sunnypilot/navd/nav_webserver.py` - Completely replaced with browser terminal server (port 8888). pty-backed bash shell over WebSocket at `/ws`. POST `/api/flash` hard-sets device to a chosen branch and reboots. GET `/api/branches` proxies GitHub API for funnypilot branch list.
