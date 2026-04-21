@@ -24,7 +24,7 @@ Additionally, edit CLAUDE.md Key Files section to describe what changes and logi
 BRANCH=$(git branch --show-current)
 git push funnypilot "$BRANCH:$BRANCH" --force
 ssh comma@192.168.86.31 \
-  "cd /data/openpilot && git fetch funnypilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH && sudo systemctl restart comma"
+  "cd /data/openpilot && git -c http.sslVerify=false fetch funnypilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH && sudo reboot"
 ```
 
 **Push scripts:** Only create a `PUSH<version>.sh` if the user explicitly requests it (e.g. device is offline and a manual-deploy script is needed). Do not create them by default.
@@ -32,6 +32,12 @@ ssh comma@192.168.86.31 \
 ## Key Files
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
+
+### v1.0.9 Changes
+
+- `selfdrive/ui/sunnypilot/ui_state.py` - Removed `navInstruction` and `navigationStateSP` from `sm_services_ext`. These were subscribed but never published after navigationd was removed in 1.0.8.2, causing the UI process to block/hang at startup (white comma logo).
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` - Removed all `NavQuickAccess` references (import, instantiation, update, user_interacting, render). Pre-drive nav buttons no longer shown on onroad screen.
+- `sunnypilot/navd/nav_webserver.py` - Replaced unsafe `os.fork()` in asyncio with `asyncio.create_subprocess_exec` + PTY. Shell process is awaited/killed on WebSocket disconnect. Added `git -c http.sslVerify=false` to flash script for device SSL cert compatibility.
 
 ### v1.0.8.4 Changes
 

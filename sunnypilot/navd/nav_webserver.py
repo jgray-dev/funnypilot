@@ -33,25 +33,23 @@ async def ws_terminal(request):
   await ws.prepare(request)
 
   master_fd, slave_fd = pty.openpty()
-  pid = os.fork()
-  if pid == 0:
-    os.close(master_fd)
-    os.setsid()
-    fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-    os.dup2(slave_fd, 0)
-    os.dup2(slave_fd, 1)
-    os.dup2(slave_fd, 2)
-    if slave_fd > 2:
-      os.close(slave_fd)
-    env = os.environ.copy()
-    env["TERM"] = "xterm-256color"
-    env["HOME"] = "/root"
-    env["SHELL"] = "/bin/bash"
-    env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    os.execve("/bin/bash", ["/bin/bash", "-l"], env)
-    os._exit(1)
 
+  env = os.environ.copy()
+  env["TERM"] = "xterm-256color"
+  env["HOME"] = "/root"
+  env["SHELL"] = "/bin/bash"
+  env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+  proc = await asyncio.create_subprocess_exec(
+    "/bin/bash", "-l",
+    stdin=slave_fd,
+    stdout=slave_fd,
+    stderr=slave_fd,
+    env=env,
+    close_fds=True,
+  )
   os.close(slave_fd)
+
   loop = asyncio.get_event_loop()
 
   async def read_pty():
@@ -97,9 +95,10 @@ async def ws_terminal(request):
   except OSError:
     pass
   try:
-    os.waitpid(pid, os.WNOHANG)
-  except ChildProcessError:
+    proc.kill()
+  except ProcessLookupError:
     pass
+  await proc.wait()
 
   return ws
 
@@ -125,7 +124,7 @@ async def api_flash(request):
     # Ensure funnypilot remote points to HTTPS (handles both add and existing SSH URL)
     f"git -C {shlex.quote(OPENPILOT_DIR)} remote set-url funnypilot {FUNNYPILOT_REMOTE} 2>/dev/null "
     f"|| git -C {shlex.quote(OPENPILOT_DIR)} remote add funnypilot {FUNNYPILOT_REMOTE}; "
-    f"git -C {shlex.quote(OPENPILOT_DIR)} fetch funnypilot && "
+    f"git -c http.sslVerify=false -C {shlex.quote(OPENPILOT_DIR)} fetch funnypilot && "
     f"git -C {shlex.quote(OPENPILOT_DIR)} checkout {shlex.quote(branch)} && "
     f"git -C {shlex.quote(OPENPILOT_DIR)} reset --hard funnypilot/{shlex.quote(branch)} && "
     f"sudo reboot"
@@ -148,15 +147,23 @@ async def api_branches(request):
   """Proxy GitHub branch list so browser CORS issues are avoided."""
   import urllib.request
   import json
-  url = "https://api.github.com/repos/jgray-dev/funnypilot/branches?per_page=100"
+  results = []
+  page = 1
   try:
-    req = urllib.request.Request(url, headers={"User-Agent": "FunnyPilot/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-      data = json.loads(resp.read())
-    branches = sorted(
-      [b["name"] for b in data if b["name"].startswith("funnypilot-")],
-      reverse=True,
-    )
+    while True:
+      url = f"https://api.github.com/repos/jgray-dev/funnypilot/branches?per_page=100&page={page}"
+      req = urllib.request.Request(url, headers={"User-Agent": "FunnyPilot/1.0"})
+      with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+      if not data:
+        break
+      for b in data:
+        if b["name"].startswith("funnypilot-"):
+          results.append(b["name"])
+      if len(data) < 100:
+        break
+      page += 1
+    branches = sorted(results, reverse=True)
     return web.json_response(branches)
   except Exception as e:
     return web.json_response({"error": str(e)}, status=503)

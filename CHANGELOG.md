@@ -1,3 +1,20 @@
+FunnyPilot v1.0.9 (2026-04-21)
+========================
+* Fixed device stuck on white comma logo after nav stack removal.
+  - Removed `navInstruction` and `navigationStateSP` from UI SubMaster service list.
+    These were subscribed but never published (navigationd removed in 1.0.8.2), causing
+    the UI process to wait indefinitely on dead services at startup.
+  - Removed `NavQuickAccess` widget from onroad HUD renderer entirely (import, init,
+    update, render). This was the pre-drive Home/Work nav panel still showing on screen.
+  - Confirmed `model_renderer.py` is clean upstream version (no nav overlays).
+* Fixed terminal server using `os.fork()` inside asyncio event loop (unsafe; could
+  corrupt asyncio state). Replaced with `asyncio.create_subprocess_exec` + PTY fd
+  passed as stdin/stdout/stderr. Shell process is now properly awaited on disconnect.
+* Fixed branch flasher not finding new funnypilot-* branches: browser-side GitHub API
+  pagination now fetches all pages (not just page 1). Also added `git -c http.sslVerify=false`
+  to flash script for device SSL cert compatibility.
+* All 1.0.8.3 features preserved: Post-Blinker Unwind mode, terminal UI, Flash Branch panel.
+
 FunnyPilot v1.0.8.4 (2026-04-21)
 ========================
 * Version bump only — identical to 1.0.8.3. Clean re-flash to recover device from partial git state.
