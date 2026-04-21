@@ -33,6 +33,10 @@ ssh comma@192.168.86.31 \
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v1.0.8.4 Changes
+
+- Version bump only — identical to 1.0.8.3. Clean re-flash to recover device from partial git state.
+
 ### v1.0.8.3 Changes
 
 - `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` - Added `unwind_mode` (reads `BlinkerLateralReengageUnwind` param). When enabled, uses `_blinker_was_on` flag: stays paused after blinker turns off until `|CS.steeringAngleDeg| < 20°`. Timer-based path unchanged when unwind is off.

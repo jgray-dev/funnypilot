@@ -1,3 +1,7 @@
+FunnyPilot v1.0.8.4 (2026-04-21)
+========================
+* Version bump only — identical to 1.0.8.3. Clean re-flash to recover device from partial git state.
+
 FunnyPilot v1.0.8.3 (2026-04-20)
 ========================
 * Added "Post-Blinker Unwind" lateral control resume mode.
