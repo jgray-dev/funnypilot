@@ -1,31 +1,26 @@
 """
-FunnyPilot LongV2 — following controller (v2.0.1).
+FunnyPilot LongV2 — following controller (v2.0.2).
 
-v2.0.1 rewrite: Closing-rate-aware brake curve.
+When no lead: immediately clear all caps and let the MPC chase v_cruise
+naturally. No holdout/ramp — that logic caused edge cases on cold-start
+and unnecessary interference on solo driving.
 
-Old behavior (v2.0.0): tier triggered on TTC < N seconds. With small Δv
-(e.g. ego 50 mph closing on lead 42 mph), TTC stays >10s until you're
-right on top of the lead — so the controller does nothing and the MPC
-coasts. The user feels "we coast too late and for too long".
-
-New behavior: compute the constant deceleration required to match the
-lead's speed by the time we reach the desired headway distance. If
-that required decel exceeds tier thresholds, brake at that rate
-immediately. This pre-empts the coast and feels natural.
+Tier selection: closing-rate-aware brake curve.
+  a_req = (v_ego² − v_lead²) / (2 × Δd_to_gap)
+This fires gentle decel as soon as we're closing toward the desired gap,
+fixing the "coast too late" problem from v2.0.0 TTC-only tiers.
 """
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import comfort_scale
 
+_REACCEL_DELAY = 0.4  # s — hold current speed after lead re-appears
 _DT = 0.05
-_REACCEL_DELAY = 0.4
-_LEAD_LOST_HOLDOUT = 1.2
-_LEAD_LOST_RAMP = 2.0
 
 # Required-decel tier thresholds [m/s²]
-_TIER_T1 = 0.3   # tier 1: gentle
-_TIER_T2 = 0.8   # tier 2: moderate
-_TIER_T3 = 1.6   # tier 3: strong
-_TIER_T4 = 2.6   # tier 4: hard / AEB-adjacent
+_TIER_T1 = 0.3
+_TIER_T2 = 0.8
+_TIER_T3 = 1.6
+_TIER_T4 = 2.6
 
 
 class FollowingControllerV2:
@@ -38,21 +33,13 @@ class FollowingControllerV2:
     self.jerk_limit_override = None
     self.plan_source_is_lead = False
     self._reaccel_timer = 0.0
-    self._lead_lost_timer = 0.0
-    self._lead_lost_v_hold = None
     self._lead2_ff = 0.0
 
   def _required_decel(self, d_rel: float, v_ego: float, v_lead: float, d_desired: float) -> float:
-    """
-    Constant decel needed so that we reach v_lead exactly when our gap
-    has closed to d_desired. Returns 0 if not closing or already past.
-    Formula: a = (v_ego² - v_lead²) / (2 × Δd)
-    """
     if v_ego <= v_lead:
       return 0.0
     delta_d = d_rel - d_desired
     if delta_d <= 1.0:
-      # Already inside desired gap — derive an aggressive decel to recover
       return (v_ego ** 2 - v_lead ** 2) / max(2.0, 2.0 * 1.0)
     return (v_ego ** 2 - v_lead ** 2) / (2.0 * delta_d)
 
@@ -65,35 +52,36 @@ class FollowingControllerV2:
     lead2 = radar.leadTwo
     has_lead = lead1.status and lead1.dRel > 0
 
-    # leadTwo feedforward: pre-reduce accel if a far-ahead lead is braking hard
+    # leadTwo feedforward: pre-reduce accel if far-ahead lead is braking hard
     if lead2.status and lead2.aLeadK < -2.0:
       self._lead2_ff = min(self._lead2_ff + 0.3, 0.4)
     else:
       self._lead2_ff = max(self._lead2_ff - 0.1, 0.0)
 
     if not has_lead:
-      self._handle_lead_lost(v_ego, tuning)
+      # No lead — clear all overrides immediately. MPC handles v_cruise on its own.
+      self.state = "CRUISE"
+      self.tier = 0
+      self.required_decel = 0.0
+      self.v_cruise_cap = 999.0
+      self.a_override = None
+      self.jerk_limit_override = None
+      self.plan_source_is_lead = False
+      self._reaccel_timer = 0.0
       return
-
-    # Lead present
-    self._lead_lost_timer = 0.0
-    self._lead_lost_v_hold = None
 
     d_rel = lead1.dRel
     v_lead = lead1.vLead
     a_lead = lead1.aLeadK
 
-    # Desired following gap based on time headway
     d_desired = v_ego * tuning.thw_default + tuning.d_standstill
 
     a_req = self._required_decel(d_rel, v_ego, v_lead, d_desired)
-    # Account for lead's own braking — we need to brake at least as hard
     if a_lead < 0:
       a_req = max(a_req, -a_lead * 0.7)
 
     self.required_decel = a_req
 
-    # Tier classification by required deceleration
     if a_req >= _TIER_T4:
       self.tier = 4
     elif a_req >= _TIER_T3:
@@ -105,7 +93,7 @@ class FollowingControllerV2:
     else:
       self.tier = 0
 
-    # Stopping / stopped detection
+    # Stopping / stopped
     if v_ego < 0.5 and d_rel < tuning.d_standstill + 2.0:
       self.state = "STOPPED"
       self.v_cruise_cap = 0.0
@@ -117,7 +105,6 @@ class FollowingControllerV2:
     if v_lead < 0.5 and d_rel < tuning.d_standstill + 3.0:
       self.state = "STOPPING"
 
-    # Apply tier
     if self.tier == 0:
       self.state = "CRUISE" if d_rel > d_desired * 1.5 else "FOLLOWING"
       self.v_cruise_cap = 999.0
@@ -126,7 +113,6 @@ class FollowingControllerV2:
       self.plan_source_is_lead = (self.state == "FOLLOWING")
     elif self.tier == 1:
       self.state = "FOLLOWING"
-      # Cap at lead speed + small margin; gentle decel command
       self.v_cruise_cap = v_lead + 0.5
       self.a_override = -(a_req + self._lead2_ff)
       self.jerk_limit_override = tuning.jerk_limit_normal
@@ -152,40 +138,10 @@ class FollowingControllerV2:
       self.jerk_limit_override = tuning.jerk_limit_safety * 1.3
       self.plan_source_is_lead = True
 
-    # REACCEL grace period
+    # Brief hold after tier drops back to 0 (prevents instant surge forward)
     if self.tier == 0 and self._reaccel_timer > 0:
       self._reaccel_timer -= _DT
       self.v_cruise_cap = min(self.v_cruise_cap, v_ego)
       self.plan_source_is_lead = True
     elif self.tier > 0:
       self._reaccel_timer = _REACCEL_DELAY
-
-  def _handle_lead_lost(self, v_ego: float, tuning) -> None:
-    self.required_decel = 0.0
-    self.tier = 0
-    if self._lead_lost_v_hold is None:
-      self._lead_lost_v_hold = v_ego
-      self._lead_lost_timer = _LEAD_LOST_HOLDOUT + _LEAD_LOST_RAMP
-
-    self._lead_lost_timer -= _DT
-
-    if self._lead_lost_timer > _LEAD_LOST_RAMP:
-      self.state = "CRUISE"
-      self.v_cruise_cap = self._lead_lost_v_hold
-      self.a_override = 0.0
-      self.jerk_limit_override = tuning.jerk_limit_normal
-      self.plan_source_is_lead = True
-    elif self._lead_lost_timer > 0:
-      frac = self._lead_lost_timer / _LEAD_LOST_RAMP
-      self.v_cruise_cap = self._lead_lost_v_hold + (999.0 - self._lead_lost_v_hold) * (1 - frac)
-      self.a_override = None
-      self.jerk_limit_override = tuning.jerk_limit_normal
-      self.plan_source_is_lead = False
-      self.state = "REACCEL"
-    else:
-      self._lead_lost_v_hold = None
-      self.v_cruise_cap = 999.0
-      self.a_override = None
-      self.jerk_limit_override = None
-      self.plan_source_is_lead = False
-      self.state = "CRUISE"

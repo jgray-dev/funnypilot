@@ -112,8 +112,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # (those read sm['carState'].vCruise directly), but everything downstream
     # of this point — the MPC, SCC, SLA, governor — sees v_cruise * 0.9. So
     # setting cruise at 50 mph commands the model to plan for 45 mph.
+    #
+    # Safety: when vCruise = V_CRUISE_UNSET (255 kph), min() produces
+    # V_CRUISE_MAX (145 kph = 90 mph) which would flow into the MPC uncapped
+    # and cause runaway acceleration. Cap to v_ego when not initialized.
     if v_cruise_initialized:
       v_cruise *= 0.9
+    else:
+      v_cruise = v_ego
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel

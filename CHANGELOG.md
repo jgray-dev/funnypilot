@@ -1,3 +1,18 @@
+FunnyPilot v2.0.2 (2026-05-06)
+========================
+* fix: Critical safety bug — runaway acceleration with no lead vehicle
+  Root cause: V_CRUISE_UNSET (255 kph) is the sentinel for "cruise not
+  set yet." min(255, V_CRUISE_MAX=145) = 145 kph = 90 mph was flowing
+  through to the MPC uncapped because the -10% offset only applied when
+  initialized. MPC then chased 90 mph with no lead to constrain it.
+  Fix: when v_cruise_initialized = False, use v_ego (hold current speed)
+  instead of V_CRUISE_MAX.
+* fix: Remove lead-lost holdout from FollowingControllerV2. The 1.2s
+  hold + 2.0s ramp on lead disappearance caused edge cases on cold-start
+  (no lead → immediate cap at v_ego=0 for several seconds). The MPC
+  handles lead-loss transitions naturally via its own safe-distance
+  constraint. When no lead is detected, all caps/overrides clear instantly.
+
 FunnyPilot v2.0.1 (2026-05-06)
 ========================
 * Lead following — closing-rate brake curve:
