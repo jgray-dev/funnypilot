@@ -51,12 +51,16 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot: Lane change torque ramping state
+    # FunnyPilot v2.0.1: Blinker-triggered smooth lane change torque ramp
+    # On blinker rising edge, scale torque to 25% (75% reduction) and ramp
+    # back to 100% over 5.0 seconds. Triggered purely by the blinker, so the
+    # ramp begins the moment the user signals — not when the model starts
+    # the curvature command.
     self.lane_change_torque_scale = 1.0
     self.lane_change_start_time = 0.0
-    self.lane_change_ramp_duration = 3.5  # 3.5 seconds - gradual highway lane changes
-    self.lane_change_min_scale = 0.4  # Start at 40% - gentle initial torque
-    self.prev_lane_change_state = 0
+    self.lane_change_ramp_duration = 5.0
+    self.lane_change_min_scale = 0.25
+    self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -115,20 +119,20 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot: Lane change torque ramping
-      lane_change_active = abs(desired_curvature) > 0.01 and abs(CS.steeringAngleDeg) > 10
-
-      if lane_change_active and self.prev_lane_change_state == 0:
+      # FunnyPilot v2.0.1: Blinker-triggered smooth lane change torque ramp
+      blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker
+      if blinker_on and not self._prev_blinker_on:
         self.lane_change_start_time = time.monotonic()
-        self.prev_lane_change_state = 1
+      self._prev_blinker_on = blinker_on
 
-      if lane_change_active:
-        elapsed = time.monotonic() - self.lane_change_start_time
-        ramp_progress = min(elapsed / self.lane_change_ramp_duration, 1.0)
-        self.lane_change_torque_scale = self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
+      elapsed = time.monotonic() - self.lane_change_start_time
+      if elapsed < self.lane_change_ramp_duration:
+        ramp_progress = elapsed / self.lane_change_ramp_duration
+        self.lane_change_torque_scale = (
+          self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
+        )
       else:
         self.lane_change_torque_scale = 1.0
-        self.prev_lane_change_state = 0
 
       output_torque *= self.lane_change_torque_scale
 

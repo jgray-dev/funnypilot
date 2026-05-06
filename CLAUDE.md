@@ -78,6 +78,7 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 - `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` — `COMFORT_BRAKE` 2.0 → 1.5 to enlarge safe-distance and trigger earlier brake initiation.
 - `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` — Ported post-blinker unwind from 1.0.8.3. UNWIND_MODE hardcoded to True (avoids params_keys.h whitelist).
 - `selfdrive/monitoring/helpers.py` — Restored 9× DM timeouts from 1.0.8.3 (270s passive, 99s active).
+- `selfdrive/controls/lib/latcontrol_torque.py` — Blinker-triggered smooth lane change: torque scaled to 25% on blinker rising edge, ramps to 100% over 5.0s. Trigger uses `CS.leftBlinker != CS.rightBlinker` (exactly one blinker on) instead of curvature/angle heuristic.
 
 ### v2.0.0 Changes
 

@@ -31,6 +31,11 @@ FunnyPilot v2.0.1 (2026-05-06)
 * Driver monitoring restored to 9× timeouts (matches 1.0.8.3):
   - Passive wheel-touch: 270s (was 90s)
   - Active monitoring: 99s (was 33s)
+* Smooth lane change torque (blinker-triggered):
+  - On blinker rising edge, lateral torque drops to 25% (75% reduction) and
+    linearly ramps back to 100% over 5.0 seconds.
+  - Trigger is purely the blinker — ramp begins the moment the user signals,
+    not when the model commits curvature.
 
 FunnyPilot v2.0.0 (2026-05-06)
 ========================
