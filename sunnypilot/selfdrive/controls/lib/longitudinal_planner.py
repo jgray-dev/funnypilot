@@ -17,6 +17,13 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolve
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
+# LongV2 components
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.following_v2 import FollowingControllerV2
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor
+
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
 
@@ -36,6 +43,13 @@ class LongitudinalPlannerSP:
     self.output_v_target = 0.
     self.output_a_target = 0.
 
+    # LongV2 components
+    self._scc_vision_v2 = SCCVisionV2()
+    self._scc_map_v2 = SCCMapV2()
+    self._following_v2 = FollowingControllerV2()
+    self._speed_governor = SpeedGovernor()
+    self._fric = 0.8
+
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
     experimental_mode = sm['selfdriveState'].experimentalMode
     if not self.dec.active():
@@ -51,7 +65,10 @@ class LongitudinalPlannerSP:
     long_enabled = sm['carControl'].enabled
     long_override = sm['carControl'].cruiseControl.override
 
-    # Smart Cruise Control
+    # Update friction estimate
+    self._fric = get_fric(sm)
+
+    # Smart Cruise Control (legacy — kept for compatibility)
     self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
 
     # Speed Limit Resolver
@@ -62,15 +79,53 @@ class LongitudinalPlannerSP:
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
                     self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
 
-    targets = {
-      LongitudinalPlanSource.cruise: (v_cruise, a_ego),
-      LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
-      LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
-      LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
-    }
+    # LongV2: SCC-Vision v2
+    self._scc_vision_v2.update(sm, long_enabled, long_override, v_ego, a_ego, self._fric)
 
-    self.source = min(targets, key=lambda k: targets[k][0])
-    self.output_v_target, self.output_a_target = targets[self.source]
+    # LongV2: SCC-Map v2
+    self._scc_map_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)
+
+    # LongV2: Following controller
+    self._following_v2.update(sm, v_ego, a_ego, self._fric)
+
+    # LongV2: Speed governor selects minimum of all v_targets
+    v_scc_vision = self._scc_vision_v2.output_v_target
+    v_scc_map = self._scc_map_v2.output_v_target
+    v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
+
+    # Speed limit info for road cap logic
+    road_type = ""
+    speed_limit_posted = self.resolver.speed_limit if self.resolver.speed_limit_valid else 0.0
+    try:
+      road_type = sm["roadLimitSpeed"].roadType if sm.updated.get("roadLimitSpeed") else ""
+    except Exception:
+      pass
+
+    v_governed = self._speed_governor.update(
+      v_cruise, v_scc_map, v_scc_vision, v_sla,
+      road_type, speed_limit_posted, self._fric
+    )
+
+    # Apply following controller cap on top of speed governor
+    if self._following_v2.v_cruise_cap < v_governed:
+      v_governed = self._following_v2.v_cruise_cap
+
+    # Source tracking — prefer most restrictive non-cruise source for display
+    if v_governed < v_cruise - 0.5:
+      src = self._speed_governor.source
+      if src == "scc_vision":
+        self.source = LongitudinalPlanSource.sccVision
+      elif src == "scc_map":
+        self.source = LongitudinalPlanSource.sccMap
+      elif src == "sla":
+        self.source = LongitudinalPlanSource.speedLimitAssist
+      else:
+        self.source = LongitudinalPlanSource.cruise
+    else:
+      self.source = LongitudinalPlanSource.cruise
+
+    self.output_v_target = v_governed
+    self.output_a_target = a_ego
     return self.output_v_target, self.output_a_target
 
   def update(self, sm: messaging.SubMaster) -> None:
@@ -95,26 +150,27 @@ class LongitudinalPlannerSP:
     dec.enabled = self.dec.enabled()
     dec.active = self.dec.active()
 
-    # Smart Cruise Control
+    # Smart Cruise Control — use LongV2 SCC-V and SCC-M
     smartCruiseControl = longitudinalPlanSP.smartCruiseControl
-    # Vision Control
+    # Vision Control (LongV2)
     sccVision = smartCruiseControl.vision
-    sccVision.state = self.scc.vision.state
-    sccVision.vTarget = float(self.scc.vision.output_v_target)
-    sccVision.aTarget = float(self.scc.vision.output_a_target)
-    sccVision.currentLateralAccel = float(self.scc.vision.current_lat_acc)
-    sccVision.maxPredictedLateralAccel = float(self.scc.vision.max_pred_lat_acc)
-    sccVision.enabled = self.scc.vision.is_enabled
-    sccVision.active = self.scc.vision.is_active
-    sccVision.gasGating = bool(self.scc.vision.gas_gating_active)  # FunnyPilot
-    # Map Control
+    sccVision.state = 0  # disabled placeholder; LongV2 uses its own state machine
+    sccVision.vTarget = float(self._scc_vision_v2.output_v_target)
+    sccVision.aTarget = float(self._scc_vision_v2.output_a_target)
+    sccVision.currentLateralAccel = 0.0
+    sccVision.maxPredictedLateralAccel = 0.0
+    sccVision.enabled = self._scc_vision_v2.is_enabled
+    sccVision.active = self._scc_vision_v2.is_active
+    sccVision.gasGating = bool(self._scc_vision_v2.gas_gating_active)
+    # Map Control (LongV2)
     sccMap = smartCruiseControl.map
-    sccMap.state = self.scc.map.state
-    sccMap.vTarget = float(self.scc.map.output_v_target)
-    sccMap.aTarget = float(self.scc.map.output_a_target)
-    sccMap.enabled = self.scc.map.is_enabled
-    sccMap.active = self.scc.map.is_active
-    sccMap.gasGating = bool(self.scc.map.gas_gating_active)  # FunnyPilot
+    sccMap.state = 0  # disabled placeholder
+    sccMap.vTarget = float(self._scc_map_v2.output_v_target)
+    sccMap.aTarget = float(self._scc_map_v2.output_a_target)
+    sccMap.enabled = self._scc_map_v2.is_enabled
+    sccMap.active = self._scc_map_v2.is_active
+    sccMap.gasGating = bool(self._scc_map_v2.gas_gating_active)
+    sccMap.cornerRadiusAhead = float(self._scc_map_v2.corner_radius_m)
 
     # Speed Limit
     speedLimit = longitudinalPlanSP.speedLimit
@@ -134,12 +190,17 @@ class LongitudinalPlannerSP:
     assist.active = self.sla.is_active
     assist.vTarget = float(self.sla.output_v_target)
     assist.aTarget = float(self.sla.output_a_target)
-    assist.slaLocked = bool(self.sla.sla_locked)             # FunnyPilot: dynamic SLA lock
-    assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)  # FunnyPilot: offset ratio
+    assist.slaLocked = bool(self.sla.sla_locked)
+    assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts
     e2eAlerts.greenLightAlert = self.e2e_alerts_helper.green_light_alert
     e2eAlerts.leadDepartAlert = self.e2e_alerts_helper.lead_depart_alert
+
+    # LongV2: friction + weather cap
+    longitudinalPlanSP.frictionCoefficient = float(self._fric)
+    longitudinalPlanSP.weatherCapActive = bool(self._speed_governor.weather_cap_active)
+    longitudinalPlanSP.vWeatherCap = float(self._speed_governor.v_weather_cap)
 
     pm.send('longitudinalPlanSP', plan_sp_send)

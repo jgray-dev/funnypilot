@@ -193,6 +193,9 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
   aTarget @5 :Float32;
   events @6 :List(OnroadEventSP.Event);
   e2eAlerts @7 :E2eAlerts;
+  frictionCoefficient @8 :Float32;   # FunnyPilot: live FRIC estimate
+  weatherCapActive @9 :Bool;         # FunnyPilot: wet-road speed cap active
+  vWeatherCap @10 :Float32;          # FunnyPilot: weather-derived speed cap [m/s]
 
   struct DynamicExperimentalControl {
     state @0 :DynamicExperimentalControlState;
@@ -226,7 +229,8 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       aTarget @2 :Float32;
       enabled @3 :Bool;
       active @4 :Bool;
-      gasGating @5 :Bool;  # FunnyPilot: gas gating currently active
+      gasGating @5 :Bool;          # FunnyPilot: gas gating currently active
+      cornerRadiusAhead @6 :Float32; # FunnyPilot: detected corner radius [m]
     }
 
     enum VisionState {

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FunnyPilot Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; }
+    #topbar {
+      background: #1a1a1a;
+      border-bottom: 1px solid #2a2a2a;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    #topbar h1 { font-size: 16px; font-weight: 600; color: #e94560; flex: 1; }
+    #flash-btn {
+      background: #e94560;
+      color: #fff;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    #flash-btn:hover { background: #c0392b; }
+    #status {
+      font-size: 12px;
+      color: #666;
+    }
+    #terminal-container { flex: 1; padding: 4px; overflow: hidden; }
+
+    /* Modal */
+    #modal-overlay {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #modal-overlay.active { display: flex; }
+    #modal {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 24px;
+      min-width: 360px;
+      max-width: 480px;
+      width: 90%;
+    }
+    #modal h2 { margin-bottom: 16px; font-size: 18px; color: #e0e0e0; }
+    #modal select {
+      width: 100%;
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    #modal select option { background: #2a2a2a; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .btn-primary {
+      background: #e94560;
+      color: #fff;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .btn-secondary {
+      background: #333;
+      color: #ccc;
+      border: 1px solid #444;
+      padding: 8px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn-primary:hover { background: #c0392b; }
+    .btn-secondary:hover { background: #444; }
+    #modal-status { font-size: 13px; color: #aaa; margin-top: 10px; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>🚗 FunnyPilot Terminal</h1>
+    <span id="status">Connecting...</span>
+    <button id="flash-btn" onclick="openFlashModal()">Flash Branch</button>
+  </div>
+  <div id="terminal-container"></div>
+
+  <div id="modal-overlay" id="modal-overlay">
+    <div id="modal">
+      <h2>Flash Branch &amp; Reboot</h2>
+      <select id="branch-select">
+        <option value="">Loading branches...</option>
+      </select>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeFlashModal()">Cancel</button>
+        <button class="btn-primary" onclick="doFlash()">Flash &amp; Reboot</button>
+      </div>
+      <div id="modal-status"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <script>
+    const term = new Terminal({
+      theme: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e94560' },
+      fontSize: 14,
+      fontFamily: '"Cascadia Code", "Fira Code", monospace',
+      cursorBlink: true,
+      scrollback: 5000,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal-container'));
+    fitAddon.fit();
+
+    window.addEventListener('resize', () => fitAddon.fit());
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connect() {
+      clearTimeout(reconnectTimer);
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        document.getElementById('status').textContent = 'Connected';
+        document.getElementById('status').style.color = '#2ecc71';
+        sendResize();
+      };
+
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(e.data));
+        } else {
+          term.write(e.data);
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('status').textContent = 'Disconnected — reconnecting...';
+        document.getElementById('status').style.color = '#e74c3c';
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => { ws.close(); };
+    }
+
+    function sendResize() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const cols = term.cols;
+      const rows = term.rows;
+      const buf = new Uint8Array(5);
+      buf[0] = 0xFF;
+      buf[1] = cols & 0xFF;
+      buf[2] = (cols >> 8) & 0xFF;
+      buf[3] = rows & 0xFF;
+      buf[4] = (rows >> 8) & 0xFF;
+      ws.send(buf);
+    }
+
+    term.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(data));
+      }
+    });
+
+    term.onResize(() => sendResize());
+
+    connect();
+
+    // Flash modal
+    function openFlashModal() {
+      document.getElementById('modal-overlay').classList.add('active');
+      document.getElementById('modal-status').textContent = '';
+      loadBranches();
+    }
+
+    function closeFlashModal() {
+      document.getElementById('modal-overlay').classList.remove('active');
+    }
+
+    async function loadBranches() {
+      const sel = document.getElementById('branch-select');
+      sel.innerHTML = '<option value="">Loading...</option>';
+      try {
+        const resp = await fetch('/api/branches');
+        const branches = await resp.json();
+        sel.innerHTML = '';
+        if (!branches.length) {
+          sel.innerHTML = '<option value="">No branches found</option>';
+          return;
+        }
+        for (const b of branches) {
+          const opt = document.createElement('option');
+          opt.value = b.name;
+          const dateStr = b.date ? ` (${b.date.slice(0, 10)})` : '';
+          opt.textContent = b.name + dateStr;
+          sel.appendChild(opt);
+        }
+      } catch (e) {
+        sel.innerHTML = `<option value="">Error: ${e.message}</option>`;
+      }
+    }
+
+    async function doFlash() {
+      const branch = document.getElementById('branch-select').value;
+      if (!branch) return;
+      const statusEl = document.getElementById('modal-status');
+      statusEl.textContent = `Flashing ${branch}...`;
+      try {
+        const resp = await fetch('/api/flash', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ branch }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          statusEl.textContent = 'Flash started! Device will reboot shortly.';
+          statusEl.style.color = '#2ecc71';
+          setTimeout(closeFlashModal, 3000);
+        } else {
+          statusEl.textContent = `Error: ${data.error}`;
+          statusEl.style.color = '#e74c3c';
+        }
+      } catch (e) {
+        statusEl.textContent = `Error: ${e.message}`;
+        statusEl.style.color = '#e74c3c';
+      }
+    }
+
+    // Close modal on overlay click
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('modal-overlay')) closeFlashModal();
+    });
+  </script>
+</body>
+</html>

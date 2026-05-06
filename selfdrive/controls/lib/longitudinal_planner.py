@@ -202,6 +202,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self._personality_gas_gate_frames > 0:
       output_a_target = min(output_a_target, 0.0)
 
+    # LongV2: Apply following controller a_override if set
+    fv2 = self._following_v2
+    if fv2.a_override is not None:
+      output_a_target = min(output_a_target, fv2.a_override)
+
+    # LongV2: Apply per-tier jerk limit from following controller
+    if fv2.jerk_limit_override is not None:
+      from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
+      jerk_lim = fv2.jerk_limit_override
+      max_delta_jerk = jerk_lim * self.dt
+      output_a_target = max(self.output_a_target - max_delta_jerk,
+                            min(self.output_a_target + max_delta_jerk, output_a_target))
+
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 

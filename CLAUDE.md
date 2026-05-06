@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v2.0.0 Changes
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/` — New package: physics-based longitudinal control. `tuning.py` externalizes all constants to `Params["LongV2Tuning"]` JSON. `fric.py` reads `liveParameters.frictionCoefficientFiltered`. `jerk_filter.py` is a rate-limited accel filter. `scc_vision_v2.py` detects corners from p97 lateral accel predictions. `scc_map_v2.py` cross-validates mapd speeds against physics and handles corner unwind. `following_v2.py` is a 7-state following machine with predictive TTC and tiered decel. `speed_governor.py` picks the minimum of all v_targets.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` — Integrated all long_v2 components; `update_targets()` calls v2 controllers and speed governor; publishes `frictionCoefficient`, `weatherCapActive`, `vWeatherCap`, `cornerRadiusAhead` to cereal.
+- `selfdrive/controls/lib/longitudinal_planner.py` — Wires in `following_v2.a_override` and `jerk_limit_override` for per-tier decel.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` — New gradient badge renderer: green→orange→red 300ms transition; shows speed in MPH when governing; drop shadow pill shape.
+- `cereal/custom.capnp` — Added `frictionCoefficient @8`, `weatherCapActive @9`, `vWeatherCap @10` to `LongitudinalPlanSP`; added `cornerRadiusAhead @6` to `SmartCruiseControl.Map`.
+- `sunnypilot/navd/nav_webserver.py` — PTY-backed terminal server on port 8888. `/ws` WebSocket shell, `/api/branches` (date-sorted, newest first), `/api/flash` (branch selector + reboot). Uses asyncio subprocess + PTY fd.
+- `sunnypilot/navd/nav_web/index.html` — xterm.js terminal UI with Flash Branch modal showing branches sorted by last commit date.
+- `system/manager/process_config.py` — Added `terminal_server` process (always_run).
+
 ### v0.9.8 Changes
 
 - `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` - Dynamic SLA locking: `_sla_locked` flag + `_dynamic_offset_ratio` float. When SLA is active and user adjusts cruise, records offset % (capped ±50%) and stays locked instead of deactivating. `_effective_speed_limit_target()` applies ratio to new zones. `_update_locked_offset()` recalculates ratio on cruise change with guards (`_speed_limit_final_last > 0`, `v_cruise_cluster > 0`). `_update_confirmed_state()` sets `_sla_locked = True` on activation. Lock cleared only on full disable (`long_enabled = False` or `enabled = False`).

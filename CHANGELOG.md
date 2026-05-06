@@ -1,3 +1,23 @@
+FunnyPilot v2.0.0 (2026-05-06)
+========================
+* LongV2 — physics-based longitudinal control:
+  - FRIC-aware corner speed: v_corner = k × sqrt(μ × g × R) using live friction coefficient
+  - SCC-Vision v2: threshold-based on k_sccv × FRIC × g, p97 predicted lateral accel
+  - SCC-Map v2: physics cross-validation of mapd speed targets; corner unwind via curvatureRates
+  - Speed governor: min(v_cruise, v_scc_map, v_scc_vision, v_sla, v_road_cap, v_weather_cap)
+  - Following v2 state machine: CRUISE/GAP_ACQUIRING/FOLLOWING/DECELERATING/STOPPING/STOPPED/REACCEL
+  - Jerk filter: 0.5 m/s³ normal, 3.0 m/s³ safety, per-tier override from following controller
+  - Weather speed cap: activates when FRIC < 0.6 (wet road detection)
+  - All constants externalized to Params["LongV2Tuning"] JSON (no recompile needed)
+* SCC badge UI redesign:
+  - Green (inactive) → Orange (gas gating) → Red (braking): 300ms smooth color transition
+  - When governing, badge shows speed in MPH instead of label
+  - Drop shadow, auto-width pill shape
+* Terminal server (port 8888):
+  - PTY-backed bash shell accessible from any browser at http://<device-ip>:8888
+  - Flash & Reboot modal: lists all funnypilot branches sorted by last commit date
+  - Auto-reconnects after reboot
+
 FunnyPilot v0.9.8 (2026-03-01)
 ========================
 * Dynamic Speed Limit Assist (Locked Mode):
