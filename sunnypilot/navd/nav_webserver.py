@@ -78,9 +78,9 @@ async def handle_flash(request: web.Request) -> web.Response:
 
     script = (
       f"cd /data/openpilot && "
-      f"git -c http.sslVerify=false fetch origin {branch} && "
+      f"git -c http.sslVerify=false fetch funnypilot {branch} && "
       f"git checkout {branch} && "
-      f"git reset --hard origin/{branch} && "
+      f"git reset --hard funnypilot/{branch} && "
       f"sudo reboot"
     )
     proc = await asyncio.create_subprocess_exec(
@@ -99,12 +99,32 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
   await ws.prepare(request)
 
   master_fd, slave_fd = pty.openpty()
-  env = {**os.environ, "TERM": "xterm-256color", "HOME": "/root"}
+
+  # Strip venv from environment so the shell starts clean.
+  # The openpilot manager runs inside /usr/local/venv; we don't want that
+  # leaking into the terminal session — it breaks git, pip, and the updater.
+  base_env = {}
+  for key, val in os.environ.items():
+    if key in ("VIRTUAL_ENV", "PYTHONHOME"):
+      continue  # drop venv markers
+    if key == "PATH":
+      # Remove any venv bin dir from PATH
+      parts = [p for p in val.split(":") if "/venv" not in p]
+      base_env["PATH"] = ":".join(parts)
+    else:
+      base_env[key] = val
+
+  base_env.update({
+    "TERM": "xterm-256color",
+    "HOME": "/root",
+    "PYTHONPATH": "/data/openpilot",
+  })
 
   proc = await asyncio.create_subprocess_exec(
     _SHELL, "--login",
     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-    env=env,
+    env=base_env,
+    cwd="/data/openpilot",
     close_fds=True,
   )
   os.close(slave_fd)
