@@ -1,3 +1,37 @@
+FunnyPilot v2.0.1 (2026-05-06)
+========================
+* Lead following — closing-rate brake curve:
+  - Replaced TTC-only tier triggering. With small Δv (e.g. 50→42 mph) the
+    old TTC stayed >10s until you were right on top of the lead, so the
+    controller did nothing and the MPC coasted too late and too long.
+  - New: required-decel tiers based on `(v_ego² − v_lead²) / (2·Δd_to_gap)`.
+    Pre-empts the coast and engages gentle decel as soon as we're closing.
+* Stronger stopping power:
+  - LongV2 `decel_comfort` 1.8 → 2.5 m/s², added `decel_max` 3.5 m/s² for tier 4
+  - `jerk_limit_normal` 0.5 → 0.7 m/s³, `jerk_limit_safety` 3.0 → 4.5 m/s³
+  - MPC `COMFORT_BRAKE` 2.0 → 1.5: enlarges safe-distance constraint so MPC
+    starts braking sooner when closing on a slow lead
+* SCC badges in debug UI mode:
+  - When DevUIInfo is enabled, badges show the calculated v_target at all
+    times (not only when actively governing). SCCVisionV2 / SCCMapV2 now
+    always publish their computed corner speed.
+* Friction coefficient recalibration (matches observed 0.08 — 1.1 range):
+  - Nominal dry pavement μ = 0.5 (was 0.8)
+  - Wet/snow boundary at μ = 0.092 (was 0.6)
+  - `comfort_scale` linear ramp from 0.5 (wet floor) to 1.0 (dry nominal)
+  - `weather_speed_scale` ramps 0.6 → 1.0 across the wet range
+* Hidden −10% cruise speed offset:
+  - The speedometer / set-speed UI is unchanged (reads `carState.vCruise`
+    directly), but everything downstream of the planner sees `v_cruise * 0.9`.
+  - Setting cruise at 50 mph → MPC plans for 45 mph.
+* Post-blinker unwind (ported from 1.0.9):
+  - Lateral control stays paused after the blinker turns off until the
+    steering wheel returns within 20° of center.
+  - Hardcoded ON for this personal branch (no params toggle).
+* Driver monitoring restored to 9× timeouts (matches 1.0.8.3):
+  - Passive wheel-touch: 270s (was 90s)
+  - Active monitoring: 99s (was 33s)
+
 FunnyPilot v2.0.0 (2026-05-06)
 ========================
 * LongV2 — physics-based longitudinal control:

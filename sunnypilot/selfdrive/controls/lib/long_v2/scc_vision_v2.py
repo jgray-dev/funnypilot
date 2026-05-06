@@ -59,8 +59,6 @@ class SCCVisionV2:
     entering_thresh = threshold * _ENTERING_THRESHOLD_FACTOR
     leaving_thresh = threshold * _LEAVING_THRESHOLD_FACTOR
 
-    prev_state = self.state
-
     if self.state == "INACTIVE":
       if p97_lat > entering_thresh:
         self.state = "ENTERING"
@@ -78,33 +76,31 @@ class SCCVisionV2:
       elif p97_lat > entering_thresh:
         self.state = "TURNING"
 
+    # Always compute v_target from curvature (visible in debug UI even when inactive)
+    kappa = p97_lat / max(v_ego ** 2, 1.0)
+    if kappa > 1e-4:
+      v_target_raw = math.sqrt(threshold / kappa)
+    else:
+      v_target_raw = 999.0
+    v_target_raw = max(_MIN_V_TARGET, v_target_raw)
+
+    # Smooth v_target: slow on the way down, fast on the way up
+    if v_target_raw < self._v_target_smooth:
+      alpha = 0.15
+    else:
+      alpha = 0.4
+    self._v_target_smooth = self._v_target_smooth * (1 - alpha) + v_target_raw * alpha
+
+    self.output_v_target = self._v_target_smooth
+
     if self.state in ("ENTERING", "TURNING", "LEAVING"):
       self.is_active = True
-      # Compute v_target from curvature: lat_acc = κ × v² → v = sqrt(threshold / κ)
-      kappa = p97_lat / max(v_ego ** 2, 1.0)
-      if kappa > 1e-4:
-        v_target_raw = math.sqrt(threshold / kappa)
-      else:
-        v_target_raw = 999.0
-      v_target_raw = max(_MIN_V_TARGET, v_target_raw)
-
-      # Smooth v_target on the way down, release quickly on the way up
-      if v_target_raw < self._v_target_smooth:
-        alpha = 0.15
-      else:
-        alpha = 0.4
-      self._v_target_smooth = self._v_target_smooth * (1 - alpha) + v_target_raw * alpha
-
-      self.output_v_target = self._v_target_smooth
-      self.output_a_target = a_ego  # let MPC choose accel within the speed cap
-      # Gas gating: if we're decelerating to corner speed while actually coasting/above limit
+      self.output_a_target = a_ego
       self.gas_gating_active = v_ego > self.output_v_target + 1.0
     else:
       self.is_active = False
-      self.output_v_target = 999.0
       self.output_a_target = 0.0
       self.gas_gating_active = False
-      self._v_target_smooth = 999.0
 
   def _reset(self):
     self.state = "INACTIVE"

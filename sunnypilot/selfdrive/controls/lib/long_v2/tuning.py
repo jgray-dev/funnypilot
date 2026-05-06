@@ -23,11 +23,13 @@ class LongV2Tuning:
   # Standstill gap [m]
   d_standstill: float = 5.0
   # Normal jerk limit [m/s³]
-  jerk_limit_normal: float = 0.5
+  jerk_limit_normal: float = 0.7
   # Safety jerk limit [m/s³]
-  jerk_limit_safety: float = 3.0
-  # Comfort deceleration [m/s²]
-  decel_comfort: float = 1.8
+  jerk_limit_safety: float = 4.5
+  # Comfort deceleration [m/s²] — increased v2.0.1 for stronger stopping power
+  decel_comfort: float = 2.5
+  # Hard decel ceiling for emergency tier [m/s²]
+  decel_max: float = 3.5
   # Comfort acceleration [m/s²]
   accel_comfort: float = 1.5
   # Speed limit offsets by road type [m/s]

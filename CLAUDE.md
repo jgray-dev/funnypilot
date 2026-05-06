@@ -67,6 +67,18 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v2.0.1 Changes
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/following_v2.py` — Rewritten with closing-rate-aware tier triggering. Tiers 1–4 selected by required deceleration `(v_ego² − v_lead²) / (2·Δd_to_gap)` rather than TTC. Fixes "coast too late" when closing on slow leads.
+- `sunnypilot/selfdrive/controls/lib/long_v2/tuning.py` — `decel_comfort` 1.8 → 2.5, `decel_max` 3.5 (new), `jerk_limit_normal` 0.5 → 0.7, `jerk_limit_safety` 3.0 → 4.5.
+- `sunnypilot/selfdrive/controls/lib/long_v2/fric.py` — Recalibrated for observed FRIC range 0.08–1.1: nominal dry μ = 0.5, wet/snow boundary at 0.092, comfort/weather scales linearly ramped between.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py` / `scc_map_v2.py` — Always publish computed v_target so debug UI can display it when inactive.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` — When `ui_state.developer_ui` is enabled, badges show calculated v_target at all times.
+- `selfdrive/controls/lib/longitudinal_planner.py` — Hidden −10% cruise speed offset applied right after `v_cruise = v_cruise_kph * KPH_TO_MS`. UI is unaffected.
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` — `COMFORT_BRAKE` 2.0 → 1.5 to enlarge safe-distance and trigger earlier brake initiation.
+- `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` — Ported post-blinker unwind from 1.0.8.3. UNWIND_MODE hardcoded to True (avoids params_keys.h whitelist).
+- `selfdrive/monitoring/helpers.py` — Restored 9× DM timeouts from 1.0.8.3 (270s passive, 99s active).
+
 ### v2.0.0 Changes
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/` — New package: physics-based longitudinal control. `tuning.py` externalizes all constants to `Params["LongV2Tuning"]` JSON. `fric.py` reads `liveParameters.frictionCoefficientFiltered`. `jerk_filter.py` is a rate-limited accel filter. `scc_vision_v2.py` detects corners from p97 lateral accel predictions. `scc_map_v2.py` cross-validates mapd speeds against physics and handles corner unwind. `following_v2.py` is a 7-state following machine with predictive TTC and tiered decel. `speed_governor.py` picks the minimum of all v_targets.

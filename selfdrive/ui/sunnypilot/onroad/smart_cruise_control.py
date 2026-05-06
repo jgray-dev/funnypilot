@@ -178,10 +178,19 @@ class SmartCruiseControlRenderer(Widget):
 
     cx = rect.x + rect.width / 2
 
+    # Debug UI mode: show calculated speeds at all times when DevUIInfo is on
+    debug_mode = bool(ui_state.developer_ui)
+
     if self.vision_enabled:
-      v_show = self.vision_v_target if self.vision_active else 999.0
+      if debug_mode:
+        v_show = self.vision_v_target  # always show calculated value
+      else:
+        v_show = self.vision_v_target if self.vision_active else 999.0
       self._draw_badge(cx, rect.height, x_offset, y_scc_v, "SCC-V", self._vision_badge, v_show)
 
     if self.map_enabled:
-      v_show = self.map_v_target if self.map_active else 999.0
+      if debug_mode:
+        v_show = self.map_v_target
+      else:
+        v_show = self.map_v_target if self.map_active else 999.0
       self._draw_badge(cx, rect.height, x_offset, y_scc_m, "SCC-M", self._map_badge, v_show)

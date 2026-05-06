@@ -107,6 +107,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
 
+    # FunnyPilot v2.0.1: Hidden -10% speed offset.
+    # The cruise setpoint shown on the speedometer / set-speed UI is unchanged
+    # (those read sm['carState'].vCruise directly), but everything downstream
+    # of this point — the MPC, SCC, SLA, governor — sees v_cruise * 0.9. So
+    # setting cruise at 50 mph commands the model to plan for 45 mph.
+    if v_cruise_initialized:
+      v_cruise *= 0.9
+
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel
 
