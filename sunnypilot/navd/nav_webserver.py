@@ -78,9 +78,9 @@ async def handle_flash(request: web.Request) -> web.Response:
 
     script = (
       f"cd /data/openpilot && "
-      f"git -c http.sslVerify=false fetch funnypilot {branch} && "
-      f"git checkout {branch} && "
-      f"git reset --hard funnypilot/{branch} && "
+      f"sudo git -c http.sslVerify=false fetch funnypilot {branch} && "
+      f"sudo git checkout {branch} && "
+      f"sudo git reset --hard funnypilot/{branch} && "
       f"sudo reboot"
     )
     proc = await asyncio.create_subprocess_exec(
@@ -100,30 +100,25 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
 
   master_fd, slave_fd = pty.openpty()
 
-  # Strip venv from environment so the shell starts clean.
-  # The openpilot manager runs inside /usr/local/venv; we don't want that
-  # leaking into the terminal session — it breaks git, pip, and the updater.
-  base_env = {}
-  for key, val in os.environ.items():
-    if key in ("VIRTUAL_ENV", "PYTHONHOME"):
-      continue  # drop venv markers
-    if key == "PATH":
-      # Remove any venv bin dir from PATH
-      parts = [p for p in val.split(":") if "/venv" not in p]
-      base_env["PATH"] = ":".join(parts)
-    else:
-      base_env[key] = val
-
-  base_env.update({
-    "TERM": "xterm-256color",
+  # Use `env -i` to launch bash with a completely clean environment.
+  # --login causes bash to source /etc/profile.d/*.sh which re-activates
+  # the openpilot venv even if we strip it from the inherited env.
+  # env -i bypasses all of that: the shell starts with only what we specify.
+  clean_env = {
     "HOME": "/root",
+    "TERM": "xterm-256color",
     "PYTHONPATH": "/data/openpilot",
-  })
+    "LANG": "C.UTF-8",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "USER": "root",
+    "LOGNAME": "root",
+  }
 
   proc = await asyncio.create_subprocess_exec(
-    _SHELL, "--login",
+    "/usr/bin/env", "-i",
+    *[f"{k}={v}" for k, v in clean_env.items()],
+    "/bin/bash", "--norc", "--noprofile", "-i",
     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-    env=base_env,
     cwd="/data/openpilot",
     close_fds=True,
   )
