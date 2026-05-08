@@ -76,6 +76,18 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
   (non-venv) environment and branch flashing runs under the same sanitized
   PATH so git fetch/checkout works from the browser UI.
 
+### v2.0.4 Changes
+
+- `selfdrive/controls/lib/longitudinal_planner.py`, `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py`,
+  and `sunnypilot/selfdrive/controls/lib/long_v2/*` — Reverted to the v2.0.0
+  longitudinal stack pending new tuning.
+- `sunnypilot/navd/nav_webserver.py` — Web terminal launches the login shell
+  with the venv stripped from the environment and issues an automatic
+  `deactivate` to keep Git helpers functional.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` — SCC-V and SCC-M
+  badges now show governing MPH values whenever Developer UI is enabled,
+  regardless of controller active state.
+
 ### v2.0.1 Changes
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/following_v2.py` — Rewritten with closing-rate-aware tier triggering. Tiers 1–4 selected by required deceleration `(v_ego² − v_lead²) / (2·Δd_to_gap)` rather than TTC. Fixes "coast too late" when closing on slow leads.

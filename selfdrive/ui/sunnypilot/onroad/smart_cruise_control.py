@@ -114,8 +114,9 @@ class SmartCruiseControlRenderer(Widget):
     self._map_badge.tick()
 
   def _draw_badge(self, rect_center_x: float, rect_height: float, x_offset: float, y_offset: float,
-                  label: str, badge: _BadgeState, v_target: float = 999.0):
-    if not (self.vision_enabled or self.map_enabled):
+                  label: str, badge: _BadgeState, v_target: float, enabled: bool,
+                  force_visible: bool = False):
+    if not enabled and not force_visible and v_target >= 888.0:
       return
 
     font_size = 36
@@ -186,11 +187,20 @@ class SmartCruiseControlRenderer(Widget):
         v_show = self.vision_v_target  # always show calculated value
       else:
         v_show = self.vision_v_target if self.vision_active else 999.0
-      self._draw_badge(cx, rect.height, x_offset, y_scc_v, "SCC-V", self._vision_badge, v_show)
+      self._draw_badge(cx, rect.height, x_offset, y_scc_v, "SCC-V", self._vision_badge,
+                       v_show, self.vision_enabled, debug_mode)
 
     if self.map_enabled:
       if debug_mode:
         v_show = self.map_v_target
       else:
         v_show = self.map_v_target if self.map_active else 999.0
-      self._draw_badge(cx, rect.height, x_offset, y_scc_m, "SCC-M", self._map_badge, v_show)
+      self._draw_badge(cx, rect.height, x_offset, y_scc_m, "SCC-M", self._map_badge,
+                       v_show, self.map_enabled, debug_mode)
+
+    if debug_mode and not self.vision_enabled and self.vision_v_target < 888.0:
+      self._draw_badge(cx, rect.height, x_offset, y_scc_v, "SCC-V", self._vision_badge,
+                       self.vision_v_target, self.vision_enabled, True)
+    if debug_mode and not self.map_enabled and self.map_v_target < 888.0:
+      self._draw_badge(cx, rect.height, x_offset, y_scc_m, "SCC-M", self._map_badge,
+                       self.map_v_target, self.map_enabled, True)

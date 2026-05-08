@@ -12,32 +12,7 @@ import fcntl
 import termios
 import struct
 import aiohttp
-from typing import Dict
 from aiohttp import web
-
-
-def _determine_home() -> str:
-  home = os.environ.get("NAV_TERMINAL_HOME") or os.path.expanduser("~")
-  if home and os.path.isdir(home):
-    return home
-  return "/data/openpilot"
-
-
-def _base_env() -> Dict[str, str]:
-  user = os.environ.get("USER", "comma")
-  home = _determine_home()
-  env = {
-    "HOME": home,
-    "TERM": "xterm-256color",
-    "LANG": "C.UTF-8",
-    "LC_ALL": "C.UTF-8",
-    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    "PYTHONPATH": "/data/openpilot",
-    "LOGNAME": os.environ.get("LOGNAME", user),
-    "USER": user,
-    "SHELL": _SHELL,
-  }
-  return env
 
 REPO = "jgray-dev/funnypilot"
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
@@ -112,8 +87,6 @@ async def handle_flash(request: web.Request) -> web.Response:
       "/bin/bash", "-c", script,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
-      env=_base_env(),
-      cwd="/data/openpilot",
     )
     asyncio.ensure_future(proc.wait())
     return web.json_response({"status": "flashing", "branch": branch})
@@ -127,20 +100,34 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
 
   master_fd, slave_fd = pty.openpty()
 
-  # Use `env -i` to launch bash with a completely clean environment.
-  # --login causes bash to source /etc/profile.d/*.sh which re-activates
-  # the openpilot venv even if we strip it from the inherited env.
-  # env -i bypasses all of that: the shell starts with only what we specify.
-  clean_env = _base_env()
+  env = dict(os.environ)
+  env.pop("PYTHONHOME", None)
+  venv_path = env.pop("VIRTUAL_ENV", None)
+
+  if venv_path:
+    path_entries = [p for p in env.get("PATH", "").split(":") if p and not p.startswith(venv_path)]
+    if path_entries:
+      env["PATH"] = ":".join(path_entries)
+    else:
+      env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  env.setdefault("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+  env.setdefault("HOME", os.environ.get("HOME", "/root"))
+  env["TERM"] = "xterm-256color"
 
   proc = await asyncio.create_subprocess_exec(
-    "/bin/bash", "--norc", "--noprofile", "-i",
+    _SHELL, "--login",
     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
     cwd="/data/openpilot",
     close_fds=True,
-    env=clean_env,
+    env=env,
   )
   os.close(slave_fd)
+
+  if venv_path:
+    try:
+      os.write(master_fd, b"deactivate\n")
+    except OSError:
+      pass
 
   loop = asyncio.get_event_loop()
 

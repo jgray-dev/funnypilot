@@ -1,3 +1,13 @@
+FunnyPilot v2.0.4 (2026-05-08)
+========================
+* revert: Longitudinal planner, MPC tuning, and LongV2 controllers restored to
+  the v2.0.0 state after regression reports in 2.0.1/2.0.2.
+* fix: Web terminal now spawns the user's login shell (outside the venv) while
+  automatically removing `VIRTUAL_ENV` so Git automation works without manual
+  cleanup.
+* fix: SCC-V / SCC-M debug badges always render their governing speed in MPH
+  when Developer UI is enabled, even when the controllers are inactive.
+
 FunnyPilot v2.0.3 (2026-05-08)
 ========================
 * fix: Cruise offset now only applies when the planner is free-cruising on the

@@ -110,31 +110,35 @@ class SCCMapV2:
     # Corner unwind detection — if curvature is decreasing, start releasing
     unwinding = self._corner_unwind(sm) and self.is_active
 
-    # Always smooth and publish best_v (visible in debug UI even when inactive)
-    if best_v < self._v_target_smooth:
-      alpha = 0.1
-    else:
-      alpha = 0.3
-    self._v_target_smooth = self._v_target_smooth * (1 - alpha) + best_v * alpha
-    self.output_v_target = self._v_target_smooth
-
     if should_activate and not unwinding:
       self.is_active = True
       self._active_frames += 1
+
+      if best_v < self._v_target_smooth:
+        alpha = 0.1
+      else:
+        alpha = 0.3
+      self._v_target_smooth = self._v_target_smooth * (1 - alpha) + best_v * alpha
+
+      self.output_v_target = self._v_target_smooth
       self.output_a_target = a_ego
       self.gas_gating_active = v_ego > self.output_v_target + 1.0
       self.state = "ACTIVE"
     else:
-      if unwinding:
+      if unwinding or not should_activate:
+        # Release: ramp back up to v_cruise
+        if self._v_target_smooth < v_cruise:
+          self._v_target_smooth = min(self._v_target_smooth + 0.5, v_cruise)
+        if self._v_target_smooth >= v_cruise - 0.5:
+          self._reset()
+          return
+        self.output_v_target = self._v_target_smooth
+        self.output_a_target = 0.0
+        self.gas_gating_active = False
         self.state = "UNWINDING"
         self.is_active = True
-        self.output_a_target = 0.0
-        self.gas_gating_active = False
       else:
-        self.state = "INACTIVE"
-        self.is_active = False
-        self.output_a_target = 0.0
-        self.gas_gating_active = False
+        self._reset()
 
   def _reset(self):
     self.state = "INACTIVE"

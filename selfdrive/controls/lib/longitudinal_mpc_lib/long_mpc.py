@@ -54,12 +54,8 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 # FunnyPilot: Tuned longitudinal constants for natural driving feel
-# v2.0.1: COMFORT_BRAKE lowered further to 1.5 — encodes a more conservative
-# braking-rate assumption in the safe-distance constraint, so the MPC begins
-# braking sooner when closing on a slow lead. Decoupled from actual achievable
-# decel which is governed by ACCEL_MIN.
-COMFORT_BRAKE = 1.5
-STOP_DISTANCE = 8.5
+COMFORT_BRAKE = 2.0       # Reduced from 2.5 -> brake earlier and gentler
+STOP_DISTANCE = 8.5       # Increased from 6.0 -> more buffer at stops
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
