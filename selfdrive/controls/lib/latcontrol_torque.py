@@ -60,6 +60,7 @@ class LatControlTorque(LatControl):
     self.lane_change_start_time = 0.0
     self.lane_change_ramp_duration = 5.0
     self.lane_change_min_scale = 0.25
+    self.lane_change_baseline_torque = 0.0
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
@@ -123,6 +124,7 @@ class LatControlTorque(LatControl):
       blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker
       if blinker_on and not self._prev_blinker_on:
         self.lane_change_start_time = time.monotonic()
+        self.lane_change_baseline_torque = abs(output_torque)
       self._prev_blinker_on = blinker_on
 
       elapsed = time.monotonic() - self.lane_change_start_time
@@ -133,8 +135,13 @@ class LatControlTorque(LatControl):
         )
       else:
         self.lane_change_torque_scale = 1.0
+        self.lane_change_baseline_torque = 0.0
 
-      output_torque *= self.lane_change_torque_scale
+      scaled_torque = output_torque * self.lane_change_torque_scale
+      if self.lane_change_baseline_torque > 0.0 and abs(scaled_torque) < self.lane_change_baseline_torque:
+        sign_source = scaled_torque if scaled_torque != 0.0 else output_torque
+        scaled_torque = math.copysign(self.lane_change_baseline_torque, sign_source)
+      output_torque = scaled_torque
 
       # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
       speed_mph = CS.vEgo * 2.23694

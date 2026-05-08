@@ -88,6 +88,14 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
   badges now show governing MPH values whenever Developer UI is enabled,
   regardless of controller active state.
 
+### v2.0.4s Changes
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — Hidden −10% cruise offset
+  applied only when the planner is limited solely by the user set speed; leads,
+  SLA, and map caps bypass it.
+- `selfdrive/controls/lib/latcontrol_torque.py` — Lane change torque ramp now
+  respects the torque present at signal onset to avoid understeer on curves.
+
 ### v2.0.1 Changes
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/following_v2.py` — Rewritten with closing-rate-aware tier triggering. Tiers 1–4 selected by required deceleration `(v_ego² − v_lead²) / (2·Δd_to_gap)` rather than TTC. Fixes "coast too late" when closing on slow leads.

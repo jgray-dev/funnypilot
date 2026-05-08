@@ -1,3 +1,12 @@
+FunnyPilot v2.0.4s (2026-05-08)
+========================
+* feature: Reintroduced the hidden −10% cruise offset strictly within the
+  longitudinal planner when cruise is the limiting source; UI and PCM speeds
+  remain unchanged.
+* tweak: Smooth lane change keeps at least the baseline torque present at
+  signal-on while still ramping up over 5 seconds, preventing understeer on
+  curved roads.
+
 FunnyPilot v2.0.4 (2026-05-08)
 ========================
 * revert: Longitudinal planner, MPC tuning, and LongV2 controllers restored to
