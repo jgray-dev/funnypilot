@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v2.0.5 Changes
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — Cruise offset gating plus a
+  positive-accel smoothing filter to reintroduce the hidden offset gently when
+  cruise resumes authority.
+- `selfdrive/controls/lib/latcontrol_torque.py` — Lane change torque ramp now
+  preserves the torque present at signal onset across the full 5 s ramp.
+- `selfdrive/tools/can_sniffer.py`, `system/manager/process_config.py` — Added
+  an on-road CAN sniffer process (50 MB cap) logging only during acceleration-rich
+  segments for later diagnostics.
+
 ### v2.0.3 Changes
 
 - `selfdrive/controls/lib/longitudinal_planner.py` — Hidden -10% cruise offset now

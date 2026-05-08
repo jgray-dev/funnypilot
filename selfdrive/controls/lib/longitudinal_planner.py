@@ -24,6 +24,7 @@ A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+HIDDEN_CRUISE_OFFSET = 0.9
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -63,6 +64,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self._a_target_filter = FirstOrderFilter(init_a, 0.35, self.dt)
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -144,6 +146,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if force_slow_decel:
       v_cruise = 0.0
 
+    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
+      cruise_only = self.source == LongitudinalPlanSource.cruise and not self._following_v2.plan_source_is_lead
+      if cruise_only:
+        v_cruise *= HIDDEN_CRUISE_OFFSET
+
     personality = sm['selfdriveState'].personality
 
     # FunnyPilot: Detect when switching to a longer follow distance -> gas gate instead of brake
@@ -214,6 +221,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       max_delta_jerk = jerk_lim * self.dt
       output_a_target = max(self.output_a_target - max_delta_jerk,
                             min(self.output_a_target + max_delta_jerk, output_a_target))
+
+    if output_a_target < self.output_a_target:
+      self._a_target_filter.x = output_a_target
+    else:
+      output_a_target = self._a_target_filter.update(output_a_target)
 
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip

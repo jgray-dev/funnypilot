@@ -1,3 +1,15 @@
+FunnyPilot v2.0.5 (2026-05-08)
+========================
+* tweak: Reintroduced the hidden −10% cruise offset strictly when cruise is the
+  sole limiter, leaving UI and PCM speeds untouched while smoothing positive
+  acceleration transients via a first-order filter.
+* tweak: Lane change torque ramp now preserves the torque present at signal
+  onset, preventing understeer on curved roads while still easing back to full
+  authority over five seconds.
+* tool: Added an on-road CAN sniffer that captures powertrain buses only during
+  acceleration-heavy periods, storing logs under `/data/openpilot/can_sniffer`
+  (50 MB session cap) for post-drive analysis.
+
 FunnyPilot v2.0.4 (2026-05-08)
 ========================
 * revert: Longitudinal planner, MPC tuning, and LongV2 controllers restored to
