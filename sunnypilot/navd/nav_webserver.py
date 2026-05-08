@@ -12,7 +12,32 @@ import fcntl
 import termios
 import struct
 import aiohttp
+from typing import Dict
 from aiohttp import web
+
+
+def _determine_home() -> str:
+  home = os.environ.get("NAV_TERMINAL_HOME") or os.path.expanduser("~")
+  if home and os.path.isdir(home):
+    return home
+  return "/data/openpilot"
+
+
+def _base_env() -> Dict[str, str]:
+  user = os.environ.get("USER", "comma")
+  home = _determine_home()
+  env = {
+    "HOME": home,
+    "TERM": "xterm-256color",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PYTHONPATH": "/data/openpilot",
+    "LOGNAME": os.environ.get("LOGNAME", user),
+    "USER": user,
+    "SHELL": _SHELL,
+  }
+  return env
 
 REPO = "jgray-dev/funnypilot"
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
@@ -87,6 +112,8 @@ async def handle_flash(request: web.Request) -> web.Response:
       "/bin/bash", "-c", script,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
+      env=_base_env(),
+      cwd="/data/openpilot",
     )
     asyncio.ensure_future(proc.wait())
     return web.json_response({"status": "flashing", "branch": branch})
@@ -104,23 +131,14 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
   # --login causes bash to source /etc/profile.d/*.sh which re-activates
   # the openpilot venv even if we strip it from the inherited env.
   # env -i bypasses all of that: the shell starts with only what we specify.
-  clean_env = {
-    "HOME": "/root",
-    "TERM": "xterm-256color",
-    "PYTHONPATH": "/data/openpilot",
-    "LANG": "C.UTF-8",
-    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    "USER": "root",
-    "LOGNAME": "root",
-  }
+  clean_env = _base_env()
 
   proc = await asyncio.create_subprocess_exec(
-    "/usr/bin/env", "-i",
-    *[f"{k}={v}" for k, v in clean_env.items()],
     "/bin/bash", "--norc", "--noprofile", "-i",
     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
     cwd="/data/openpilot",
     close_fds=True,
+    env=clean_env,
   )
   os.close(slave_fd)
 

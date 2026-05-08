@@ -67,6 +67,15 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v2.0.3 Changes
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — Hidden -10% cruise offset now
+  applies only when cruise control is the active limiter; lead, SLA, and map
+  constraints bypass the offset.
+- `sunnypilot/navd/nav_webserver.py` — Web terminal spawns bash with a clean
+  (non-venv) environment and branch flashing runs under the same sanitized
+  PATH so git fetch/checkout works from the browser UI.
+
 ### v2.0.1 Changes
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/following_v2.py` — Rewritten with closing-rate-aware tier triggering. Tiers 1–4 selected by required deceleration `(v_ego² − v_lead²) / (2·Δd_to_gap)` rather than TTC. Fixes "coast too late" when closing on slow leads.

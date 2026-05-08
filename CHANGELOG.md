@@ -1,3 +1,12 @@
+FunnyPilot v2.0.3 (2026-05-08)
+========================
+* fix: Cruise offset now only applies when the planner is free-cruising on the
+  user set speed. Lead vehicles, map caps, and speed limits retain full
+  authority, preventing runaways once external constraints clear.
+* fix: Browser terminal launches outside the openpilot virtualenv and flash
+  scripts execute with a clean PATH, so git branch discovery and updater flows
+  work reliably again via the web UI terminal.
+
 FunnyPilot v2.0.2 (2026-05-06)
 ========================
 * fix: Critical safety bug — runaway acceleration with no lead vehicle

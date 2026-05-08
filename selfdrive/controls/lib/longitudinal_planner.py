@@ -24,6 +24,9 @@ A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+# FunnyPilot: Hidden -10% cruise offset applied only for pure cruise control
+# to keep SLA, map, and lead constraints authoritative.
+HIDDEN_CRUISE_OFFSET = 0.9
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -107,18 +110,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
 
-    # FunnyPilot v2.0.1: Hidden -10% speed offset.
-    # The cruise setpoint shown on the speedometer / set-speed UI is unchanged
-    # (those read sm['carState'].vCruise directly), but everything downstream
-    # of this point — the MPC, SCC, SLA, governor — sees v_cruise * 0.9. So
-    # setting cruise at 50 mph commands the model to plan for 45 mph.
-    #
-    # Safety: when vCruise = V_CRUISE_UNSET (255 kph), min() produces
-    # V_CRUISE_MAX (145 kph = 90 mph) which would flow into the MPC uncapped
-    # and cause runaway acceleration. Cap to v_ego when not initialized.
-    if v_cruise_initialized:
-      v_cruise *= 0.9
-    else:
+    if not v_cruise_initialized:
       v_cruise = v_ego
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
@@ -157,6 +149,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     if force_slow_decel:
       v_cruise = 0.0
+
+    # FunnyPilot: Apply the hidden cruise offset only when the planner is
+    # limited by the user set speed alone. Speed limits, map data, or leads
+    # continue to dictate the target when they are active.
+    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
+      cruise_only = self.source == LongitudinalPlanSource.cruise and not self._following_v2.plan_source_is_lead
+      if cruise_only:
+        v_cruise *= HIDDEN_CRUISE_OFFSET
 
     personality = sm['selfdriveState'].personality
 
