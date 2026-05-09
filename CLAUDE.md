@@ -69,14 +69,20 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 ### v2.0.5 Changes
 
-- `selfdrive/controls/lib/longitudinal_planner.py` — Cruise offset gating plus a
-  positive-accel smoothing filter to reintroduce the hidden offset gently when
-  cruise resumes authority.
+- `selfdrive/controls/lib/longitudinal_planner.py` — Cruise offset gating, lead
+  blend smoothing, and positive-accel filtering for consistent behavior with
+  and without leads.
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py`,
+  `sunnypilot/selfdrive/controls/lib/long_v2/tuning.py` — Follow distance tables
+  + default headway expanded ~50%, contact-aware obstacle inflation, and longer
+  stop distance for safer following.
 - `selfdrive/controls/lib/latcontrol_torque.py` — Lane change torque ramp now
   preserves the torque present at signal onset across the full 5 s ramp.
-- `selfdrive/tools/can_sniffer.py`, `system/manager/process_config.py` — Added
-  an on-road CAN sniffer process (50 MB cap) logging only during acceleration-rich
-  segments for later diagnostics.
+- `selfdrive/car/cruise.py` — Experimental mode initializes cruise to current
+  speed instead of a fixed 65 mph.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
+  Persistent offset carryover between zones and earlier, stronger gas gating for
+  upcoming reductions.
 
 ### v2.0.3 Changes
 

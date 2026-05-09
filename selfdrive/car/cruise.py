@@ -144,7 +144,10 @@ class VCruiseHelper(VCruiseHelperSP):
       return
 
     initial_experimental_mode = experimental_mode and not dynamic_experimental_control
-    initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if initial_experimental_mode else V_CRUISE_INITIAL
+    if initial_experimental_mode:
+      initial = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, self.v_cruise_min, V_CRUISE_MAX)))
+    else:
+      initial = V_CRUISE_INITIAL
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last

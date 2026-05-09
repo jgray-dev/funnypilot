@@ -55,7 +55,7 @@ FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 # FunnyPilot: Tuned longitudinal constants for natural driving feel
 COMFORT_BRAKE = 2.0       # Reduced from 2.5 -> brake earlier and gentler
-STOP_DISTANCE = 8.5       # Increased from 6.0 -> more buffer at stops
+STOP_DISTANCE = 11.0       # Increased for larger buffer at stops
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
@@ -67,9 +67,9 @@ MIN_X_LEAD_FACTOR = 0.5
 # Distance 3 (relaxed):    15% longer  = 2.875s@<=20mph, 1.725s@35-50mph, 1.15s@>=75mph
 _T_FOLLOW_V_MPH = [0., 20., 35., 50., 75.]
 _T_FOLLOW_V_MPS = [v * 0.44704 for v in _T_FOLLOW_V_MPH]  # convert mph to m/s
-_T_FOLLOW_AGGRESSIVE  = [2.125, 2.125, 1.275, 1.275, 0.85]  # dist 1 (closest, 15% below standard)
-_T_FOLLOW_STANDARD    = [2.5,   2.5,   1.5,   1.5,   1.0]   # dist 2 (medium)
-_T_FOLLOW_RELAXED     = [2.875, 2.875, 1.725, 1.725, 1.15]  # dist 3 (farthest, 15% above standard)
+_T_FOLLOW_AGGRESSIVE  = [3.1875, 3.1875, 1.9125, 1.9125, 1.275]  # 50% longer vs previous aggressive
+_T_FOLLOW_STANDARD    = [3.75,   3.75,   2.25,   2.25,   1.5]   # 50% longer vs previous standard
+_T_FOLLOW_RELAXED     = [4.3125, 4.3125, 2.5875, 2.5875, 1.725]  # 50% longer vs previous relaxed
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -350,6 +350,15 @@ class LongitudinalMpc:
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+
+    # Strengthen safety envelope: inflate obstacle when closing rapidly
+    def inflate_obstacle(lead_obstacle, lead_xv):
+      dv = np.maximum(0.0, self.x0[1] - lead_xv[:,1])
+      extra = (dv ** 2) / (2 * max(COMFORT_BRAKE * 0.8, 0.1))
+      return lead_obstacle + extra
+
+    lead_0_obstacle = inflate_obstacle(lead_0_obstacle, lead_xv_0)
+    lead_1_obstacle = inflate_obstacle(lead_1_obstacle, lead_xv_1)
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.

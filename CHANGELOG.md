@@ -6,9 +6,14 @@ FunnyPilot v2.0.5 (2026-05-08)
 * tweak: Lane change torque ramp now preserves the torque present at signal
   onset, preventing understeer on curved roads while still easing back to full
   authority over five seconds.
-* tool: Added an on-road CAN sniffer that captures powertrain buses only during
-  acceleration-heavy periods, storing logs under `/data/openpilot/can_sniffer`
-  (50 MB session cap) for post-drive analysis.
+* fix: Follow distance tables expanded ~50% across all personalities, with
+  inflated lead obstacles and longer stop distance for safer approach behavior.
+* fix: Improved blend between free-cruise and lead-governed targets to remove
+  longitudinal oscillations when a lead drops in and out of view.
+* fix: Experimental-mode cruise initialization now honors current vehicle speed
+  instead of defaulting to 65 mph.
+* fix: Speed Limit Assist keeps the user-selected offset across zones and begins
+  gas gating earlier with stronger decel bias to meet new limits smoothly.
 
 FunnyPilot v2.0.4 (2026-05-08)
 ========================

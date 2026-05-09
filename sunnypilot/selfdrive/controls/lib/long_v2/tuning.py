@@ -19,7 +19,7 @@ class LongV2Tuning:
   # SCC-M physics cross-validation scale factor
   k_sccm: float = 0.78
   # Default time headway [s]
-  thw_default: float = 1.8
+  thw_default: float = 2.7
   # Standstill gap [m]
   d_standstill: float = 5.0
   # Normal jerk limit [m/s³]

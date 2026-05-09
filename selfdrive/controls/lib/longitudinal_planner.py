@@ -144,12 +144,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
 
     if force_slow_decel:
-      v_cruise = 0.0
+      # Maintain 20% margin under current speed instead of full stop for smoother safety decel
+      v_cruise = min(v_cruise, max(0.0, v_ego * 0.8))
 
     if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
       cruise_only = self.source == LongitudinalPlanSource.cruise and not self._following_v2.plan_source_is_lead
       if cruise_only:
         v_cruise *= HIDDEN_CRUISE_OFFSET
+
+    # Blend toward lead cap smoothly to avoid oscillations when lead acquires/drops
+    lead_cap = getattr(self._following_v2, 'v_cruise_cap', 999.0)
+    if lead_cap < v_cruise:
+      blend = 0.2
+      v_cruise = blend * lead_cap + (1.0 - blend) * v_cruise
 
     personality = sm['selfdriveState'].personality
 

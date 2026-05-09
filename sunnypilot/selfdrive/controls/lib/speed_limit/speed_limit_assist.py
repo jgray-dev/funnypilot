@@ -94,7 +94,7 @@ class SpeedLimitAssist:
 
     # FunnyPilot: Dynamic SLA locking
     self._sla_locked = False          # True once SLA has been activated; cleared only on disable
-    self._dynamic_offset_ratio = 0.0  # (v_cruise - speed_limit_final_last) / speed_limit_final_last
+    self._dynamic_offset_ratio = 0.0  # persistent % offset applied when locked
 
     # TODO-SP: SLA's own output_a_target for planner
     # Solution functions mapped to respective states
@@ -168,8 +168,12 @@ class SpeedLimitAssist:
   # TODO-SP: SLA's own output_a_target for planner
   def get_a_target_from_control(self) -> float:
     # FunnyPilot: Apply gas gating for speed limit reductions
+    effective_target = self._effective_speed_limit_target()
     if self.should_cut_gas_for_speed_limit():
-      return min(self.a_ego, 0.0)  # Cut gas, no positive acceleration
+      delta_v = max(0.0, self.v_ego - effective_target)
+      desired_decel = -0.2 - 0.25 * delta_v
+      desired_decel = max(desired_decel, -1.5)
+      return min(self.a_ego, desired_decel)
     return self.a_ego
 
   def update_params(self) -> None:
@@ -264,12 +268,13 @@ class SpeedLimitAssist:
 
     # Calculate coast distance needed to reach target speed
     # Using coast deceleration of -0.15 m/s² (gentle engine braking + drag)
-    coast_decel = -0.15
+    # Use stronger assumed decel to respect upcoming reductions
+    coast_decel = -0.35
     coast_distance_needed = (effective_target ** 2 - self.v_ego ** 2) / (2.0 * coast_decel)
 
     # Add buffer: we want to reach target speed slightly BEFORE the limit
     # Buffer = 2 seconds of travel at new speed limit
-    buffer_distance = effective_target * 2.0
+    buffer_distance = max(20.0, effective_target * 3.0)
     total_distance_needed = coast_distance_needed + buffer_distance
 
     # Cut gas if we're within the coast distance
