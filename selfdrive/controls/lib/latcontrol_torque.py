@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 from collections import deque
 
@@ -49,6 +50,13 @@ class LatControlTorque(LatControl):
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
+
+    # FunnyPilot v2.2.0: Smooth lane change — 25% torque at blinker onset, ramps to 100% over 5s
+    self.lane_change_torque_scale = 1.0
+    self.lane_change_start_time = 0.0
+    self.lane_change_ramp_duration = 5.0
+    self.lane_change_min_scale = 0.25
+    self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -106,6 +114,25 @@ class LatControlTorque(LatControl):
       pid_log, output_torque = self.extension.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
+
+      # FunnyPilot v2.2.0: Smooth lane change — ramp from 25% to 100% over 5s on blinker onset
+      blinker_on = CS.leftBlinker != CS.rightBlinker
+      if blinker_on and not self._prev_blinker_on:
+        self.lane_change_start_time = time.monotonic()
+      self._prev_blinker_on = blinker_on
+
+      elapsed = time.monotonic() - self.lane_change_start_time
+      if elapsed < self.lane_change_ramp_duration:
+        ramp_progress = elapsed / self.lane_change_ramp_duration
+        self.lane_change_torque_scale = self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
+      else:
+        self.lane_change_torque_scale = 1.0
+      output_torque *= self.lane_change_torque_scale
+
+      # FunnyPilot v2.2.0: Smooth stop — linear torque ramp from 100% at 10mph to 0% at 0mph
+      speed_mph = CS.vEgo * 2.23694
+      if speed_mph < 10.0:
+        output_torque *= max(0.0, speed_mph / 10.0)
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)

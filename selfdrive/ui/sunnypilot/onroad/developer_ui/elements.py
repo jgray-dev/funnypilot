@@ -346,3 +346,36 @@ class AltitudeElement(GpsInfoElement):
 
     value = f"{altitude:.1f}" if gps_accuracy != 0.0 else "-"
     return UiElement(value, "ALT.", self.unit, rl.WHITE)
+
+
+class MemoryUsageElement:
+  """Reads /proc/meminfo to show used-RAM %. Green <50%, Orange 50-75%, Red >75%."""
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    mem_total = mem_available = 0
+    try:
+      with open("/proc/meminfo") as f:
+        for line in f:
+          if line.startswith("MemTotal:"):
+            mem_total = int(line.split()[1])
+          elif line.startswith("MemAvailable:"):
+            mem_available = int(line.split()[1])
+          if mem_total and mem_available:
+            break
+    except OSError:
+      pass
+
+    if mem_total > 0:
+      used_pct = (mem_total - mem_available) / mem_total * 100.0
+      value = f"{used_pct:.0f}%"
+      if used_pct < 50.0:
+        color = rl.Color(0, 200, 80, 255)
+      elif used_pct < 75.0:
+        color = rl.Color(255, 165, 0, 255)
+      else:
+        color = rl.RED
+    else:
+      value = "-"
+      color = rl.WHITE
+
+    return UiElement(value, "MEM", "", color)
