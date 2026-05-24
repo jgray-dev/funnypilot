@@ -113,15 +113,16 @@ class TorqueSettingsLayout(Widget):
     self._self_tune_toggle.action_item.set_enabled(ui_state.is_offroad())
     self._relaxed_tune_toggle.action_item.set_enabled(ui_state.is_offroad() and self._self_tune_toggle.action_item.get_state())
     self._custom_tune_toggle.action_item.set_enabled(ui_state.is_offroad())
-    custom_tune_enabled = self._custom_tune_toggle.action_item.get_state()
-    self._torque_prams_override_toggle.set_visible(custom_tune_enabled)
-    self._torque_lat_accel_factor.set_visible(custom_tune_enabled)
-    self._torque_friction.set_visible(custom_tune_enabled)
+    # FunnyPilot v2.2.1: FRIC override always visible, usable onroad
+    self._torque_prams_override_toggle.set_visible(True)
+    self._torque_lat_accel_factor.set_visible(True)
+    self._torque_friction.set_visible(True)
 
-    self._torque_prams_override_toggle.action_item.set_enabled(ui_state.is_offroad())
-    sliders_enabled = self._torque_prams_override_toggle.action_item.get_state() or ui_state.is_offroad()
-    self._torque_lat_accel_factor.action_item.set_enabled(sliders_enabled)
-    self._torque_friction.action_item.set_enabled(sliders_enabled)
+    # Allow override toggle and FRIC slider regardless of drive state
+    self._torque_prams_override_toggle.action_item.set_enabled(True)
+    override_active = self._torque_prams_override_toggle.action_item.get_state()
+    self._torque_lat_accel_factor.action_item.set_enabled(override_active)
+    self._torque_friction.action_item.set_enabled(override_active)
 
     title_text = tr("Real-Time & Offline") if ui_state.params.get("TorqueParamsOverrideEnabled") else tr("Offline Only")
     self._torque_lat_accel_factor.set_title(lambda: tr("Lateral Acceleration Factor") + " (" + title_text + ")")

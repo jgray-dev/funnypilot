@@ -35,6 +35,16 @@ JERK_GAIN = 0.3
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 VERSION = 1
 
+# FunnyPilot v2.2.1: lane change torque state machine constants
+_LC_NORMAL = 0    # full torque, no lane change
+_LC_CHANGING = 1  # blinker on — ramp 25%→100% over 5s
+_LC_WAITING = 2   # blinker off — hold 0% until wheel within ±15° of center
+_LC_TAPERING = 3  # wheel centered — ramp 0%→100% over 3s
+_LC_RAMP_DUR = 5.0    # seconds to ramp up after blinker onset
+_LC_MIN_SCALE = 0.25  # minimum torque scale during ramp (25%)
+_LC_UNWIND_DEG = 15.0 # steering angle threshold to consider "centered"
+_LC_TAPER_DUR = 3.0   # seconds to re-enable torque after centering
+
 class LatControlTorque(LatControl):
   def __init__(self, CP, CP_SP, CI, dt):
     super().__init__(CP, CP_SP, CI, dt)
@@ -51,11 +61,12 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot v2.2.0: Smooth lane change — 25% torque at blinker onset, ramps to 100% over 5s
-    self.lane_change_torque_scale = 1.0
-    self.lane_change_start_time = 0.0
-    self.lane_change_ramp_duration = 5.0
-    self.lane_change_min_scale = 0.25
+    # FunnyPilot v2.2.1: Lane change torque state machine
+    # NORMAL → CHANGING (blinker on) → WAITING (blinker off, wheel not centered)
+    #   → TAPERING (wheel ±15° centered, 0%→100% over 3s) → NORMAL
+    self._lc_state = _LC_NORMAL
+    self._lc_start = 0.0
+    self._lc_taper_start = 0.0
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
@@ -115,19 +126,48 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot v2.2.0: Smooth lane change — ramp from 25% to 100% over 5s on blinker onset
+      # FunnyPilot v2.2.1: Lane change torque state machine
       blinker_on = CS.leftBlinker != CS.rightBlinker
-      if blinker_on and not self._prev_blinker_on:
-        self.lane_change_start_time = time.monotonic()
-      self._prev_blinker_on = blinker_on
+      steer_abs = abs(CS.steeringAngleDeg)
+      now = time.monotonic()
 
-      elapsed = time.monotonic() - self.lane_change_start_time
-      if elapsed < self.lane_change_ramp_duration:
-        ramp_progress = elapsed / self.lane_change_ramp_duration
-        self.lane_change_torque_scale = self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
-      else:
-        self.lane_change_torque_scale = 1.0
-      output_torque *= self.lane_change_torque_scale
+      if self._lc_state == _LC_NORMAL:
+        if blinker_on and not self._prev_blinker_on:
+          self._lc_state = _LC_CHANGING
+          self._lc_start = now
+      elif self._lc_state == _LC_CHANGING:
+        if not blinker_on:
+          if steer_abs < _LC_UNWIND_DEG:
+            self._lc_state = _LC_TAPERING
+            self._lc_taper_start = now
+          else:
+            self._lc_state = _LC_WAITING
+      elif self._lc_state == _LC_WAITING:
+        if steer_abs < _LC_UNWIND_DEG:
+          self._lc_state = _LC_TAPERING
+          self._lc_taper_start = now
+        elif blinker_on and not self._prev_blinker_on:
+          self._lc_state = _LC_CHANGING
+          self._lc_start = now
+      elif self._lc_state == _LC_TAPERING:
+        if now - self._lc_taper_start >= _LC_TAPER_DUR:
+          self._lc_state = _LC_NORMAL
+        elif blinker_on and not self._prev_blinker_on:
+          self._lc_state = _LC_CHANGING
+          self._lc_start = now
+
+      if self._lc_state == _LC_NORMAL:
+        lc_scale = 1.0
+      elif self._lc_state == _LC_CHANGING:
+        ramp = min(1.0, (now - self._lc_start) / _LC_RAMP_DUR)
+        lc_scale = _LC_MIN_SCALE + (1.0 - _LC_MIN_SCALE) * ramp
+      elif self._lc_state == _LC_WAITING:
+        lc_scale = 0.0
+      else:  # _LC_TAPERING
+        lc_scale = min(1.0, (now - self._lc_taper_start) / _LC_TAPER_DUR)
+
+      output_torque *= lc_scale
+      self._prev_blinker_on = blinker_on
 
       # FunnyPilot v2.2.0: Smooth stop — linear torque ramp from 100% at 10mph to 0% at 0mph
       speed_mph = CS.vEgo * 2.23694
