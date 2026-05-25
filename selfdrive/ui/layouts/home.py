@@ -228,6 +228,15 @@ class HomeLayout(Widget):
     self._prev_alerts_present = alerts_present
 
   def _get_version_text(self) -> str:
+    import os
     brand = "sunnypilot"
     description = self.params.get("UpdaterCurrentDescription")
-    return f"{brand} {description}" if description else brand
+    sp_text = f"{brand} {description}" if description else brand
+    try:
+      fp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'FUNNYPILOT_VERSION')
+      fp_version = open(fp_path).read().strip()
+      if fp_version:
+        return f"FunnyPilot {fp_version} | {sp_text}"
+    except Exception:
+      pass
+    return sp_text

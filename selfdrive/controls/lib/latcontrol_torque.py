@@ -35,15 +35,18 @@ JERK_GAIN = 0.3
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 VERSION = 1
 
-# FunnyPilot v2.2.1: lane change torque state machine constants
-_LC_NORMAL = 0    # full torque, no lane change
-_LC_CHANGING = 1  # blinker on — ramp 25%→100% over 5s
-_LC_WAITING = 2   # blinker off — hold 0% until wheel within ±15° of center
-_LC_TAPERING = 3  # wheel centered — ramp 0%→100% over 3s
-_LC_RAMP_DUR = 5.0    # seconds to ramp up after blinker onset
-_LC_MIN_SCALE = 0.25  # minimum torque scale during ramp (25%)
-_LC_UNWIND_DEG = 15.0 # steering angle threshold to consider "centered"
-_LC_TAPER_DUR = 3.0   # seconds to re-enable torque after centering
+# FunnyPilot v2.2.2: lane change torque state machine constants
+# Torque is split into feedforward (path-tracking floor) and correction (PID error).
+# Only the correction is scaled — the feedforward always runs at 100% so the car
+# never applies less torque than the corner demands, preventing outside-of-turn slip.
+_LC_NORMAL = 0    # full torque
+_LC_CHANGING = 1  # blinker on — correction ramps 0%→100% over 5s
+_LC_WAITING = 2   # blinker off, wheel not centered — correction held at 0%
+_LC_TAPERING = 3  # wheel centered ≥1s — correction ramps 0%→100% over 3s
+_LC_RAMP_DUR = 5.0      # seconds to ramp correction up after blinker onset
+_LC_UNWIND_DEG = 15.0   # steering angle threshold to consider "centered"
+_LC_CENTER_HOLD = 1.0   # seconds wheel must stay centered before tapering in
+_LC_TAPER_DUR = 3.0     # seconds to ramp correction back to 100% after centering
 
 class LatControlTorque(LatControl):
   def __init__(self, CP, CP_SP, CI, dt):
@@ -61,12 +64,14 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot v2.2.1: Lane change torque state machine
-    # NORMAL → CHANGING (blinker on) → WAITING (blinker off, wheel not centered)
-    #   → TAPERING (wheel ±15° centered, 0%→100% over 3s) → NORMAL
+    # FunnyPilot v2.2.2: Lane change torque state machine
+    # Correction (PID error) is scaled; feedforward (path-tracking) always runs at 100%.
+    # NORMAL → CHANGING (blinker) → WAITING (blinker off, wheel off-center)
+    #   → TAPERING (wheel ±15° for ≥1s, correction 0%→100% over 3s) → NORMAL
     self._lc_state = _LC_NORMAL
     self._lc_start = 0.0
     self._lc_taper_start = 0.0
+    self._lc_centered_since = 0.0
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
@@ -126,47 +131,61 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot v2.2.1: Lane change torque state machine
+      # FunnyPilot v2.2.2: Lane change torque state machine
+      # Feedforward torque (path/corner tracking) always runs at 100%.
+      # Only the PID correction is scaled so the car never applies less
+      # torque than the curve demands — prevents outside-of-turn slip.
       blinker_on = CS.leftBlinker != CS.rightBlinker
       steer_abs = abs(CS.steeringAngleDeg)
       now = time.monotonic()
 
+      # State transitions
       if self._lc_state == _LC_NORMAL:
         if blinker_on and not self._prev_blinker_on:
           self._lc_state = _LC_CHANGING
           self._lc_start = now
+          self._lc_centered_since = 0.0
       elif self._lc_state == _LC_CHANGING:
         if not blinker_on:
-          if steer_abs < _LC_UNWIND_DEG:
-            self._lc_state = _LC_TAPERING
-            self._lc_taper_start = now
-          else:
-            self._lc_state = _LC_WAITING
+          self._lc_centered_since = now if steer_abs < _LC_UNWIND_DEG else 0.0
+          self._lc_state = _LC_WAITING
       elif self._lc_state == _LC_WAITING:
-        if steer_abs < _LC_UNWIND_DEG:
-          self._lc_state = _LC_TAPERING
-          self._lc_taper_start = now
-        elif blinker_on and not self._prev_blinker_on:
+        if blinker_on and not self._prev_blinker_on:
           self._lc_state = _LC_CHANGING
           self._lc_start = now
+          self._lc_centered_since = 0.0
+        elif steer_abs < _LC_UNWIND_DEG:
+          if self._lc_centered_since == 0.0:
+            self._lc_centered_since = now
+          elif now - self._lc_centered_since >= _LC_CENTER_HOLD:
+            self._lc_state = _LC_TAPERING
+            self._lc_taper_start = now
+        else:
+          self._lc_centered_since = 0.0  # went outside window; reset hold timer
       elif self._lc_state == _LC_TAPERING:
         if now - self._lc_taper_start >= _LC_TAPER_DUR:
           self._lc_state = _LC_NORMAL
         elif blinker_on and not self._prev_blinker_on:
           self._lc_state = _LC_CHANGING
           self._lc_start = now
+          self._lc_centered_since = 0.0
 
+      # Compute correction scale (feedforward always at 1.0)
       if self._lc_state == _LC_NORMAL:
-        lc_scale = 1.0
+        correction_scale = 1.0
       elif self._lc_state == _LC_CHANGING:
-        ramp = min(1.0, (now - self._lc_start) / _LC_RAMP_DUR)
-        lc_scale = _LC_MIN_SCALE + (1.0 - _LC_MIN_SCALE) * ramp
+        correction_scale = min(1.0, (now - self._lc_start) / _LC_RAMP_DUR)
       elif self._lc_state == _LC_WAITING:
-        lc_scale = 0.0
+        correction_scale = 0.0
       else:  # _LC_TAPERING
-        lc_scale = min(1.0, (now - self._lc_taper_start) / _LC_TAPER_DUR)
+        correction_scale = min(1.0, (now - self._lc_taper_start) / _LC_TAPER_DUR)
 
-      output_torque *= lc_scale
+      # Split torque into feedforward floor + scalable correction.
+      # ff_torque = minimum torque needed to track the current path (corner).
+      # Correction = everything on top of that (PID error response).
+      ff_torque = self.torque_from_lateral_accel(ff, self.torque_params)
+      correction = output_torque - ff_torque
+      output_torque = ff_torque + correction * correction_scale
       self._prev_blinker_on = blinker_on
 
       # FunnyPilot v2.2.0: Smooth stop — linear torque ramp from 100% at 10mph to 0% at 0mph
