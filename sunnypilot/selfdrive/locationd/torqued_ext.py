@@ -43,9 +43,10 @@ class TorqueEstimatorExt:
         self.factor_sanity = 0.5 if decimated else 1.0
         self.friction_sanity = 0.8 if decimated else 1.0
 
-      if self._params.get_bool("CustomTorqueParams"):
-        self.offline_latAccelFactor = float(self._params.get("TorqueParamsOverrideLatAccelFactor", return_default=True))
-        self.offline_friction = float(self._params.get("TorqueParamsOverrideFriction", return_default=True))
+    # FunnyPilot v2.2.3: FRIC override independent of EnforceTorqueControl
+    if self.torque_override_enabled:
+      self.offline_latAccelFactor = float(self._params.get("TorqueParamsOverrideLatAccelFactor", return_default=True))
+      self.offline_friction = float(self._params.get("TorqueParamsOverrideFriction", return_default=True))
 
   def _update_params(self):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
@@ -56,10 +57,10 @@ class TorqueEstimatorExt:
   def update_use_params(self):
     self._update_params()
 
-    if self.enforce_torque_control_toggle:
-      if self.custom_torque_params and self.torque_override_enabled:
-        self.use_params = False
-      else:
-        self.use_params = self.use_live_torque_params
+    # FunnyPilot v2.2.3: stop auto-calibration when override enabled, regardless of EnforceTorqueControl
+    if self.torque_override_enabled:
+      self.use_params = False
+    elif self.enforce_torque_control_toggle:
+      self.use_params = self.use_live_torque_params
 
     self.frame += 1

@@ -247,7 +247,8 @@ class FrictionCoefficientElement:
     self.unit = ""
 
   def update(self, sm, is_metric: bool) -> UiElement:
-    if ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled:
+    # FunnyPilot v2.2.3: show override FRIC without requiring EnforceTorqueControl
+    if ui_state.torque_override_enabled:
       return UiElement(f"{ui_state.torque_override_friction:.3f}", "FRIC.", self.unit, rl.WHITE)
 
     ltp = sm['liveTorqueParameters']
@@ -261,7 +262,8 @@ class LatAccelFactorElement:
     self.unit = ""
 
   def update(self, sm, is_metric: bool) -> UiElement:
-    if ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled:
+    # FunnyPilot v2.2.3: show override LAF without requiring EnforceTorqueControl
+    if ui_state.torque_override_enabled:
       return UiElement(f"{ui_state.torque_override_lat_accel_factor:.3f}", "L.A.F.", self.unit, rl.WHITE)
 
     ltp = sm['liveTorqueParameters']

@@ -12,14 +12,12 @@ class LatControlTorqueExtOverride:
   def __init__(self, CP):
     self.CP = CP
     self.params = Params()
-    self.enforce_torque_control_toggle = self.params.get_bool("EnforceTorqueControl")  # only during init
+    # FunnyPilot v2.2.3: FRIC override independent of EnforceTorqueControl
     self.torque_override_enabled = self.params.get_bool("TorqueParamsOverrideEnabled")
     self.frame = -1
 
   def update_override_torque_params(self, torque_params) -> bool:
-    if not self.enforce_torque_control_toggle:
-      return False
-
+    # FunnyPilot v2.2.3: apply FRIC/LatAccelFactor override regardless of EnforceTorqueControl
     self.frame += 1
     if self.frame % 300 == 0:
       self.torque_override_enabled = self.params.get_bool("TorqueParamsOverrideEnabled")

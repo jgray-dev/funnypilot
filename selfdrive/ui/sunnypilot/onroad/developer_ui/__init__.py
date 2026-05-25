@@ -143,7 +143,7 @@ class DeveloperUiRenderer(Widget):
 
     # Add torque-specific elements if using torque control
     if sm['controlsState'].lateralControlState.which() == 'torqueState':
-      override_active = ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled
+      override_active = ui_state.torque_override_enabled  # FunnyPilot v2.2.3: no longer requires EnforceTorqueControl
       if sm.valid['liveTorqueParameters'] or override_active:
         elements.extend([
           self.friction_elem.update(sm, ui_state.is_metric),
