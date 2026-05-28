@@ -69,11 +69,6 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 ### v3.0.0e Changes (based on funnypilot-3.0.0)
 
-- `selfdrive/modeld/modeld.py` — `LAT_SMOOTH_SECONDS = 0.0` → `0.1`. Root fix for
-  coarse 20Hz corner bites. Shared constant: smooths model curvature output (τ=0.1 s),
-  extends plan lookahead by 0.1 s, and expands controlsd buffer depth — all three
-  automatically in sync. No compensating changes required elsewhere.
-
 - `selfdrive/controls/lib/latcontrol_torque.py` — Two interpolation layers using
   `lat_delay` as the smoothing horizon.
   **Layer 1 (FF smoother):** Curvature feedforward is passed through a
@@ -88,12 +83,15 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 ### v3.0.0 Changes (based on funnypilot-2.0.5)
 
-- `system/manager/process_config.py` — `dmonitoringmodeld` and `dmonitoringd` set to
-  `enabled=False`. DM completely removed — no processes, no events, no alerts, no chimes.
+- `selfdrive/monitoring/helpers.py` — All DM timeouts set to 86400 s (24 h). DM
+  processes run normally (keeping UI data flows and driverStateV2 intact) but never
+  reach terminal state in any realistic driving session. No alerts, no chimes, no
+  disengagement.
 
 - `selfdrive/selfdrived/selfdrived.py` — `driverMonitoringState` removed from SubMaster
   subscription list; `add_from_msg(self.sm['driverMonitoringState'].events)` removed.
-  No DM events reach the event bus.
+  Belt-and-suspenders: even if DM somehow accumulated state, its events can't reach
+  the event bus.
 
 - `selfdrive/controls/lib/latcontrol_torque.py` — Corner-aware lane change torque.
   Output torque is split into feedforward (path/corner demand) and correction (PID error).

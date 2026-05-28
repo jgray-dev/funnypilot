@@ -24,13 +24,14 @@ class DRIVER_MONITOR_SETTINGS:
   def __init__(self, device_type):
     self._DT_DMON = DT_DMON
     # ref (page15-16): https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:42018X1947&rid=2
-    # FunnyPilot v2.0.1: Restored 9x timeouts (matches 1.0.8.3) — personal branch only
-    self._AWARENESS_TIME = 270. # passive wheeltouch total timeout (9x: was 30s)
-    self._AWARENESS_PRE_TIME_TILL_TERMINAL = 135.
-    self._AWARENESS_PROMPT_TIME_TILL_TERMINAL = 54.
-    self._DISTRACTED_TIME = 99. # active monitoring total timeout (9x: was 11s)
-    self._DISTRACTED_PRE_TIME_TILL_TERMINAL = 72.
-    self._DISTRACTED_PROMPT_TIME_TILL_TERMINAL = 54.
+    # FunnyPilot v3.0.0: DM runs (keeps UI data flows intact) but never fires.
+    # Events are also blocked at selfdrived level, so this is belt-and-suspenders.
+    self._AWARENESS_TIME = 86400.
+    self._AWARENESS_PRE_TIME_TILL_TERMINAL = 86400.
+    self._AWARENESS_PROMPT_TIME_TILL_TERMINAL = 86400.
+    self._DISTRACTED_TIME = 86400.
+    self._DISTRACTED_PRE_TIME_TILL_TERMINAL = 86400.
+    self._DISTRACTED_PROMPT_TIME_TILL_TERMINAL = 86400.
 
     self._FACE_THRESHOLD = 0.7
     self._EYE_THRESHOLD = 0.65

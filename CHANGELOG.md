@@ -1,12 +1,8 @@
 FunnyPilot v3.0.0e (2026-05-28) [EXPERIMENTAL]
 ========================
-* exp: LAT_SMOOTH_SECONDS 0.0 → 0.1. This is the root fix for "coarse 20Hz bites"
-  on corners. The model's curvature output is now exponentially smoothed (τ=0.1 s)
-  before being published. Critically, this constant is shared across three places:
-  (1) modeld smooths its output, (2) modeld looks 0.1 s further ahead in the plan
-  to pre-compensate, (3) controlsd adds 0.1 s to its buffer depth automatically.
-  The result: genuinely smooth 100Hz-compatible curvature commands instead of hard
-  20Hz steps that the controller scrambles to follow.
+* note: LAT_SMOOTH_SECONDS held at 0.0 (reverted from 0.1) pending validation —
+  the shared constant has complex interactions with NNLC's desired_lat_jerk_time
+  that need further testing before enabling.
 * exp: Layer 1 — Feedforward smoother. The curvature-driven feedforward term
   (path/corner demand passed to the PID) is passed through a FirstOrderFilter
   with time constant dynamically set to max(lat_delay, 0.1 s) each frame. Sudden
@@ -22,9 +18,10 @@ FunnyPilot v3.0.0e (2026-05-28) [EXPERIMENTAL]
 
 FunnyPilot v3.0.0 (2026-05-28)
 ========================
-* feat: Driver monitoring completely disabled — no UI alerts, no beeping, no
-  events. dmonitoringmodeld and dmonitoringd processes set to enabled=False;
-  driverMonitoringState removed from selfdrived event bus entirely.
+* feat: Driver monitoring silenced — processes kept running (required for UI
+  data flows and driverStateV2 stability) but all timeouts set to 86400 s (24 h)
+  so DM never reaches alert state. Events also blocked at selfdrived level as a
+  second layer of protection. No beeping, no alerts, no disengagement.
 * feat: Corner-aware lane change torque. Output torque is now split into
   feedforward (corner demand) and correction (PID error) components. Only the
   correction is reduced during a lane change; the feedforward always runs at
