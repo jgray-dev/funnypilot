@@ -1,3 +1,19 @@
+FunnyPilot v3.0.0e (2026-05-28) [EXPERIMENTAL]
+========================
+* exp: Layer 1 — Feedforward smoother. The curvature-driven feedforward term
+  (path/corner demand passed to the PID) is passed through a FirstOrderFilter
+  with time constant dynamically set to lat_delay each frame. Sudden path model
+  updates are spread over the window the vehicle already cannot respond faster
+  than, giving more precise and higher-frequency effective control inputs without
+  deviating from the model's actual intent. Friction compensation is added AFTER
+  the filter so it remains fully responsive to direction changes.
+* exp: Layer 2 — Setpoint averaging. The single delay-point lookup
+  (lat_accel_request_buffer[-delay_frames]) is replaced with a mean over a
+  ±(delay/4) window centered on that point. Single-frame spikes in the error
+  signal are suppressed without shifting the control point in time.
+* Both layers use lat_delay as the smoothing horizon — the vehicle's own measured
+  response lag — so no additional latency is introduced beyond what already exists.
+
 FunnyPilot v3.0.0 (2026-05-28)
 ========================
 * feat: Driver monitoring completely disabled — no UI alerts, no beeping, no

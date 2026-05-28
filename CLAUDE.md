@@ -67,6 +67,20 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.0e Changes (based on funnypilot-3.0.0)
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Two interpolation layers using
+  `lat_delay` as the smoothing horizon.
+  **Layer 1 (FF smoother):** Curvature feedforward is passed through a
+  `FirstOrderFilter` with `tau = max(lat_delay, 0.05)`, updated dynamically each
+  frame. Path model steps are spread over the vehicle's own response window.
+  Friction compensation is added after the filter to stay responsive. Filter is
+  seeded from current `ff` on each active→inactive→active transition to prevent
+  torque spikes on re-engagement. (`_ff_filter`, `_prev_active`)
+  **Layer 2 (setpoint averaging):** The delay-point setpoint lookup is replaced
+  with `np.mean` over `±(delay_frames // 4)` frames around the center, clipped to
+  buffer bounds. Removes single-frame error spikes without time-shifting the setpoint.
+
 ### v3.0.0 Changes (based on funnypilot-2.0.5)
 
 - `system/manager/process_config.py` — `dmonitoringmodeld` and `dmonitoringd` set to

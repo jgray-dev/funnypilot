@@ -51,6 +51,16 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
+    # FunnyPilot v3.0.0e: Interpolation using lateral delay as smoothing horizon.
+    # Layer 1 — FF smoother: low-pass the curvature feedforward with tau = lat_delay.
+    #   Path model updates that cause sudden ff steps get spread over the window the
+    #   vehicle already can't respond faster than. tau updated dynamically each frame.
+    # Layer 2 — Setpoint averaging: replace single-point delay lookup with a mean
+    #   over a ±(delay/4) window around the delay center. Removes single-frame spikes
+    #   from the error signal without shifting the control point in time.
+    self._ff_filter  = FirstOrderFilter(0.0, 0.1, self.dt, initialized=False)
+    self._prev_active = False
+
     # FunnyPilot v3.0.0: Corner-aware lane change + post-blinker settle.
     # Correction torque only (not feedforward) is scaled throughout.
     # On blinker ON:  correction ramps 10% → 100% over 6 s.
@@ -91,8 +101,12 @@ class LatControlTorque(LatControl):
     lateral_accel_deadzone = curvature_deadzone * CS.vEgo ** 2
 
     delay_frames = int(np.clip(lat_delay / self.dt + 1, 1, self.lat_accel_request_buffer_len))
-    expected_lateral_accel = self.lat_accel_request_buffer[-delay_frames]
-    setpoint = expected_lateral_accel
+    # Layer 2: average over ±(delay/4) frames around the delay center to smooth
+    # single-frame spikes from the error signal without shifting the control point.
+    half_window = max(1, delay_frames // 4)
+    buf = list(self.lat_accel_request_buffer)
+    center = len(buf) - delay_frames
+    setpoint = float(np.mean(buf[max(0, center - half_window):min(len(buf), center + half_window + 1)]))
     error = setpoint - measurement
 
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
@@ -102,9 +116,20 @@ class LatControlTorque(LatControl):
     ff = gravity_adjusted_future_lateral_accel
     # latAccelOffset corrects roll compensation bias from device roll misalignment relative to car roll
     ff -= self.torque_params.latAccelOffset
+    # Layer 1: smooth the curvature-driven demand with tau = lat_delay before adding
+    # friction compensation. Sudden path model updates get spread over the window the
+    # vehicle physically cannot respond faster than. Friction stays unfiltered so it
+    # reacts immediately to direction changes. Filter is reset on active→inactive→active
+    # transitions to prevent stale state from causing a torque spike on re-engagement.
+    if not self._prev_active:
+      self._ff_filter.x = ff
+      self._ff_filter.initialized = True
+    self._ff_filter.update_alpha(max(lat_delay, 0.05))
+    ff = self._ff_filter.update(ff)
     ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
 
     if not active:
+      self._prev_active = False
       output_torque = 0.0
       pid_log.active = False
     else:
@@ -156,6 +181,7 @@ class LatControlTorque(LatControl):
         torque_scale = max(0.0, speed_mph / 15.0)
         output_torque *= torque_scale
 
+      self._prev_active = True
       pid_log.active = True
       pid_log.p = float(self.pid.p)
       pid_log.i = float(self.pid.i)
