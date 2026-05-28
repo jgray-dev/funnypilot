@@ -56,7 +56,7 @@ class LatControlTorque(LatControl):
     #   Path model updates that cause sudden ff steps get spread over the window the
     #   vehicle already can't respond faster than. tau updated dynamically each frame.
     # Layer 2 — Setpoint averaging: replace single-point delay lookup with a mean
-    #   over a ±(delay/4) window around the delay center. Removes single-frame spikes
+    #   over a ±(delay/3) window around the delay center. Removes single-frame spikes
     #   from the error signal without shifting the control point in time.
     self._ff_filter  = FirstOrderFilter(0.0, 0.1, self.dt, initialized=False)
     self._prev_active = False
@@ -101,9 +101,9 @@ class LatControlTorque(LatControl):
     lateral_accel_deadzone = curvature_deadzone * CS.vEgo ** 2
 
     delay_frames = int(np.clip(lat_delay / self.dt + 1, 1, self.lat_accel_request_buffer_len))
-    # Layer 2: average over ±(delay/4) frames around the delay center to smooth
+    # Layer 2: average over ±(delay/3) frames around the delay center to smooth
     # single-frame spikes from the error signal without shifting the control point.
-    half_window = max(1, delay_frames // 4)
+    half_window = max(1, delay_frames // 3)
     buf = list(self.lat_accel_request_buffer)
     center = len(buf) - delay_frames
     setpoint = float(np.mean(buf[max(0, center - half_window):min(len(buf), center + half_window + 1)]))
@@ -124,7 +124,7 @@ class LatControlTorque(LatControl):
     if not self._prev_active:
       self._ff_filter.x = ff
       self._ff_filter.initialized = True
-    self._ff_filter.update_alpha(max(lat_delay, 0.05))
+    self._ff_filter.update_alpha(max(lat_delay, 0.1))
     ff = self._ff_filter.update(ff)
     ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
 

@@ -1,18 +1,24 @@
 FunnyPilot v3.0.0e (2026-05-28) [EXPERIMENTAL]
 ========================
+* exp: LAT_SMOOTH_SECONDS 0.0 → 0.1. This is the root fix for "coarse 20Hz bites"
+  on corners. The model's curvature output is now exponentially smoothed (τ=0.1 s)
+  before being published. Critically, this constant is shared across three places:
+  (1) modeld smooths its output, (2) modeld looks 0.1 s further ahead in the plan
+  to pre-compensate, (3) controlsd adds 0.1 s to its buffer depth automatically.
+  The result: genuinely smooth 100Hz-compatible curvature commands instead of hard
+  20Hz steps that the controller scrambles to follow.
 * exp: Layer 1 — Feedforward smoother. The curvature-driven feedforward term
   (path/corner demand passed to the PID) is passed through a FirstOrderFilter
-  with time constant dynamically set to lat_delay each frame. Sudden path model
-  updates are spread over the window the vehicle already cannot respond faster
-  than, giving more precise and higher-frequency effective control inputs without
-  deviating from the model's actual intent. Friction compensation is added AFTER
-  the filter so it remains fully responsive to direction changes.
-* exp: Layer 2 — Setpoint averaging. The single delay-point lookup
-  (lat_accel_request_buffer[-delay_frames]) is replaced with a mean over a
-  ±(delay/4) window centered on that point. Single-frame spikes in the error
-  signal are suppressed without shifting the control point in time.
-* Both layers use lat_delay as the smoothing horizon — the vehicle's own measured
-  response lag — so no additional latency is introduced beyond what already exists.
+  with time constant dynamically set to max(lat_delay, 0.1 s) each frame. Sudden
+  path model updates are spread over the vehicle's own response window. Friction
+  compensation is added AFTER the filter so it remains fully responsive to
+  direction changes. Filter is seeded from current ff on re-engagement to prevent
+  torque spikes.
+* exp: Layer 2 — Setpoint averaging. The single delay-point lookup is replaced
+  with a mean over a ±(delay/3) window centered on the delay point. Single-frame
+  error spikes are suppressed without time-shifting the setpoint.
+* Sanity-checked: DM-disabled forceDecel defaults to 0.0 (safe), isRHD defaults
+  to False (correct for US/LHD). No blocking issues found.
 
 FunnyPilot v3.0.0 (2026-05-28)
 ========================
