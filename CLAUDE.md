@@ -46,9 +46,9 @@ sudo /data/tailscale/bin/tailscale --socket=/run/tailscale/tailscaled.sock up --
 - `funnypilot` - git@github.com:jgray-dev/funnypilot.git (push here)
 - `origin` - sunnypilot upstream
 
-## Branching Policy (v0.9.5+)
+## Branching Policy (v2.2.0+)
 
-All versions must be separate branches: `funnypilot-0.9.X`
+All versions must be separate branches: `funnypilot-X.Y.Z`
 In each new branch, modify the CHANGELOG.md file to correspond to what was last modified in the version of the branch.
 Additionally, edit CLAUDE.md Key Files section to describe what changes and logic were implemented in what files.
 
@@ -66,6 +66,22 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 ## Key Files
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
+
+### v3.0.0 Changes (based on funnypilot-2.0.5)
+
+- `system/manager/process_config.py` — `dmonitoringmodeld` and `dmonitoringd` set to
+  `enabled=False`. DM completely removed — no processes, no events, no alerts, no chimes.
+
+- `selfdrive/selfdrived/selfdrived.py` — `driverMonitoringState` removed from SubMaster
+  subscription list; `add_from_msg(self.sm['driverMonitoringState'].events)` removed.
+  No DM events reach the event bus.
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Corner-aware lane change torque.
+  Output torque is split into feedforward (path/corner demand) and correction (PID error).
+  Only the correction component is scaled during a lane change; feedforward always runs
+  at 100% so the car never applies less torque than the curve requires and cannot slip
+  to the outside of a turn. On blinker rising edge, correction starts at 10% and ramps
+  linearly to 100% over 6 seconds. Constants: `_LC_MIN_SCALE = 0.10`, `_LC_RAMP_DUR = 6.0`.
 
 ### v2.0.5 Changes
 

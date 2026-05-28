@@ -51,15 +51,13 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot v2.0.1: Blinker-triggered smooth lane change torque ramp
-    # On blinker rising edge, scale torque to 25% (75% reduction) and ramp
-    # back to 100% over 5.0 seconds. Triggered purely by the blinker, so the
-    # ramp begins the moment the user signals — not when the model starts
-    # the curvature command.
+    # FunnyPilot v3.0.0: Corner-aware lane change — only correction torque is
+    # scaled; feedforward (corner demand) always runs at 100% so the car never
+    # slips to the outside of a turn mid-lane-change.
+    self._LC_MIN_SCALE = 0.10   # correction starts at 10%
+    self._LC_RAMP_DUR = 6.0     # ramps to 100% over 6 s
     self.lane_change_torque_scale = 1.0
     self.lane_change_start_time = 0.0
-    self.lane_change_ramp_duration = 5.0
-    self.lane_change_min_scale = 0.25
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
@@ -119,22 +117,25 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot v2.0.1: Blinker-triggered smooth lane change torque ramp
+      # FunnyPilot v3.0.0: Corner-aware lane change torque scaling.
+      # Split output into feedforward (corner demand) and correction (PID error).
+      # Only the correction is scaled — feedforward always runs at 100% so the
+      # car never applies less torque than the corner itself demands.
       blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker
       if blinker_on and not self._prev_blinker_on:
         self.lane_change_start_time = time.monotonic()
       self._prev_blinker_on = blinker_on
 
       elapsed = time.monotonic() - self.lane_change_start_time
-      if elapsed < self.lane_change_ramp_duration:
-        ramp_progress = elapsed / self.lane_change_ramp_duration
-        self.lane_change_torque_scale = (
-          self.lane_change_min_scale + (1.0 - self.lane_change_min_scale) * ramp_progress
-        )
+      if elapsed < self._LC_RAMP_DUR:
+        ramp_progress = elapsed / self._LC_RAMP_DUR
+        self.lane_change_torque_scale = self._LC_MIN_SCALE + (1.0 - self._LC_MIN_SCALE) * ramp_progress
       else:
         self.lane_change_torque_scale = 1.0
 
-      output_torque *= self.lane_change_torque_scale
+      ff_torque = self.torque_from_lateral_accel(ff, self.torque_params)
+      correction_torque = output_torque - ff_torque
+      output_torque = ff_torque + correction_torque * self.lane_change_torque_scale
 
       # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
       speed_mph = CS.vEgo * 2.23694

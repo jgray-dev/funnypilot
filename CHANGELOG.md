@@ -1,3 +1,15 @@
+FunnyPilot v3.0.0 (2026-05-28)
+========================
+* feat: Driver monitoring completely disabled — no UI alerts, no beeping, no
+  events. dmonitoringmodeld and dmonitoringd processes set to enabled=False;
+  driverMonitoringState removed from selfdrived event bus entirely.
+* feat: Corner-aware lane change torque. Output torque is now split into
+  feedforward (corner demand) and correction (PID error) components. Only the
+  correction is reduced during a lane change; the feedforward always runs at
+  100%, ensuring the car never applies less torque than the curve requires and
+  cannot slip to the outside of a turn. Correction starts at 10% on blinker
+  onset and ramps linearly to 100% over 6 seconds.
+
 FunnyPilot v2.0.5 (2026-05-08)
 ========================
 * tweak: Reintroduced the hidden −10% cruise offset strictly when cruise is the
