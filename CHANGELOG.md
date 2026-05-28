@@ -9,6 +9,11 @@ FunnyPilot v3.0.0 (2026-05-28)
   100%, ensuring the car never applies less torque than the curve requires and
   cannot slip to the outside of a turn. Correction starts at 10% on blinker
   onset and ramps linearly to 100% over 6 seconds.
+* feat: Post-blinker settle sequence. When the blinker turns off, correction
+  torque drops to 0% for a 0.5 s dead zone (letting the steering unwind
+  without controller fight), then ramps from 0% back to 100% over 2 seconds,
+  preventing the abrupt full-torque snap back to lane-center the moment the
+  wheel realigns.
 
 FunnyPilot v2.0.5 (2026-05-08)
 ========================

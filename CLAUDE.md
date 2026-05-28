@@ -81,7 +81,9 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
   Only the correction component is scaled during a lane change; feedforward always runs
   at 100% so the car never applies less torque than the curve requires and cannot slip
   to the outside of a turn. On blinker rising edge, correction starts at 10% and ramps
-  linearly to 100% over 6 seconds. Constants: `_LC_MIN_SCALE = 0.10`, `_LC_RAMP_DUR = 6.0`.
+  linearly to 100% over 6 seconds. On blinker falling edge: 0.5 s dead zone (correction
+  = 0%), then 0% → 100% ramp over 2 s.
+  Constants: `_LC_MIN_SCALE = 0.10`, `_LC_RAMP_DUR = 6.0`, `_POST_DELAY = 0.5`, `_POST_RAMP_DUR = 2.0`.
 
 ### v2.0.5 Changes
 

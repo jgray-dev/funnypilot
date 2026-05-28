@@ -51,13 +51,17 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot v3.0.0: Corner-aware lane change — only correction torque is
-    # scaled; feedforward (corner demand) always runs at 100% so the car never
-    # slips to the outside of a turn mid-lane-change.
-    self._LC_MIN_SCALE = 0.10   # correction starts at 10%
-    self._LC_RAMP_DUR = 6.0     # ramps to 100% over 6 s
+    # FunnyPilot v3.0.0: Corner-aware lane change + post-blinker settle.
+    # Correction torque only (not feedforward) is scaled throughout.
+    # On blinker ON:  correction ramps 10% → 100% over 6 s.
+    # On blinker OFF: 0.5 s dead zone (correction = 0%), then 0% → 100% over 2 s.
+    self._LC_MIN_SCALE    = 0.10  # correction floor during lane change
+    self._LC_RAMP_DUR     = 6.0   # blinker-on ramp duration (s)
+    self._POST_DELAY      = 0.5   # dead zone after blinker off (s)
+    self._POST_RAMP_DUR   = 2.0   # correction ramp-up after dead zone (s)
     self.lane_change_torque_scale = 1.0
-    self.lane_change_start_time = 0.0
+    self._lc_blinker_on_time  = -1e9  # sentinel: blinker not recently ON
+    self._lc_blinker_off_time = -1e9  # sentinel: blinker not recently OFF
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
@@ -117,21 +121,30 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot v3.0.0: Corner-aware lane change torque scaling.
-      # Split output into feedforward (corner demand) and correction (PID error).
-      # Only the correction is scaled — feedforward always runs at 100% so the
-      # car never applies less torque than the corner itself demands.
-      blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker
+      # FunnyPilot v3.0.0: Corner-aware lane change + post-blinker settle.
+      # Feedforward (corner demand) always runs at 100%; only the PID correction
+      # is scaled so the car can never apply less torque than the curve demands.
+      blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker on
+      now = time.monotonic()
       if blinker_on and not self._prev_blinker_on:
-        self.lane_change_start_time = time.monotonic()
+        self._lc_blinker_on_time  = now
+        self._lc_blinker_off_time = -1e9  # cancel any in-progress post-ramp
+      if not blinker_on and self._prev_blinker_on:
+        self._lc_blinker_off_time = now
       self._prev_blinker_on = blinker_on
 
-      elapsed = time.monotonic() - self.lane_change_start_time
-      if elapsed < self._LC_RAMP_DUR:
-        ramp_progress = elapsed / self._LC_RAMP_DUR
-        self.lane_change_torque_scale = self._LC_MIN_SCALE + (1.0 - self._LC_MIN_SCALE) * ramp_progress
+      if blinker_on:
+        ramp = min((now - self._lc_blinker_on_time) / self._LC_RAMP_DUR, 1.0)
+        scale = self._LC_MIN_SCALE + (1.0 - self._LC_MIN_SCALE) * ramp
       else:
-        self.lane_change_torque_scale = 1.0
+        post = now - self._lc_blinker_off_time
+        if post < self._POST_DELAY:
+          scale = 0.0
+        elif post < self._POST_DELAY + self._POST_RAMP_DUR:
+          scale = (post - self._POST_DELAY) / self._POST_RAMP_DUR
+        else:
+          scale = 1.0
+      self.lane_change_torque_scale = scale
 
       ff_torque = self.torque_from_lateral_accel(ff, self.torque_params)
       correction_torque = output_torque - ff_torque
