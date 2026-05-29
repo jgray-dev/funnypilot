@@ -75,7 +75,7 @@ class LatControlTorque(LatControl):
     self._prev_blinker_on = False
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
-    self.torque_params.latAccelFactor = latAccelFactor
+    self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
     self.torque_params.latAccelOffset = latAccelOffset
     self.torque_params.friction = friction
     self.update_limits()

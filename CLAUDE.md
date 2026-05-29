@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.1 Changes (based on funnypilot-3.0.0e)
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — `latAccelFactor` locked at 2.750
+  in `update_live_torque_params`. Offset and friction still update live; only LAF
+  is pinned. Smooth stopping confirmed at 0–15 mph.
+
+- `sunnypilot/navd/nav_web/index.html` — Branch selector replaced with a custom
+  scrollable list (removes native `<select>` that overflowed on mobile). Bottom-sheet
+  modal, 44 px touch targets, Flash button disabled until branch is selected. Minimal
+  dark theme using system fonts.
+
 ### v3.0.0e Changes (based on funnypilot-3.0.0)
 
 - `selfdrive/controls/lib/latcontrol_torque.py` — Two interpolation layers using

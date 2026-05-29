@@ -1,3 +1,14 @@
+FunnyPilot v3.0.1 (2026-05-28)
+========================
+* fix: latAccelFactor (LAF) locked at 2.750. Live torque calibration updates
+  latAccelOffset and friction normally but LAF is pinned, giving consistent
+  steering feel regardless of torqued's current estimate.
+* tweak: Smooth stopping interpolation confirmed 0–15 mph (100% torque at 15 mph).
+* feat: Web UI branch selector rebuilt as a native scrollable list — no more
+  native <select> overflowing the screen on mobile. Bottom-sheet modal, touch
+  targets ≥44 px, minimal dark theme. Flash button disabled until a branch is
+  selected; status feedback inline.
+
 FunnyPilot v3.0.0e (2026-05-28) [EXPERIMENTAL]
 ========================
 * note: LAT_SMOOTH_SECONDS held at 0.0 (reverted from 0.1) pending validation —
