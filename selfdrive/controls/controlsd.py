@@ -163,10 +163,8 @@ class Controls(ControlsExt):
       abs_delta = abs(delta)
       v_safe    = max(CS.vEgo, 5.0)
       max_step  = _MP_MAX_STEP * _MP_LAF / (v_safe ** 2)
-      if abs_delta < max_step * 0.5:
-        self._mp_n_interp = 0
-      else:
-        self._mp_n_interp = min(math.ceil(abs_delta / max_step) - 1, 4)
+      # Always at least 1 midpoint (n_interp=1, display "2"); scale up for larger deltas.
+      self._mp_n_interp = min(max(1, math.ceil(abs_delta / max_step) - 1), 4)
       self._mp_values = [
         (self._mp_prev_curv + (f / (self._mp_n_interp + 1)) * delta)
         if (self._mp_n_interp > 0 and f <= self._mp_n_interp)

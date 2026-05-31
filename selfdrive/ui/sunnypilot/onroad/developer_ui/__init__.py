@@ -133,10 +133,16 @@ class DeveloperUiRenderer(Widget):
     rl.draw_rectangle(int(rect.x), y, int(rect.width), bar_height,
                       rl.Color(0, 0, 0, 100))
 
-    elements = [
+    elements = []
+
+    # INTERP is leftmost when using torque control
+    if sm['controlsState'].lateralControlState.which() == 'torqueState':
+      elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
+
+    elements.extend([
       self.a_ego_elem.update(sm, ui_state.is_metric),
       self.lead_speed_elem.update(sm, ui_state.is_metric),
-    ]
+    ])
 
     # Add torque-specific elements if using torque control
     if sm['controlsState'].lateralControlState.which() == 'torqueState':
@@ -145,7 +151,6 @@ class DeveloperUiRenderer(Widget):
           self.friction_elem.update(sm, ui_state.is_metric),
           self.lat_accel_factor_elem.update(sm, ui_state.is_metric),
         ])
-      elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
     else:
       # Non-torque: show steering torque and GPS data
       elements.append(self.steering_torque_elem.update(sm, ui_state.is_metric))
