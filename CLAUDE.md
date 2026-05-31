@@ -67,6 +67,12 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.4e Changes (based on funnypilot-3.0.3e)
+
+- `selfdrive/controls/controlsd.py` — `_MP_MAX_STEP` lowered from 0.10 to 0.04.
+  At 30 m/s, the per-step threshold drops from 0.000306 to 0.000122 rad/m, so
+  n_interp climbs to 2–4 on moderate curves instead of staying at 1.
+
 ### v3.0.3e Changes (based on funnypilot-3.0.2e)
 
 - `selfdrive/controls/controlsd.py` — Dynamic interpolation step count.

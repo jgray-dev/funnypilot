@@ -146,7 +146,7 @@ class Controls(ControlsExt):
     # delta while keeping each step ≤ 10% torque-equivalent (speed-scaled).
     # Builds a 5-value schedule; each controlsd frame reads directly from it.
     _MP_LAF      = 2.750   # matches locked LAF
-    _MP_MAX_STEP = 0.10    # max torque fraction per interpolated step
+    _MP_MAX_STEP = 0.04    # max torque fraction per interpolated step (lower = more steps sooner)
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv

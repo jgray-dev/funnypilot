@@ -1,3 +1,9 @@
+FunnyPilot v3.0.4e (2026-05-31) [EXPERIMENTAL]
+========================
+* tune: _MP_MAX_STEP 0.10 → 0.04. Lower threshold means n_interp climbs
+  sooner and more often — display will show 3–5 on moderate curves rather
+  than staying at 2 for most of the drive.
+
 FunnyPilot v3.0.3e (2026-05-31) [EXPERIMENTAL]
 ========================
 * feat: Dynamic interpolation step count. Steps per model gate scales with
