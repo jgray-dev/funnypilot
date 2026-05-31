@@ -67,6 +67,18 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.2e Changes (based on funnypilot-3.0.1)
+
+- `selfdrive/controls/controlsd.py` — Midpoint interpolation between model frames.
+  `_mp_prev_curv` / `_mp_cur_curv` / `_mp_frame` track consecutive 20 Hz model
+  outputs. At frame index 2 of 5 (10 ms after each model update), a mid-frame
+  command = (prev + cur) / 2 is injected. Effective lat command rate: ~40 Hz.
+  Zero added lag — no filter. State resets on `CC.latActive = False`.
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Layers 1 and 2 removed.
+  FF FirstOrderFilter and setpoint averaging window both caused phase-lag drift
+  on curves. Restored: `setpoint = lat_accel_request_buffer[-delay_frames]`.
+
 ### v3.0.1 Changes (based on funnypilot-3.0.0e)
 
 - `selfdrive/controls/lib/latcontrol_torque.py` — `latAccelFactor` locked at 2.750

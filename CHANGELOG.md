@@ -1,3 +1,16 @@
+FunnyPilot v3.0.2e (2026-05-28) [EXPERIMENTAL]
+========================
+* fix: Removed Layers 1 and 2 from lateral controller — the FirstOrderFilter
+  on feedforward and the setpoint averaging window both introduced phase lag
+  that caused outward drift on curves. Setpoint lookup restored to direct
+  single-point: lat_accel_request_buffer[-delay_frames].
+* feat: Midpoint interpolation in controlsd. Between consecutive model frames
+  (20 Hz) a single mid-frame command is injected at controlsd frame index 2 of 5
+  (10 ms after the model frame) equal to (prev_frame + cur_frame) / 2. Effective
+  lateral command rate rises from 20 Hz to ~40 Hz with zero added lag: no filter,
+  no phase shift — just geometry. When latActive is False the state resets so
+  there is no stale value on re-engagement.
+
 FunnyPilot v3.0.1 (2026-05-28)
 ========================
 * fix: latAccelFactor (LAF) locked at 2.750. Live torque calibration updates
