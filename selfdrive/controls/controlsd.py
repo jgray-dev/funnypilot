@@ -54,9 +54,8 @@ class Controls(ControlsExt):
     self._mp_prev_curv      = 0.0
     self._mp_cur_curv       = 0.0
     self._mp_frame          = 0
-    self._mp_n_interp       = 0
-    self._mp_values         = [0.0] * 5
-    self._mp_write_counter  = 0
+    self._mp_n_interp = 0
+    self._mp_values   = [0.0] * 5
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -172,14 +171,12 @@ class Controls(ControlsExt):
         for f in range(5)
       ]
       new_desired_curvature = self._mp_values[0]
-      # Write interpolation count to /dev/shm for dev UI (~1 Hz)
-      self._mp_write_counter = (self._mp_write_counter + 1) % 20
-      if self._mp_write_counter == 0:
-        try:
-          with open('/dev/shm/lat_interp', 'w') as _f:
-            _f.write(str(self._mp_n_interp + 1))
-        except Exception:
-          pass
+      # Write interp count and delta to /dev/shm for dev UI on every model gate.
+      try:
+        with open('/dev/shm/lat_interp', 'w') as _f:
+          _f.write(f"{self._mp_n_interp + 1},{abs_delta:.6f}")
+      except Exception:
+        pass
     else:
       self._mp_frame = min(self._mp_frame + 1, 4)
       new_desired_curvature = self._mp_values[self._mp_frame]

@@ -271,27 +271,44 @@ class LatAccelFactorElement:
     return UiElement(value, "L.A.F.", self.unit, color)
 
 
+def _read_lat_interp():
+  """Returns (n_interp, abs_delta) from /dev/shm/lat_interp, or defaults."""
+  try:
+    with open('/dev/shm/lat_interp') as f:
+      parts = f.read().strip().split(',')
+      return int(parts[0]), float(parts[1])
+  except Exception:
+    return 1, 0.0
+
+
 class LatInterpolElement:
-  """Shows effective control steps per model gate written by controlsd to /dev/shm/lat_interp."""
   def __init__(self):
     self.unit = ""
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
-    try:
-      with open('/dev/shm/lat_interp') as f:
-        n = int(f.read().strip())
-    except Exception:
-      n = 1
+    n, _ = _read_lat_interp()
     if not lat_active:
       color = rl.WHITE
     elif n >= 4:
-      color = rl.Color(255, 188, 0, 255)   # orange — high interp
+      color = rl.Color(255, 188, 0, 255)
     elif n >= 2:
-      color = rl.Color(0, 255, 0, 255)     # green  — normal
+      color = rl.Color(0, 255, 0, 255)
     else:
       color = rl.WHITE
     return UiElement(str(n), "INTERP", self.unit, color)
+
+
+class LatDeltaElement:
+  def __init__(self):
+    self.unit = ""
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    lat_active = sm['carControl'].latActive
+    _, delta = _read_lat_interp()
+    value = f"{delta:.4f}"
+    color = rl.WHITE if not lat_active else rl.Color(0, 200, 255, 255)
+    return UiElement(value, "ΔCRV", self.unit, color)
 
 
 class SteeringTorqueEpsElement:

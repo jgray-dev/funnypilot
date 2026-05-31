@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  LatInterpolElement,
+  LatInterpolElement, LatDeltaElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -43,6 +43,7 @@ class DeveloperUiRenderer(Widget):
     self.friction_elem = FrictionCoefficientElement()
     self.lat_accel_factor_elem = LatAccelFactorElement()
     self.lat_interp_elem = LatInterpolElement()
+    self.lat_delta_elem = LatDeltaElement()
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
     self.altitude_elem = AltitudeElement()
@@ -134,33 +135,25 @@ class DeveloperUiRenderer(Widget):
                       rl.Color(0, 0, 0, 100))
 
     elements = []
+    is_torque = sm['controlsState'].lateralControlState.which() == 'torqueState'
 
-    # INTERP is leftmost when using torque control
-    if sm['controlsState'].lateralControlState.which() == 'torqueState':
+    # Leftmost: INTERP + ΔCRV (torque only)
+    if is_torque:
       elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
+      elements.append(self.lat_delta_elem.update(sm, ui_state.is_metric))
 
-    elements.extend([
-      self.a_ego_elem.update(sm, ui_state.is_metric),
-      self.lead_speed_elem.update(sm, ui_state.is_metric),
-    ])
+    elements.append(self.lead_speed_elem.update(sm, ui_state.is_metric))
 
-    # Add torque-specific elements if using torque control
-    if sm['controlsState'].lateralControlState.which() == 'torqueState':
+    if is_torque:
       if sm.valid['liveTorqueParameters']:
         elements.extend([
           self.friction_elem.update(sm, ui_state.is_metric),
           self.lat_accel_factor_elem.update(sm, ui_state.is_metric),
         ])
     else:
-      # Non-torque: show steering torque and GPS data
       elements.append(self.steering_torque_elem.update(sm, ui_state.is_metric))
-
       if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
         elements.append(self.bearing_elem.update(sm, ui_state.is_metric))
-
-    # Add altitude if GPS available
-    if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
-      elements.append(self.altitude_elem.update(sm, ui_state.is_metric))
 
     if not elements:
       return
