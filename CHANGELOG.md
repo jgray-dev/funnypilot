@@ -1,3 +1,14 @@
+FunnyPilot v3.0.3e (2026-05-31) [EXPERIMENTAL]
+========================
+* feat: Dynamic interpolation step count. Steps per model gate scales with
+  the curvature delta — each step bounded to ≤10% torque-equivalent
+  (speed-scaled via LAF=2.750). 5-value schedule pre-built per gate.
+  n=0 → display 1 (direct jump). n=1 → display 2 (normal). n=4 → display 5.
+* feat: INTERP N in developer UI bottom bar (torque controller only).
+  IPC via /dev/shm/lat_interp written by controlsd at model-gate rate.
+  Green=2–3, Orange=4–5, White=1. Zero compilation required.
+* tweak: Post-blinker correction ramp is now quadratic ease-in (alpha²).
+
 FunnyPilot v3.0.2e (2026-05-28) [EXPERIMENTAL]
 ========================
 * fix: Removed Layers 1 and 2 from lateral controller — the FirstOrderFilter

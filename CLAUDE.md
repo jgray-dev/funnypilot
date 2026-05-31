@@ -67,6 +67,26 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.3e Changes (based on funnypilot-3.0.2e)
+
+- `selfdrive/controls/controlsd.py` — Dynamic interpolation step count.
+  `_mp_n_interp` computed per model gate from `delta / max_step` where
+  `max_step = 0.10 * LAF / vEgo²` (speed-scaled, LAF=2.750). Schedule built as
+  a 5-value list: frames 0..n_interp interpolate prev→cur, remaining frames hold
+  at cur. Every step = delta/(n_interp+1) ≤ max_step. Writes count to
+  `/dev/shm/lat_interp` at model-gate rate (~20 Hz, gated to every 20 gates).
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Post-blinker ease-in ramp.
+  `scale = alpha²` replaces linear `scale = alpha` in the 2 s re-engagement ramp.
+  Holds correction torque near-zero for ~half the ramp duration, then recovers.
+
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatInterpolElement`
+  reads `/dev/shm/lat_interp` and renders `INTERP N` in the bottom dev bar.
+  Color: white=1, green=2–3, orange=4–5. No params, no compilation.
+
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` — Registers
+  `LatInterpolElement` and appends it to the torque-state bottom bar.
+
 ### v3.0.2e Changes (based on funnypilot-3.0.1)
 
 - `selfdrive/controls/controlsd.py` — Midpoint interpolation between model frames.

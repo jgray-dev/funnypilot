@@ -140,7 +140,8 @@ class LatControlTorque(LatControl):
         if post < self._POST_DELAY:
           scale = 0.0
         elif post < self._POST_DELAY + self._POST_RAMP_DUR:
-          scale = (post - self._POST_DELAY) / self._POST_RAMP_DUR
+          alpha = (post - self._POST_DELAY) / self._POST_RAMP_DUR
+          scale = alpha * alpha  # ease-in: holds low longer, steepens at end
         else:
           scale = 1.0
       self.lane_change_torque_scale = scale

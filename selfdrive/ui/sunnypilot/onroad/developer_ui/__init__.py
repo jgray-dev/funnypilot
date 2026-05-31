@@ -10,7 +10,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
-  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement
+  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
+  LatInterpolElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -41,6 +42,7 @@ class DeveloperUiRenderer(Widget):
     self.lead_speed_elem = LeadSpeedElement()
     self.friction_elem = FrictionCoefficientElement()
     self.lat_accel_factor_elem = LatAccelFactorElement()
+    self.lat_interp_elem = LatInterpolElement()
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
     self.altitude_elem = AltitudeElement()
@@ -143,6 +145,7 @@ class DeveloperUiRenderer(Widget):
           self.friction_elem.update(sm, ui_state.is_metric),
           self.lat_accel_factor_elem.update(sm, ui_state.is_metric),
         ])
+      elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
     else:
       # Non-torque: show steering torque and GPS data
       elements.append(self.steering_torque_elem.update(sm, ui_state.is_metric))

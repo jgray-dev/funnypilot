@@ -271,6 +271,29 @@ class LatAccelFactorElement:
     return UiElement(value, "L.A.F.", self.unit, color)
 
 
+class LatInterpolElement:
+  """Shows effective control steps per model gate written by controlsd to /dev/shm/lat_interp."""
+  def __init__(self):
+    self.unit = ""
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    lat_active = sm['carControl'].latActive
+    try:
+      with open('/dev/shm/lat_interp') as f:
+        n = int(f.read().strip())
+    except Exception:
+      n = 1
+    if not lat_active:
+      color = rl.WHITE
+    elif n >= 4:
+      color = rl.Color(255, 188, 0, 255)   # orange — high interp
+    elif n >= 2:
+      color = rl.Color(0, 255, 0, 255)     # green  — normal
+    else:
+      color = rl.WHITE
+    return UiElement(str(n), "INTERP", self.unit, color)
+
+
 class SteeringTorqueEpsElement:
   def __init__(self):
     self.unit = "N·dm"

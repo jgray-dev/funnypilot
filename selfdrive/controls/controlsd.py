@@ -50,11 +50,13 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.0.2e: midpoint interpolation between model frames.
-    # DT_MDL/DT_CTRL = 5 controlsd frames per model frame; midpoint fires at index 2.
-    self._mp_prev_curv = 0.0
-    self._mp_cur_curv  = 0.0
-    self._mp_frame     = 0
+    # FunnyPilot v3.0.3e: dynamic interpolation between model frames.
+    self._mp_prev_curv      = 0.0
+    self._mp_cur_curv       = 0.0
+    self._mp_frame          = 0
+    self._mp_n_interp       = 0
+    self._mp_values         = [0.0] * 5
+    self._mp_write_counter  = 0
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -139,29 +141,50 @@ class Controls(ControlsExt):
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    # Reset desired curvature to current to avoid violating the limits on engage
-    # FunnyPilot v3.0.2e: midpoint interpolation.
-    # Between consecutive model frames we inject a single mid-frame command equal
-    # to (prev_frame + cur_frame) / 2. This doubles the effective command rate from
-    # 20 Hz to ~40 Hz with zero added lag — no filter, just geometry.
-    _MP_HALF = 2  # fire at controlsd frame index 2 of 5 (DT_MDL / DT_CTRL = 5)
+    # FunnyPilot v3.0.3e: dynamic interpolation between model frames.
+    # On each model gate, compute how many uniform steps fit within the curvature
+    # delta while keeping each step ≤ 10% torque-equivalent (speed-scaled).
+    # Builds a 5-value schedule; each controlsd frame reads directly from it.
+    _MP_LAF      = 2.750   # matches locked LAF
+    _MP_MAX_STEP = 0.10    # max torque fraction per interpolated step
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
+      self._mp_n_interp  = 0
+      self._mp_values    = [raw_model_curv] * 5
       new_desired_curvature = self.curvature
     elif self.sm.updated['modelV2']:
       self._mp_prev_curv = self._mp_cur_curv
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
-      new_desired_curvature = raw_model_curv
-    else:
-      self._mp_frame = min(self._mp_frame + 1, _MP_HALF + 1)
-      if self._mp_frame == _MP_HALF:
-        new_desired_curvature = (self._mp_prev_curv + self._mp_cur_curv) * 0.5
+      delta     = self._mp_cur_curv - self._mp_prev_curv
+      abs_delta = abs(delta)
+      v_safe    = max(CS.vEgo, 5.0)
+      max_step  = _MP_MAX_STEP * _MP_LAF / (v_safe ** 2)
+      if abs_delta < max_step * 0.5:
+        self._mp_n_interp = 0
       else:
-        new_desired_curvature = raw_model_curv
+        self._mp_n_interp = min(math.ceil(abs_delta / max_step) - 1, 4)
+      self._mp_values = [
+        (self._mp_prev_curv + (f / (self._mp_n_interp + 1)) * delta)
+        if (self._mp_n_interp > 0 and f <= self._mp_n_interp)
+        else self._mp_cur_curv
+        for f in range(5)
+      ]
+      new_desired_curvature = self._mp_values[0]
+      # Write interpolation count to /dev/shm for dev UI (~1 Hz)
+      self._mp_write_counter = (self._mp_write_counter + 1) % 20
+      if self._mp_write_counter == 0:
+        try:
+          with open('/dev/shm/lat_interp', 'w') as _f:
+            _f.write(str(self._mp_n_interp + 1))
+        except Exception:
+          pass
+    else:
+      self._mp_frame = min(self._mp_frame + 1, 4)
+      new_desired_curvature = self._mp_values[self._mp_frame]
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
