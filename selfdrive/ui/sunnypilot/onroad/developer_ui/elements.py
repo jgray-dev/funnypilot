@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import time
 import pyray as rl
 from dataclasses import dataclass
 
@@ -302,11 +303,20 @@ class LatInterpolElement:
 class LatDeltaElement:
   def __init__(self):
     self.unit = ""
+    self._peak = 0.0
+    self._display = 0.0
+    self._window_start = time.monotonic()
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
     _, delta = _read_lat_interp()
-    value = f"{delta:.4f}"
+    now = time.monotonic()
+    self._peak = max(self._peak, delta)
+    if now - self._window_start >= 1.0:
+      self._display = self._peak
+      self._peak = 0.0
+      self._window_start = now
+    value = f"{self._display:.4f}"
     color = rl.WHITE if not lat_active else rl.Color(0, 200, 255, 255)
     return UiElement(value, "dCRV", self.unit, color)
 
