@@ -146,7 +146,7 @@ class Controls(ControlsExt):
     # Builds a 5-value schedule; each controlsd frame reads directly from it.
     # Fixed curvature threshold per interpolated step — no speed scaling.
     # Observed deltas: ~0.0001 straight, up to ~0.0004 on sharp curves.
-    _MP_MAX_DELTA = 0.000033  # rad/m per step; 0.0001→3, 0.0004→5
+    _MP_MAX_DELTA = 0.00006   # rad/m per step; midpoint between 3.0.4e and 3.0.5e
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv

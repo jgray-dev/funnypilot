@@ -1,3 +1,7 @@
+FunnyPilot v3.0.6 (2026-05-31)
+========================
+* tune: _MP_MAX_DELTA 0.000033 → 0.00006 (midpoint between 3.0.4e and 3.0.5e).
+
 FunnyPilot v3.0.5e (2026-05-31) [EXPERIMENTAL]
 ========================
 * fix: Replace speed-scaled torque threshold with a fixed curvature threshold

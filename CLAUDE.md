@@ -67,6 +67,11 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.6 Changes (based on funnypilot-3.0.5e)
+
+- `selfdrive/controls/controlsd.py` — `_MP_MAX_DELTA` 0.000033 → 0.00006.
+  Midpoint between 3.0.4e (0.0001, too high) and 3.0.5e (0.000033, too low).
+
 ### v3.0.5e Changes (based on funnypilot-3.0.4e)
 
 - `selfdrive/controls/controlsd.py` — Replace speed-scaled torque threshold
