@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.9e Changes (based on funnypilot-3.0.8e)
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Lane change now scales the TOTAL
+  output torque (FF + correction), not just the correction. The lane-change motion
+  lives in the feedforward, so the prior correction-only scaling never softened the
+  maneuver. `_LC_MIN_SCALE` repurposed to 0.45 (total-torque floor). Blinker ON:
+  0.45 → 1.0 over 6 s. Blinker OFF: hold 0.45 for 0.5 s, then 0.45 → 1.0 over 2 s
+  (alpha² ease-in). The 0% dead zone was removed (zero authority under total scaling).
+  FF/correction split and the 3.0.8e NNLC torque-space branch removed — `output_torque
+  *= scale` is all that remains. Exact no-op when no lane change is active (scale 1.0).
+
 ### v3.0.8e Changes (based on funnypilot-3.0.7)
 
 - `selfdrive/controls/lib/latcontrol_torque.py` — Lane change FF/correction split

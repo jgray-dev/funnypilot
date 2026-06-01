@@ -1,3 +1,18 @@
+FunnyPilot v3.0.9e (2026-05-31) [EXPERIMENTAL]
+========================
+* feat: Soft lane changes — scale the TOTAL steering torque (feedforward +
+  correction) during a lane change instead of only the PID correction. The
+  previous design kept the feedforward at 100%, but the lane-change motion
+  itself lives in the feedforward, so the maneuver was never actually softened
+  — only the error tracking around it. Now the whole motion eases in.
+* feat: Floor of 45% — total torque never drops below 45% of demand during the
+  maneuver, so corners aren't lost if you signal mid-curve. Blinker ON ramps
+  45% → 100% over 6 s; blinker OFF holds 45% for 0.5 s then 45% → 100% over 2 s
+  (alpha² ease-in). The old 0% dead zone is removed (it would mean zero steering
+  authority under total scaling).
+* refactor: Removed the FF/correction split entirely (and with it the NNLC
+  torque-space special-casing from 3.0.8e) — no longer needed with total scaling.
+
 FunnyPilot v3.0.8e (2026-05-31) [EXPERIMENTAL]
 ========================
 * fix: Lane change torque split now preserves the ACTUAL feedforward. The split

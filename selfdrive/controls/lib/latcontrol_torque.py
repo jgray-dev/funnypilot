@@ -51,14 +51,15 @@ class LatControlTorque(LatControl):
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
-    # FunnyPilot v3.0.0: Corner-aware lane change + post-blinker settle.
-    # Correction torque only (not feedforward) is scaled throughout.
-    # On blinker ON:  correction ramps 10% → 100% over 6 s.
-    # On blinker OFF: 0.5 s dead zone (correction = 0%), then 0% → 100% over 2 s.
-    self._LC_MIN_SCALE    = 0.10  # correction floor during lane change
+    # FunnyPilot v3.0.9e: soft lane change — scale TOTAL steering torque
+    # (feedforward + correction) so the whole maneuver eases in, not just the
+    # error correction. A floor keeps enough authority that corners aren't lost.
+    # On blinker ON:  total ramps 45% → 100% over 6 s.
+    # On blinker OFF: hold 45% for 0.5 s, then 45% → 100% over 2 s (alpha² ease-in).
+    self._LC_MIN_SCALE    = 0.45  # total-torque floor during lane change
     self._LC_RAMP_DUR     = 6.0   # blinker-on ramp duration (s)
-    self._POST_DELAY      = 0.5   # dead zone after blinker off (s)
-    self._POST_RAMP_DUR   = 2.0   # correction ramp-up after dead zone (s)
+    self._POST_DELAY      = 0.5   # hold-at-floor after blinker off (s)
+    self._POST_RAMP_DUR   = 2.0   # ramp back to full after the hold (s)
     self.lane_change_torque_scale = 1.0
     self._lc_blinker_on_time  = -1e9  # sentinel: blinker not recently ON
     self._lc_blinker_off_time = -1e9  # sentinel: blinker not recently OFF
@@ -120,9 +121,12 @@ class LatControlTorque(LatControl):
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque)
 
-      # FunnyPilot v3.0.0: Corner-aware lane change + post-blinker settle.
-      # Feedforward (corner demand) always runs at 100%; only the PID correction
-      # is scaled so the car can never apply less torque than the curve demands.
+      # FunnyPilot v3.0.9e: soft lane change — scale the TOTAL steering torque
+      # (feedforward + correction together) so the whole maneuver eases in. A floor
+      # (_LC_MIN_SCALE) keeps enough authority that we don't lose a corner mid-change.
+      # Blinker ON:  floor → 100% over _LC_RAMP_DUR.
+      # Blinker OFF: hold at floor for _POST_DELAY, then floor → 100% over
+      #              _POST_RAMP_DUR (alpha² ease-in) to settle gently into the new lane.
       blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker on
       now = time.monotonic()
       if blinker_on and not self._prev_blinker_on:
@@ -132,35 +136,22 @@ class LatControlTorque(LatControl):
         self._lc_blinker_off_time = now
       self._prev_blinker_on = blinker_on
 
+      floor = self._LC_MIN_SCALE
       if blinker_on:
         ramp = min((now - self._lc_blinker_on_time) / self._LC_RAMP_DUR, 1.0)
-        scale = self._LC_MIN_SCALE + (1.0 - self._LC_MIN_SCALE) * ramp
+        scale = floor + (1.0 - floor) * ramp
       else:
         post = now - self._lc_blinker_off_time
         if post < self._POST_DELAY:
-          scale = 0.0
+          scale = floor
         elif post < self._POST_DELAY + self._POST_RAMP_DUR:
           alpha = (post - self._POST_DELAY) / self._POST_RAMP_DUR
-          scale = alpha * alpha  # ease-in: holds low longer, steepens at end
+          scale = floor + (1.0 - floor) * alpha * alpha  # ease-in back to full
         else:
           scale = 1.0
       self.lane_change_torque_scale = scale
 
-      # FunnyPilot v3.0.8e: scale ONLY the PID correction (P+I+D), preserving the
-      # feedforward (F) exactly. Decompose in the PID's native units so it is correct
-      # whether the neural-network feedforward (torque space) or the linear feedforward
-      # (lat-accel space) produced output_torque. The old split subtracted a linear-ff
-      # torque even when NNLC produced output from its own (different) feedforward, so a
-      # lane change silently swapped most of the neural feedforward for the linear one —
-      # negligible behind a lead (in-distribution), but noticeable on open road.
-      # At scale == 1.0 this is an exact no-op vs. the unmodified output.
-      correction = self.pid.p + self.pid.i + self.pid.d
-      scaled_native = float(np.clip(self.pid.f + self.lane_change_torque_scale * correction,
-                                    self.pid.neg_limit, self.pid.pos_limit))
-      if self.extension._nnlc_enabled:
-        output_torque = scaled_native                                          # already torque space
-      else:
-        output_torque = self.torque_from_lateral_accel(scaled_native, self.torque_params)
+      output_torque *= scale
 
       # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
       speed_mph = CS.vEgo * 2.23694
