@@ -146,9 +146,21 @@ class LatControlTorque(LatControl):
           scale = 1.0
       self.lane_change_torque_scale = scale
 
-      ff_torque = self.torque_from_lateral_accel(ff, self.torque_params)
-      correction_torque = output_torque - ff_torque
-      output_torque = ff_torque + correction_torque * self.lane_change_torque_scale
+      # FunnyPilot v3.0.8e: scale ONLY the PID correction (P+I+D), preserving the
+      # feedforward (F) exactly. Decompose in the PID's native units so it is correct
+      # whether the neural-network feedforward (torque space) or the linear feedforward
+      # (lat-accel space) produced output_torque. The old split subtracted a linear-ff
+      # torque even when NNLC produced output from its own (different) feedforward, so a
+      # lane change silently swapped most of the neural feedforward for the linear one —
+      # negligible behind a lead (in-distribution), but noticeable on open road.
+      # At scale == 1.0 this is an exact no-op vs. the unmodified output.
+      correction = self.pid.p + self.pid.i + self.pid.d
+      scaled_native = float(np.clip(self.pid.f + self.lane_change_torque_scale * correction,
+                                    self.pid.neg_limit, self.pid.pos_limit))
+      if self.extension._nnlc_enabled:
+        output_torque = scaled_native                                          # already torque space
+      else:
+        output_torque = self.torque_from_lateral_accel(scaled_native, self.torque_params)
 
       # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
       speed_mph = CS.vEgo * 2.23694

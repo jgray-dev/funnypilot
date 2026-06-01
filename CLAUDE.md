@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.8e Changes (based on funnypilot-3.0.7)
+
+- `selfdrive/controls/lib/latcontrol_torque.py` — Lane change FF/correction split
+  fixed. Was subtracting `torque_from_lateral_accel(linear_ff)` to isolate the
+  correction even when NNLC produced `output_torque` from its own neural feedforward
+  (torque space) — so a lane change swapped most of the neural FF for the linear FF.
+  Negligible behind a lead (in-distribution), rough on open road. Now decomposes via
+  `pid.f` (feedforward) vs `pid.p+pid.i+pid.d` (correction) in the PID's native units,
+  branching on `extension._nnlc_enabled` for the torque-space vs lat-accel path.
+  Exact no-op at `lane_change_torque_scale == 1.0`.
+
 ### v3.0.7 Changes (based on funnypilot-3.0.6)
 
 - `selfdrive/controls/controlsd.py` — Interpolation peak-hold with decay.

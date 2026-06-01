@@ -1,3 +1,15 @@
+FunnyPilot v3.0.8e (2026-05-31) [EXPERIMENTAL]
+========================
+* fix: Lane change torque split now preserves the ACTUAL feedforward. The split
+  previously isolated the "correction" by subtracting a linear-feedforward torque
+  even when NNLC produced the output from its own (different) neural feedforward.
+  During a lane change at low scale this swapped most of the neural feedforward
+  for the linear one — invisible behind a lead (the two agree in steady following)
+  but rough on open road (they diverge), which is exactly why lane changes felt
+  smooth only with a lead. Now decomposes via the PID's own F vs P+I+D in native
+  units, correct for both the neural (torque-space) and linear (lat-accel) paths.
+  Exact no-op at scale 1.0, so normal driving is unchanged.
+
 FunnyPilot v3.0.7 (2026-05-31)
 ========================
 * feat: Interpolation peak-hold with decay. n_interp now snaps up instantly on
