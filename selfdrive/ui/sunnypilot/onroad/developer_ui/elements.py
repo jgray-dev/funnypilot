@@ -308,7 +308,7 @@ class LatDeltaElement:
     _, delta = _read_lat_interp()
     value = f"{delta:.4f}"
     color = rl.WHITE if not lat_active else rl.Color(0, 200, 255, 255)
-    return UiElement(value, "ΔCRV", self.unit, color)
+    return UiElement(value, "dCRV", self.unit, color)
 
 
 class SteeringTorqueEpsElement:

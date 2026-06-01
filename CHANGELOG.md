@@ -1,3 +1,13 @@
+FunnyPilot v3.0.5e (2026-05-31) [EXPERIMENTAL]
+========================
+* fix: Replace speed-scaled torque threshold with a fixed curvature threshold
+  of 0.0001 rad/m per step. The v² denominator was making max_step larger than
+  the observed deltas at city speeds, causing n_interp to stay at 1 regardless
+  of curve sharpness. With the fixed threshold, display climbs 2→5 across the
+  observed delta range (~0.0001 straight, ~0.0004 sharp curve).
+* fix: Replace Unicode Δ with ASCII "dCRV" in developer UI — Δ rendered as
+  "?" due to missing glyph in the on-device font.
+
 FunnyPilot v3.0.4e (2026-05-31) [EXPERIMENTAL]
 ========================
 * tune: _MP_MAX_STEP 0.10 → 0.04. Lower threshold means n_interp climbs

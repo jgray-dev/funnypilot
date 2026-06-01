@@ -67,6 +67,16 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.5e Changes (based on funnypilot-3.0.4e)
+
+- `selfdrive/controls/controlsd.py` — Replace speed-scaled torque threshold
+  with `_MP_MAX_DELTA = 0.0001 rad/m` per step. The old `_MP_LAF / v²` formula
+  made max_step too large at city speeds. Fixed threshold maps directly to
+  observed delta range: display 2 on straights, 3–5 on curves.
+
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — "ΔCRV" label
+  changed to "dCRV" — Δ renders as "?" in the on-device raylib font.
+
 ### v3.0.4e Changes (based on funnypilot-3.0.3e)
 
 - `selfdrive/controls/controlsd.py` — `_MP_MAX_STEP` lowered from 0.10 to 0.04.

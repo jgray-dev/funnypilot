@@ -144,8 +144,9 @@ class Controls(ControlsExt):
     # On each model gate, compute how many uniform steps fit within the curvature
     # delta while keeping each step ≤ 10% torque-equivalent (speed-scaled).
     # Builds a 5-value schedule; each controlsd frame reads directly from it.
-    _MP_LAF      = 2.750   # matches locked LAF
-    _MP_MAX_STEP = 0.04    # max torque fraction per interpolated step (lower = more steps sooner)
+    # Fixed curvature threshold per interpolated step — no speed scaling.
+    # Observed deltas: ~0.0001 straight, up to ~0.0004 on sharp curves.
+    _MP_MAX_DELTA = 0.0001  # rad/m per step; display climbs 2→5 across that range
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv
@@ -160,10 +161,8 @@ class Controls(ControlsExt):
       self._mp_frame     = 0
       delta     = self._mp_cur_curv - self._mp_prev_curv
       abs_delta = abs(delta)
-      v_safe    = max(CS.vEgo, 5.0)
-      max_step  = _MP_MAX_STEP * _MP_LAF / (v_safe ** 2)
-      # Always at least 1 midpoint (n_interp=1, display "2"); scale up for larger deltas.
-      self._mp_n_interp = min(max(1, math.ceil(abs_delta / max_step) - 1), 4)
+      # Always at least 1 midpoint; scale up to 4 for larger deltas.
+      self._mp_n_interp = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 4)
       self._mp_values = [
         (self._mp_prev_curv + (f / (self._mp_n_interp + 1)) * delta)
         if (self._mp_n_interp > 0 and f <= self._mp_n_interp)
