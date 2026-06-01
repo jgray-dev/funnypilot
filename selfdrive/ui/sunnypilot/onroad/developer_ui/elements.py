@@ -285,19 +285,29 @@ def _read_lat_interp():
 class LatInterpolElement:
   def __init__(self):
     self.unit = ""
+    self._peak = 1
+    self._display = 1
+    self._window_start = time.monotonic()
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
     n, _ = _read_lat_interp()
+    now = time.monotonic()
+    self._peak = max(self._peak, n)
+    if now - self._window_start >= 1.0:
+      self._display = self._peak
+      self._peak = n
+      self._window_start = now
+    d = self._display
     if not lat_active:
       color = rl.WHITE
-    elif n >= 4:
+    elif d >= 4:
       color = rl.Color(255, 188, 0, 255)
-    elif n >= 2:
+    elif d >= 2:
       color = rl.Color(0, 255, 0, 255)
     else:
       color = rl.WHITE
-    return UiElement(str(n), "INTERP", self.unit, color)
+    return UiElement(str(d), "INTERP", self.unit, color)
 
 
 class LatDeltaElement:

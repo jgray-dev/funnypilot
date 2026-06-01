@@ -67,6 +67,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.0.7 Changes (based on funnypilot-3.0.6)
+
+- `selfdrive/controls/controlsd.py` — Interpolation peak-hold with decay.
+  `_mp_n_held` (float) tracks effective n_interp: snaps up to `n_raw` instantly,
+  decays `_MP_HOLD_DECAY = 0.15`/gate otherwise (5→2 over ~1s). Schedule and shm
+  write use the held value. Trigger remains model-desire delta (forward-looking),
+  NOT measured steer angle (lagged response — would worsen perceived delay).
+
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatInterpolElement`
+  now shows a 1-second rolling peak (same pattern as `LatDeltaElement`/dCRV).
+
 ### v3.0.6 Changes (based on funnypilot-3.0.5e)
 
 - `selfdrive/controls/controlsd.py` — `_MP_MAX_DELTA` 0.000033 → 0.00006.

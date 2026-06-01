@@ -1,3 +1,17 @@
+FunnyPilot v3.0.7 (2026-05-31)
+========================
+* feat: Interpolation peak-hold with decay. n_interp now snaps up instantly on
+  a large model-desire delta but decays slowly (~0.15 levels/gate, 5→2 over ~1s)
+  instead of dropping the instant the per-gate delta shrinks. Keeps fine
+  interpolation through the body of a corner, not just at entry — fixes the
+  "interp drops back to 2 while I'm still mid-corner" feel.
+* tweak: Kept the model-desire delta as the interpolation trigger rather than
+  measured steer angle. The model desire is forward-looking (pre-compensated for
+  lat_delay); measured angle is the lagged response and would react to bites that
+  already happened. Decay-hold addresses the "feels delayed" symptom instead.
+* tweak: INTERP developer UI value now displays a 1-second rolling peak (matching
+  dCRV) so the value it's hitting is readable instead of flickering.
+
 FunnyPilot v3.0.6 (2026-05-31)
 ========================
 * tune: _MP_MAX_DELTA 0.000033 → 0.00006 (midpoint between 3.0.4e and 3.0.5e).

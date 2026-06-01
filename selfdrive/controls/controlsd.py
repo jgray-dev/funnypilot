@@ -50,12 +50,13 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.0.3e: dynamic interpolation between model frames.
-    self._mp_prev_curv      = 0.0
-    self._mp_cur_curv       = 0.0
-    self._mp_frame          = 0
-    self._mp_n_interp = 0
-    self._mp_values   = [0.0] * 5
+    # FunnyPilot v3.0.7: dynamic interpolation between model frames.
+    self._mp_prev_curv = 0.0
+    self._mp_cur_curv  = 0.0
+    self._mp_frame     = 0
+    self._mp_n_interp  = 0
+    self._mp_n_held    = 1.0  # peak-hold-with-decay so interp stays elevated through corners
+    self._mp_values    = [0.0] * 5
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -147,12 +148,14 @@ class Controls(ControlsExt):
     # Fixed curvature threshold per interpolated step — no speed scaling.
     # Observed deltas: ~0.0001 straight, up to ~0.0004 on sharp curves.
     _MP_MAX_DELTA = 0.00006   # rad/m per step; midpoint between 3.0.4e and 3.0.5e
+    _MP_HOLD_DECAY = 0.15     # interp levels shed per gate when delta backs off (~5→2 over 1s)
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
       self._mp_n_interp  = 0
+      self._mp_n_held    = 1.0
       self._mp_values    = [raw_model_curv] * 5
       new_desired_curvature = self.curvature
     elif self.sm.updated['modelV2']:
@@ -161,8 +164,15 @@ class Controls(ControlsExt):
       self._mp_frame     = 0
       delta     = self._mp_cur_curv - self._mp_prev_curv
       abs_delta = abs(delta)
-      # Always at least 1 midpoint; scale up to 4 for larger deltas.
-      self._mp_n_interp = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 4)
+      # Raw demand from this gate's delta: ≥1 midpoint, up to 4 for large deltas.
+      n_raw = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 4)
+      # Peak-hold with decay: snap up instantly, fall off slowly so we keep
+      # interpolating finely through the body of a corner, not just at entry.
+      if n_raw >= self._mp_n_held:
+        self._mp_n_held = float(n_raw)
+      else:
+        self._mp_n_held = max(float(n_raw), self._mp_n_held - _MP_HOLD_DECAY)
+      self._mp_n_interp = int(round(self._mp_n_held))
       self._mp_values = [
         (self._mp_prev_curv + (f / (self._mp_n_interp + 1)) * delta)
         if (self._mp_n_interp > 0 and f <= self._mp_n_interp)
