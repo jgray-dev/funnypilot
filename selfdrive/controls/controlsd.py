@@ -141,14 +141,15 @@ class Controls(ControlsExt):
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    # FunnyPilot v3.0.3e: dynamic interpolation between model frames.
-    # On each model gate, compute how many uniform steps fit within the curvature
-    # delta while keeping each step ≤ 10% torque-equivalent (speed-scaled).
-    # Builds a 5-value schedule; each controlsd frame reads directly from it.
-    # Fixed curvature threshold per interpolated step — no speed scaling.
-    # Observed deltas: ~0.0001 straight, up to ~0.0004 on sharp curves.
-    _MP_MAX_DELTA = 0.00006   # rad/m per step; midpoint between 3.0.4e and 3.0.5e
-    _MP_HOLD_DECAY = 0.15     # interp levels shed per gate when delta backs off (~5→2 over 1s)
+    # FunnyPilot v3.1.0e: uniform interpolation between model frames.
+    # Control ALWAYS spreads each 20Hz model step evenly across the 5 control
+    # frames (delta/5 per frame). The dynamic n_interp below is kept ONLY as the
+    # dev-UI corner-intensity gauge — it no longer sizes the control steps. The
+    # old dynamic scheme made the common case (n=1) take two coarse delta/2 jumps,
+    # which is exactly the "big, infrequent bite" feel; uniform delta/5 is 2.5x
+    # finer for the same ~zero added lag.
+    _MP_MAX_DELTA = 0.00006   # rad/m per gauge level (display only)
+    _MP_HOLD_DECAY = 0.15     # gauge levels shed per gate when delta backs off (display only)
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv
@@ -173,12 +174,10 @@ class Controls(ControlsExt):
       else:
         self._mp_n_held = max(float(n_raw), self._mp_n_held - _MP_HOLD_DECAY)
       self._mp_n_interp = int(round(self._mp_n_held))
-      self._mp_values = [
-        (self._mp_prev_curv + (f / (self._mp_n_interp + 1)) * delta)
-        if (self._mp_n_interp > 0 and f <= self._mp_n_interp)
-        else self._mp_cur_curv
-        for f in range(5)
-      ]
+      # Uniform slice: spread the whole model step evenly over all 5 control
+      # frames (delta/5 each), reaching cur exactly at the final sub-frame so the
+      # gate boundary is also a delta/5 step. No coarse half-steps regardless of n.
+      self._mp_values = [self._mp_prev_curv + ((f + 1) / 5.0) * delta for f in range(5)]
       new_desired_curvature = self._mp_values[0]
       # Write interp count and delta to /dev/shm for dev UI on every model gate.
       try:

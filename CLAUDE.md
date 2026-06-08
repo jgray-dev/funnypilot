@@ -67,6 +67,18 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.1.0e Changes (based on funnypilot-3.0.9e)
+
+- `selfdrive/controls/controlsd.py` — Interpolation control path rewritten to
+  uniform slicing. The dynamic-n schedule built coarse half-delta steps in the
+  common case (n_interp=1 → `[prev, prev+0.5·delta, cur, cur, cur]`): two delta/2
+  jumps then flat — the felt "big bite," despite a correct dev-UI value. Control
+  now always uses `_mp_values[f] = prev + ((f+1)/5)*delta` for f in 0..4 (uniform
+  delta/5 steps, reaching cur at the final sub-frame). `_mp_n_interp` / `_mp_n_held`
+  and `_MP_MAX_DELTA` / `_MP_HOLD_DECAY` are retained ONLY to drive the dev-UI
+  INTERP gauge; they no longer size control steps. `funnypilot-3.0.9st` is the
+  stable snapshot taken just before this change.
+
 ### v3.0.9e Changes (based on funnypilot-3.0.8e)
 
 - `selfdrive/controls/lib/latcontrol_torque.py` — Lane change now scales the TOTAL

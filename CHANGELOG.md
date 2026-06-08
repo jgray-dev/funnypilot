@@ -1,3 +1,17 @@
+FunnyPilot v3.1.0e (2026-05-31) [EXPERIMENTAL]
+========================
+* fix: Interpolation now actually slices finely. Root cause of "still feels like
+  big infrequent bites": the dynamic-n schedule, in the common case (n_interp=1,
+  shown as "2" in the UI), built [prev, prev+0.5·delta, cur, cur, cur] — i.e. two
+  coarse half-delta jumps in 20 ms then 30 ms flat. The dev-UI value was correct
+  but the control was only using 2 of 5 frames at half-steps.
+  Control now ALWAYS spreads each model step uniformly across all 5 control frames
+  (delta/5 per frame), reaching the new target at the final sub-frame. 2.5x finer
+  steering steps in normal driving for the same ~zero added lag.
+* note: The dynamic n_interp value is retained purely as the dev-UI corner-intensity
+  gauge (it no longer sizes the control steps). _MP_MAX_DELTA / _MP_HOLD_DECAY now
+  only affect that display.
+
 FunnyPilot v3.0.9e (2026-05-31) [EXPERIMENTAL]
 ========================
 * feat: Soft lane changes — scale the TOTAL steering torque (feedforward +
