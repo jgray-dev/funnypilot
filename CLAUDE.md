@@ -67,6 +67,15 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.1.1st Changes (based on funnypilot-3.1.0e)
+
+- `selfdrive/controls/controlsd.py` — INTERP gauge cap raised: `n_raw` clamp 4 → 6
+  (display = n+1, so range now 2..7). Display gauge only; control still uniform delta/5.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatInterpolElement`
+  color thresholds rescaled for 1–7 (white=1, green=2–4, orange=5–7). `LatDeltaElement`
+  value scaled ×100 (`{display*100:.4f}`) so dCRV reads e.g. "0.0637" not "0.0006".
+  Stable release on the validated 3.1.0e feel.
+
 ### v3.1.0e Changes (based on funnypilot-3.0.9e)
 
 - `selfdrive/controls/controlsd.py` — Interpolation control path rewritten to

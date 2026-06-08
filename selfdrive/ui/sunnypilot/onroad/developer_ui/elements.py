@@ -301,12 +301,12 @@ class LatInterpolElement:
     d = self._display
     if not lat_active:
       color = rl.WHITE
-    elif d >= 4:
-      color = rl.Color(255, 188, 0, 255)
+    elif d >= 5:
+      color = rl.Color(255, 188, 0, 255)   # orange — heavy (5–7)
     elif d >= 2:
-      color = rl.Color(0, 255, 0, 255)
+      color = rl.Color(0, 255, 0, 255)     # green — normal (2–4)
     else:
-      color = rl.WHITE
+      color = rl.WHITE                      # 1 — minimal
     return UiElement(str(d), "INTERP", self.unit, color)
 
 
@@ -326,7 +326,9 @@ class LatDeltaElement:
       self._display = self._peak
       self._peak = 0.0
       self._window_start = now
-    value = f"{self._display:.4f}"
+    # Scale x100 so e.g. 0.000637 reads "0.0637" instead of "0.0006" — drops two
+    # wasted leading zeros and surfaces two more digits of real resolution.
+    value = f"{self._display * 100.0:.4f}"
     color = rl.WHITE if not lat_active else rl.Color(0, 200, 255, 255)
     return UiElement(value, "dCRV", self.unit, color)
 

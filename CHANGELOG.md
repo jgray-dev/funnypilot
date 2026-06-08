@@ -1,3 +1,14 @@
+FunnyPilot v3.1.1st (2026-05-31)
+========================
+* tweak: INTERP gauge now ranges 1–7 (was 1–5). n_interp cap raised 4 → 6 so
+  sharp curves register the full range instead of saturating. Colors: white = 1,
+  green = 2–4, orange = 5–7. (Display gauge only — control still uses uniform
+  delta/5 slicing from 3.1.0e.)
+* tweak: dCRV display scaled ×100 — 0.000637 now reads "0.0637" instead of
+  "0.0006". Drops two wasted leading zeros and surfaces two more digits of
+  resolution within the same width.
+* Stable release built on the validated 3.1.0e uniform-interpolation feel.
+
 FunnyPilot v3.1.0e (2026-05-31) [EXPERIMENTAL]
 ========================
 * fix: Interpolation now actually slices finely. Root cause of "still feels like

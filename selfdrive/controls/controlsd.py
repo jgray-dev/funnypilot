@@ -165,8 +165,8 @@ class Controls(ControlsExt):
       self._mp_frame     = 0
       delta     = self._mp_cur_curv - self._mp_prev_curv
       abs_delta = abs(delta)
-      # Raw demand from this gate's delta: ≥1 midpoint, up to 4 for large deltas.
-      n_raw = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 4)
+      # Raw demand from this gate's delta: ≥1, up to 6 (gauge displays n+1, so 2..7).
+      n_raw = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 6)
       # Peak-hold with decay: snap up instantly, fall off slowly so we keep
       # interpolating finely through the body of a corner, not just at entry.
       if n_raw >= self._mp_n_held:
