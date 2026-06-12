@@ -55,7 +55,7 @@ class Controls(ControlsExt):
     self._mp_cur_curv  = 0.0
     self._mp_frame     = 0
     self._mp_n_interp  = 0
-    self._mp_n_held    = 1.0  # peak-hold-with-decay so interp stays elevated through corners
+    self._mp_n_held    = 2.0  # gauge peak-hold-with-decay; floor 2 (display 3)
     self._mp_values    = [0.0] * 5
 
     self.pose_calibrator = PoseCalibrator()
@@ -148,7 +148,7 @@ class Controls(ControlsExt):
     # old dynamic scheme made the common case (n=1) take two coarse delta/2 jumps,
     # which is exactly the "big, infrequent bite" feel; uniform delta/5 is 2.5x
     # finer for the same ~zero added lag.
-    _MP_MAX_DELTA = 0.00006   # rad/m per gauge level (display only)
+    _MP_MAX_DELTA = 0.000051  # rad/m per gauge level (display only); 15% lower than 3.1.1st
     _MP_HOLD_DECAY = 0.15     # gauge levels shed per gate when delta backs off (display only)
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
@@ -156,7 +156,7 @@ class Controls(ControlsExt):
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
       self._mp_n_interp  = 0
-      self._mp_n_held    = 1.0
+      self._mp_n_held    = 2.0   # gauge floor (display 3)
       self._mp_values    = [raw_model_curv] * 5
       new_desired_curvature = self.curvature
     elif self.sm.updated['modelV2']:
@@ -165,8 +165,8 @@ class Controls(ControlsExt):
       self._mp_frame     = 0
       delta     = self._mp_cur_curv - self._mp_prev_curv
       abs_delta = abs(delta)
-      # Raw demand from this gate's delta: ≥1, up to 6 (gauge displays n+1, so 2..7).
-      n_raw = min(max(1, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 6)
+      # Gauge demand from this gate's delta: floor 2 (display 3), up to 9 (display 10).
+      n_raw = min(max(2, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 9)
       # Peak-hold with decay: snap up instantly, fall off slowly so we keep
       # interpolating finely through the body of a corner, not just at entry.
       if n_raw >= self._mp_n_held:

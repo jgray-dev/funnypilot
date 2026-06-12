@@ -67,6 +67,15 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.1.2 Changes (based on funnypilot-3.1.1st)
+
+- `selfdrive/controls/controlsd.py` — INTERP gauge retune (display only; control
+  unchanged, still uniform delta/5). `_MP_MAX_DELTA` 0.00006 → 0.000051 (−15%, so a
+  15% gentler curve reads the same INTERP). `n_raw` floor 1 → 2 (resting display 3),
+  cap 6 → 9 (max display 10). `_mp_n_held` init/reset 1.0 → 2.0.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatInterpolElement`
+  colors rescaled for 3–10: green 3–5, orange 6–8, red 9–10.
+
 ### v3.1.1st Changes (based on funnypilot-3.1.0e)
 
 - `selfdrive/controls/controlsd.py` — INTERP gauge cap raised: `n_raw` clamp 4 → 6

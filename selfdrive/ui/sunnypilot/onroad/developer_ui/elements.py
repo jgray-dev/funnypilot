@@ -301,12 +301,12 @@ class LatInterpolElement:
     d = self._display
     if not lat_active:
       color = rl.WHITE
-    elif d >= 5:
-      color = rl.Color(255, 188, 0, 255)   # orange — heavy (5–7)
-    elif d >= 2:
-      color = rl.Color(0, 255, 0, 255)     # green — normal (2–4)
+    elif d >= 9:
+      color = rl.RED                        # extreme (9–10)
+    elif d >= 6:
+      color = rl.Color(255, 188, 0, 255)   # orange — heavy (6–8)
     else:
-      color = rl.WHITE                      # 1 — minimal
+      color = rl.Color(0, 255, 0, 255)     # green — normal (3–5)
     return UiElement(str(d), "INTERP", self.unit, color)
 
 

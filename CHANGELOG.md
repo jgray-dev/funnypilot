@@ -1,3 +1,14 @@
+FunnyPilot v3.1.2 (2026-05-31)
+========================
+* tweak: INTERP gauge tuning (display only — control still uniform delta/5).
+  - Threshold _MP_MAX_DELTA 0.00006 → 0.000051 (15% lower), so a 15% gentler
+    curve now registers the same INTERP value as before.
+  - Default/resting INTERP raised to 3 (n floor 1 → 2).
+  - Max INTERP raised to 10 (n cap 6 → 9).
+  - Colors rescaled for the 3–10 range: green 3–5, orange 6–8, red 9–10.
+  NOTE: Since 3.1.0e the INTERP number does not size the steering control
+  (that is always uniform delta/5); these changes affect the readout only.
+
 FunnyPilot v3.1.1st (2026-05-31)
 ========================
 * tweak: INTERP gauge now ranges 1–7 (was 1–5). n_interp cap raised 4 → 6 so
