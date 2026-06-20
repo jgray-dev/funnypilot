@@ -67,10 +67,11 @@ class LatControlTorque(LatControl):
 
     # FunnyPilot v3.2.1e: blinker-unwind re-engage ramp. When the blinker-pause
     # feature releases lateral control (active False->True after a blinker), ramp
-    # TOTAL torque linearly 0% -> 100% over _REENGAGE_RAMP_DUR (4 s, +25%/s) so we
-    # regain authority gently instead of snapping straight to full torque mid-curve.
-    # Scoped to blinker pauses (a blinker seen while inactive) — a plain engage or
-    # standstill release gets instant full authority (no ramp).
+    # TOTAL torque CONTINUOUSLY 0% -> 100% over _REENGAGE_RAMP_DUR (4 s). The scale
+    # is recomputed every 100 Hz control frame as a smooth linear function of
+    # elapsed time (not stepped quarters) so authority returns gradually instead of
+    # snapping to full torque mid-curve. Scoped to blinker pauses (a blinker seen
+    # while inactive) — a plain engage or standstill release gets instant authority.
     self._REENGAGE_RAMP_DUR     = 4.0
     self._prev_active           = False
     self._inactive_saw_blinker  = False
@@ -175,9 +176,9 @@ class LatControlTorque(LatControl):
 
       output_torque *= scale
 
-      # FunnyPilot v3.2.1e: blinker-unwind re-engage ramp — 0% -> 100% over 4 s
-      # (+25%/s). No-op (scale 1.0) for non-blinker engages, where
-      # _reengage_start_time stays at its -1e9 sentinel.
+      # FunnyPilot v3.2.1e: blinker-unwind re-engage ramp — continuous linear
+      # 0% -> 100% over 4 s, evaluated fresh each frame. No-op (scale 1.0) for
+      # non-blinker engages, where _reengage_start_time stays at its -1e9 sentinel.
       reengage_scale = min(max((now - self._reengage_start_time) / self._REENGAGE_RAMP_DUR, 0.0), 1.0)
       output_torque *= reengage_scale
 

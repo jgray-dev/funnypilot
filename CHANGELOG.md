@@ -10,10 +10,17 @@ FunnyPilot v3.2.1e (2026-06-20) [EXPERIMENTAL]
   it is now a live "interp alive" indicator, written to /dev/shm/lat_interp at the
   20 Hz model rate as a heartbeat (useful for spotting if interp ever stops).
 * feat: Blinker-unwind re-engage torque ramp. When the blinker-pause feature
-  releases lateral control, total torque now ramps linearly 0% → 100% over 4 s
-  (+25%/s) instead of snapping to full authority. Scoped to blinker pauses only
-  (a blinker seen while inactive) — a plain engage or standstill release still
-  gets instant authority. (selfdrive/controls/lib/latcontrol_torque.py)
+  releases lateral control, total torque ramps CONTINUOUSLY 0% → 100% over 4 s —
+  recomputed every 100 Hz control frame as a smooth linear function of elapsed
+  time (not stepped quarters) — instead of snapping to full authority. Scoped to
+  blinker pauses only (a blinker seen while inactive) — a plain engage or
+  standstill release still gets instant authority. (latcontrol_torque.py)
+* feat: Web UI "Verify" button — a one-tap code-verification modal (styled like a
+  test suite, PASS/FAIL/WARN pills) that runs read-only on-device checks (git
+  branch/HEAD, working-tree-unmodified, our code markers present, INTERP heartbeat,
+  model bundle, updater staging/overlay) and a "Copy Output" button to paste the
+  report straight back into Claude. New POST /api/diagnostics endpoint.
+  (sunnypilot/navd/nav_webserver.py, sunnypilot/navd/nav_web/index.html)
 * fix: Blinker-unwind no longer re-engages mid-S-curve. The wheel must now stay
   within ±20° of center CONTINUOUSLY for 1.0 s (UNWIND_SETTLE_TIME) before lateral
   resumes; briefly passing through center on the way to the opposite lock resets

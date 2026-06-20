@@ -19,6 +19,75 @@ _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
 _SHELL = "/bin/bash"
 _PORT = 8888
 
+# Expected version for the running branch (used by /api/diagnostics).
+EXPECTED_VERSION = "3.2.1"
+
+# Read-only checks that verify the on-device code matches what we shipped and
+# capture state for diagnosing the "interp feels deactivated" issue. All commands
+# are non-mutating. `-c safe.directory=*` avoids git "dubious ownership" failures
+# when the webserver uid differs from the checkout owner.
+_GIT = "git -c safe.directory='*' -C /data/openpilot"
+DIAG_CHECKS = [
+  {"id": "version",        "name": "FunnyPilot version",                 "cmd": "cat /data/openpilot/FUNNYPILOT_VERSION 2>&1"},
+  {"id": "branch",         "name": "Git branch",                         "cmd": f"{_GIT} rev-parse --abbrev-ref HEAD 2>&1"},
+  {"id": "head",           "name": "Git HEAD commit",                    "cmd": f"{_GIT} log -1 --format='%h %s' 2>&1"},
+  {"id": "clean",          "name": "Working tree unmodified",            "cmd": f"{_GIT} status --porcelain 2>&1"},
+  {"id": "diff",           "name": "Tracked-file changes (diff stat)",   "cmd": f"{_GIT} diff --stat 2>&1"},
+  {"id": "code_controlsd", "name": "controlsd 3.2.1e code present",       "cmd": "grep -c 'v3.2.1e' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
+  {"id": "code_latctrl",   "name": "latcontrol re-engage ramp present",  "cmd": "grep -c '_REENGAGE_RAMP_DUR' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
+  {"id": "code_blinker",   "name": "blinker settle-time present",        "cmd": "grep -c 'UNWIND_SETTLE_TIME' /data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py 2>&1"},
+  {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
+  {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
+  {"id": "staging",        "name": "Updater staging dir",               "cmd": "ls -la /data/safe_staging/ 2>&1 || echo '(none)'"},
+  {"id": "overlay",        "name": "Overlay mounts (updater)",           "cmd": "mount 2>/dev/null | grep -i overlay || echo '(none)'"},
+]
+
+
+def _eval_diag(check_id: str, out: str):
+  """Return (level, summary) for a check. level in pass|fail|warn|info."""
+  s = out.strip()
+  if check_id == "version":
+    return ("pass", s) if s == EXPECTED_VERSION else ("warn", f"{s or '(empty)'} (expected {EXPECTED_VERSION})")
+  if check_id == "branch":
+    return ("pass" if "3.2.1e" in s else "warn", s or "(unknown)")
+  if check_id == "clean":
+    return ("pass", "clean") if s == "" else ("fail", "MODIFIED")
+  if check_id == "diff":
+    return ("pass", "no changes") if s == "" else ("fail", "files differ")
+  if check_id.startswith("code_"):
+    try:
+      n = int(s.splitlines()[0])
+    except Exception:
+      n = 0
+    return ("pass", "present") if n >= 1 else ("fail", "MISSING")
+  return ("info", "")
+
+
+async def _run_diag_check(check: dict) -> dict:
+  try:
+    proc = await asyncio.create_subprocess_shell(
+      check["cmd"],
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.STDOUT,
+    )
+    out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+    text = out_b.decode(errors="replace")
+  except asyncio.TimeoutError:
+    text = "(timed out)"
+  except Exception as e:
+    text = f"(error: {e})"
+  level, summary = _eval_diag(check["id"], text)
+  return {"id": check["id"], "name": check["name"], "cmd": check["cmd"],
+          "output": text.rstrip(), "level": level, "summary": summary}
+
+
+async def handle_diagnostics(request: web.Request) -> web.Response:
+  try:
+    results = await asyncio.gather(*[_run_diag_check(c) for c in DIAG_CHECKS])
+    return web.json_response({"checks": list(results)})
+  except Exception as e:
+    return web.json_response({"error": str(e)}, status=500)
+
 
 async def _fetch_branches(session: aiohttp.ClientSession):
   branches = []
@@ -203,6 +272,7 @@ def main():
   app.router.add_get("/ws", handle_ws)
   app.router.add_get("/api/branches", handle_branches)
   app.router.add_post("/api/flash", handle_flash)
+  app.router.add_post("/api/diagnostics", handle_diagnostics)
 
   if os.path.isdir(_STATIC_DIR):
     app.router.add_static("/static", _STATIC_DIR)

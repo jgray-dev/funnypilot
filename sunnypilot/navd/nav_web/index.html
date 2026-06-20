@@ -55,6 +55,101 @@
     }
     #flash-btn:active { background: #c0392b; }
 
+    #diag-btn {
+      background: #2a2f3a;
+      color: #cdd6e0;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #diag-btn:active { background: #1f242c; }
+
+    /* ── Diagnostics modal ── */
+    #diag-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 200;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #diag-overlay.active { display: flex; }
+    #diag-modal {
+      background: #1c1c1c;
+      border-radius: 14px 14px 0 0;
+      padding: 20px 16px 32px;
+      width: 100%;
+      max-width: 520px;
+      max-height: 85dvh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #diag-list {
+      flex: 1;
+      overflow-y: auto;
+      border-radius: 8px;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      min-height: 60px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .diag-row { padding: 10px 12px; border-bottom: 1px solid #1f1f1f; }
+    .diag-row:last-child { border-bottom: none; }
+    .diag-head { display: flex; align-items: center; gap: 8px; }
+    .diag-pill {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      min-width: 48px;
+      text-align: center;
+    }
+    .diag-pill.pass { background: #16361f; color: #2ecc71; }
+    .diag-pill.fail { background: #3a1518; color: #e74c3c; }
+    .diag-pill.warn { background: #3a2f12; color: #f1c40f; }
+    .diag-pill.info { background: #20262e; color: #7f8c9a; }
+    .diag-name { font-size: 13px; color: #ddd; font-weight: 500; flex: 1; word-break: break-word; }
+    .diag-summary { font-size: 11px; color: #888; text-align: right; word-break: break-word; }
+    .diag-output {
+      margin-top: 6px;
+      font-family: "Cascadia Code", "Fira Code", monospace;
+      font-size: 11px;
+      color: #9aa4ad;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: #0e0e0e;
+      border-radius: 5px;
+      padding: 7px 9px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .diag-cmd { color: #5a6470; }
+    .btn-secondary {
+      flex: 1;
+      background: #2a2f3a;
+      color: #cdd6e0;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-secondary:active { background: #1f242c; }
+    .btn-secondary:disabled { background: #1a1d22; color: #555; cursor: default; }
+    #diag-status { font-size: 12px; color: #888; min-height: 16px; text-align: center; }
+    #diag-status.ok  { color: #2ecc71; }
+    #diag-status.err { color: #e74c3c; }
+
     /* ── Terminal ── */
     #terminal-container { flex: 1; padding: 4px; overflow: hidden; min-height: 0; }
 
@@ -83,17 +178,17 @@
       gap: 12px;
     }
 
-    #modal-header {
+    #modal-header, #diag-mheader {
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    #modal h2 {
+    #modal h2, #diag-modal h2 {
       font-size: 16px;
       font-weight: 700;
       color: #eee;
     }
-    #modal-close {
+    #modal-close, #diag-close {
       background: #2a2a2a;
       border: none;
       color: #888;
@@ -107,7 +202,7 @@
       justify-content: center;
       -webkit-tap-highlight-color: transparent;
     }
-    #modal-close:active { background: #333; }
+    #modal-close:active, #diag-close:active { background: #333; }
 
     /* ── Branch list ── */
     #branch-list {
@@ -158,7 +253,7 @@
     }
 
     /* ── Modal actions ── */
-    #modal-actions {
+    #modal-actions, #diag-actions {
       display: flex;
       gap: 10px;
     }
@@ -192,6 +287,7 @@
 <div id="topbar">
   <h1>FunnyPilot</h1>
   <span id="conn-status">connecting</span>
+  <button id="diag-btn" onclick="openDiagModal()">Verify</button>
   <button id="flash-btn" onclick="openFlashModal()">Flash</button>
 </div>
 
@@ -212,6 +308,25 @@
       <button class="btn-primary" id="flash-confirm" onclick="doFlash()" disabled>Flash &amp; Reboot</button>
     </div>
     <div id="modal-status"></div>
+  </div>
+</div>
+
+<div id="diag-overlay">
+  <div id="diag-modal">
+    <div id="diag-mheader">
+      <h2>Code Verification</h2>
+      <button id="diag-close" onclick="closeDiagModal()">✕</button>
+    </div>
+
+    <div id="diag-list">
+      <div class="branch-loading">Running checks…</div>
+    </div>
+
+    <div id="diag-actions">
+      <button class="btn-secondary" id="diag-copy" onclick="copyDiag()" disabled>Copy Output</button>
+      <button class="btn-primary" id="diag-run" onclick="runDiag()">Run Again</button>
+    </div>
+    <div id="diag-status"></div>
   </div>
 </div>
 
@@ -359,6 +474,111 @@
   // Close on backdrop tap
   document.getElementById('modal-overlay').addEventListener('click', (e) => {
     if (e.target === document.getElementById('modal-overlay')) closeFlashModal();
+  });
+
+  // ── Diagnostics modal ──────────────────────────────────────────────────────
+  let lastDiag = null;
+
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function openDiagModal() {
+    document.getElementById('diag-status').textContent = '';
+    document.getElementById('diag-status').className = '';
+    document.getElementById('diag-overlay').classList.add('active');
+    runDiag();
+  }
+
+  function closeDiagModal() {
+    document.getElementById('diag-overlay').classList.remove('active');
+  }
+
+  async function runDiag() {
+    const list = document.getElementById('diag-list');
+    const runBtn = document.getElementById('diag-run');
+    const copyBtn = document.getElementById('diag-copy');
+    const statusEl = document.getElementById('diag-status');
+    runBtn.disabled = true;
+    copyBtn.disabled = true;
+    statusEl.textContent = '';
+    statusEl.className = '';
+    list.innerHTML = '<div class="branch-loading">Running checks…</div>';
+    try {
+      const data = await fetch('/api/diagnostics', { method: 'POST' }).then(r => r.json());
+      if (data.error) throw new Error(data.error);
+      lastDiag = data.checks;
+      renderDiag(data.checks);
+      const fails = data.checks.filter(c => c.level === 'fail').length;
+      const warns = data.checks.filter(c => c.level === 'warn').length;
+      statusEl.textContent = fails ? `${fails} failed · ${warns} warning(s)`
+                           : warns ? `Critical checks passed · ${warns} warning(s)`
+                                   : 'All checks passed ✓';
+      statusEl.className = fails ? 'err' : 'ok';
+      copyBtn.disabled = false;
+    } catch (e) {
+      list.innerHTML = `<div class="branch-loading">Error: ${escHtml(e.message)}</div>`;
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  function renderDiag(checks) {
+    const list = document.getElementById('diag-list');
+    list.innerHTML = '';
+    for (const c of checks) {
+      const row = document.createElement('div');
+      row.className = 'diag-row';
+      const out = (c.output || '').trim();
+      row.innerHTML =
+        '<div class="diag-head">' +
+          `<span class="diag-pill ${c.level}">${c.level.toUpperCase()}</span>` +
+          `<span class="diag-name">${escHtml(c.name)}</span>` +
+          `<span class="diag-summary">${escHtml(c.summary || '')}</span>` +
+        '</div>' +
+        (out ? `<div class="diag-output"><span class="diag-cmd">$ ${escHtml(c.cmd)}</span>\n${escHtml(out)}</div>` : '');
+      list.appendChild(row);
+    }
+  }
+
+  function diagReport() {
+    if (!lastDiag) return '';
+    const lines = ['FunnyPilot Diagnostics', '======================'];
+    for (const c of lastDiag) {
+      lines.push(`[${c.level.toUpperCase()}] ${c.name}${c.summary ? ' — ' + c.summary : ''}`);
+      lines.push(`  $ ${c.cmd}`);
+      const out = (c.output || '').trim();
+      if (out) for (const l of out.split('\n')) lines.push(`  ${l}`);
+      lines.push('');
+    }
+    return lines.join('\n');
+  }
+
+  async function copyDiag() {
+    const text = diagReport();
+    const statusEl = document.getElementById('diag-status');
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch (e) {
+      // Fallback for non-secure (http) contexts where the clipboard API is blocked
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+      document.body.removeChild(ta);
+    }
+    statusEl.textContent = ok ? 'Copied to clipboard ✓ — paste it back to Claude' : 'Copy failed — long-press the output to select';
+    statusEl.className = ok ? 'ok' : 'err';
+  }
+
+  document.getElementById('diag-overlay').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('diag-overlay')) closeDiagModal();
   });
 </script>
 </body>

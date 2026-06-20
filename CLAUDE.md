@@ -97,6 +97,17 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
   helper resets unwind state per blinker combo; replaced the (dead under
   `UNWIND_MODE=True`) `test_reengage_delay` with `test_unwind_settle_hold` and
   `test_unwind_settle_resets_on_excursion`.
+- `sunnypilot/navd/nav_webserver.py` — new `POST /api/diagnostics`. Runs the
+  read-only verification checks (`DIAG_CHECKS`) concurrently via asyncio and
+  returns `{checks:[{id,name,cmd,output,level,summary}]}`. `_eval_diag()` grades
+  each (pass/fail/warn/info): `clean`/`diff` fail if non-empty, `code_*` grep-count
+  checks fail if 0, `version` warns off `EXPECTED_VERSION="3.2.1"`. Git commands use
+  `-c safe.directory='*'` to avoid dubious-ownership failures. `EXPECTED_VERSION`
+  must be bumped per branch.
+- `sunnypilot/navd/nav_web/index.html` — "Verify" topbar button + diagnostics modal
+  styled as a test suite (PASS/FAIL/WARN pills, per-check command + output) with a
+  "Copy Output" button (clipboard API + execCommand fallback for http contexts)
+  that formats a plain-text report for pasting back to Claude.
 
 ### v3.1.2 Changes (based on funnypilot-3.1.1st)
 
