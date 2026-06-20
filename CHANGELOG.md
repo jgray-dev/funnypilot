@@ -1,3 +1,28 @@
+FunnyPilot v3.2.1e (2026-06-20) [EXPERIMENTAL]
+========================
+* change: Interpolation is now FIXED at 5-way uniform slicing, unconditionally.
+  The dynamic-n corner-intensity gauge and the dCRV (delta-curvature) machinery
+  were removed entirely. The control feel is unchanged from 3.1.x (it was always
+  uniform delta/5); this just deletes the now-dead gauge math. _MP_MAX_DELTA /
+  _MP_HOLD_DECAY / n_raw / n_held are gone.
+* change: dev-UI "dCRV" element removed. "INTERP" now reads a constant 5 (green)
+  while lateral is engaged and 0 (white) when the interpolation path is paused —
+  it is now a live "interp alive" indicator, written to /dev/shm/lat_interp at the
+  20 Hz model rate as a heartbeat (useful for spotting if interp ever stops).
+* feat: Blinker-unwind re-engage torque ramp. When the blinker-pause feature
+  releases lateral control, total torque now ramps linearly 0% → 100% over 4 s
+  (+25%/s) instead of snapping to full authority. Scoped to blinker pauses only
+  (a blinker seen while inactive) — a plain engage or standstill release still
+  gets instant authority. (selfdrive/controls/lib/latcontrol_torque.py)
+* fix: Blinker-unwind no longer re-engages mid-S-curve. The wheel must now stay
+  within ±20° of center CONTINUOUSLY for 1.0 s (UNWIND_SETTLE_TIME) before lateral
+  resumes; briefly passing through center on the way to the opposite lock resets
+  the timer. (sunnypilot/.../blinker_pause_lateral.py)
+* note: Suspected cause of "interp feels like it deactivates after a few days"
+  documented for on-device diagnosis (likely the openpilot updater touching the
+  working tree on nightly wifi, or a model-bundle change). The new INTERP
+  heartbeat helps confirm whether the interp path is live.
+
 FunnyPilot v3.1.2 (2026-05-31)
 ========================
 * tweak: INTERP gauge tuning (display only — control still uniform delta/5).

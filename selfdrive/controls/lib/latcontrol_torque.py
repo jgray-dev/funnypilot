@@ -65,6 +65,17 @@ class LatControlTorque(LatControl):
     self._lc_blinker_off_time = -1e9  # sentinel: blinker not recently OFF
     self._prev_blinker_on = False
 
+    # FunnyPilot v3.2.1e: blinker-unwind re-engage ramp. When the blinker-pause
+    # feature releases lateral control (active False->True after a blinker), ramp
+    # TOTAL torque linearly 0% -> 100% over _REENGAGE_RAMP_DUR (4 s, +25%/s) so we
+    # regain authority gently instead of snapping straight to full torque mid-curve.
+    # Scoped to blinker pauses (a blinker seen while inactive) — a plain engage or
+    # standstill release gets instant full authority (no ramp).
+    self._REENGAGE_RAMP_DUR     = 4.0
+    self._prev_active           = False
+    self._inactive_saw_blinker  = False
+    self._reengage_start_time   = -1e9
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
     self.torque_params.latAccelOffset = latAccelOffset
@@ -104,6 +115,18 @@ class LatControlTorque(LatControl):
     ff -= self.torque_params.latAccelOffset
     ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
 
+    # FunnyPilot v3.2.1e: track active edges + whether a blinker was involved
+    # while inactive, to drive the blinker-unwind re-engage torque ramp below.
+    now = time.monotonic()
+    one_blinker = CS.leftBlinker != CS.rightBlinker  # exactly one blinker on
+    if not active and one_blinker:
+      self._inactive_saw_blinker = True
+    if active and not self._prev_active:
+      # rising edge: ramp only if this re-engage followed a blinker pause
+      self._reengage_start_time = now if self._inactive_saw_blinker else -1e9
+      self._inactive_saw_blinker = False
+    self._prev_active = active
+
     if not active:
       output_torque = 0.0
       pid_log.active = False
@@ -127,8 +150,7 @@ class LatControlTorque(LatControl):
       # Blinker ON:  floor → 100% over _LC_RAMP_DUR.
       # Blinker OFF: hold at floor for _POST_DELAY, then floor → 100% over
       #              _POST_RAMP_DUR (alpha² ease-in) to settle gently into the new lane.
-      blinker_on = CS.leftBlinker != CS.rightBlinker  # exactly one blinker on
-      now = time.monotonic()
+      blinker_on = one_blinker
       if blinker_on and not self._prev_blinker_on:
         self._lc_blinker_on_time  = now
         self._lc_blinker_off_time = -1e9  # cancel any in-progress post-ramp
@@ -152,6 +174,12 @@ class LatControlTorque(LatControl):
       self.lane_change_torque_scale = scale
 
       output_torque *= scale
+
+      # FunnyPilot v3.2.1e: blinker-unwind re-engage ramp — 0% -> 100% over 4 s
+      # (+25%/s). No-op (scale 1.0) for non-blinker engages, where
+      # _reengage_start_time stays at its -1e9 sentinel.
+      reengage_scale = min(max((now - self._reengage_start_time) / self._REENGAGE_RAMP_DUR, 0.0), 1.0)
+      output_torque *= reengage_scale
 
       # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
       speed_mph = CS.vEgo * 2.23694

@@ -67,6 +67,37 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.1e Changes (based on funnypilot-3.1.2)
+
+- `selfdrive/controls/controlsd.py` — Interpolation hard-fixed at 5-way uniform
+  slicing. Removed the dynamic-n gauge math entirely (`_MP_MAX_DELTA`,
+  `_MP_HOLD_DECAY`, `n_raw`, `_mp_n_held`, `_mp_n_interp`). Control still does
+  `_mp_values[f] = prev + ((f+1)/5)*delta` (identical feel to 3.1.x). Now writes a
+  constant `"5"` (engaged) / `"0"` (paused) to `/dev/shm/lat_interp` at the 20 Hz
+  model rate as an "interp alive" heartbeat — no more `n,delta` CSV.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatDeltaElement`
+  (dCRV) removed. `_read_lat_interp()` parses a single int. `LatInterpolElement`
+  simplified to a live indicator: green "INTERP 5" when `latActive`, white "0" when
+  paused (no peak-hold, no thresholds).
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` — dropped the
+  `LatDeltaElement` import/instance and its bottom-bar append.
+- `selfdrive/controls/lib/latcontrol_torque.py` — Blinker-unwind re-engage ramp.
+  On the lateral `active` False→True edge, if a blinker was seen during the
+  inactive period, total `output_torque` ramps linearly 0%→100% over
+  `_REENGAGE_RAMP_DUR = 4.0` s (+25%/s). Plain engage / standstill release keep the
+  `-1e9` sentinel → instant full authority (no-op). Composes after the soft-lane-
+  change `scale` (resolves to 1.0 in the pause-release case) and the 0–15 mph
+  smooth-stop scaling.
+- `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` — Unwind now
+  requires the wheel to stay within `UNWIND_THRESHOLD_DEG` (20°) of center
+  continuously for `UNWIND_SETTLE_TIME = 1.0` s before releasing the pause (new
+  `_unwind_settle_timer`). Brief center crossings (mid-S-curve) reset the timer,
+  so lateral no longer re-engages between the two halves of an S.
+- `sunnypilot/selfdrive/controls/lib/tests/test_blinker_pause_lateral.py` — gating
+  helper resets unwind state per blinker combo; replaced the (dead under
+  `UNWIND_MODE=True`) `test_reengage_delay` with `test_unwind_settle_hold` and
+  `test_unwind_settle_resets_on_excursion`.
+
 ### v3.1.2 Changes (based on funnypilot-3.1.1st)
 
 - `selfdrive/controls/controlsd.py` — INTERP gauge retune (display only; control

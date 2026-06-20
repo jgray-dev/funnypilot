@@ -50,12 +50,10 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.0.7: dynamic interpolation between model frames.
+    # FunnyPilot v3.2.1e: fixed 5-way interpolation between model frames.
     self._mp_prev_curv = 0.0
     self._mp_cur_curv  = 0.0
     self._mp_frame     = 0
-    self._mp_n_interp  = 0
-    self._mp_n_held    = 2.0  # gauge peak-hold-with-decay; floor 2 (display 3)
     self._mp_values    = [0.0] * 5
 
     self.pose_calibrator = PoseCalibrator()
@@ -141,53 +139,39 @@ class Controls(ControlsExt):
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    # FunnyPilot v3.1.0e: uniform interpolation between model frames.
-    # Control ALWAYS spreads each 20Hz model step evenly across the 5 control
-    # frames (delta/5 per frame). The dynamic n_interp below is kept ONLY as the
-    # dev-UI corner-intensity gauge — it no longer sizes the control steps. The
-    # old dynamic scheme made the common case (n=1) take two coarse delta/2 jumps,
-    # which is exactly the "big, infrequent bite" feel; uniform delta/5 is 2.5x
-    # finer for the same ~zero added lag.
-    _MP_MAX_DELTA = 0.000051  # rad/m per gauge level (display only); 15% lower than 3.1.1st
-    _MP_HOLD_DECAY = 0.15     # gauge levels shed per gate when delta backs off (display only)
+    # FunnyPilot v3.2.1e: fixed uniform interpolation between model frames.
+    # Every 20Hz model step is spread evenly across the 5 control frames
+    # (delta/5 per frame), reaching the new target exactly at the final
+    # sub-frame. This is the validated "INTERP 5" feel, applied unconditionally
+    # regardless of corner intensity. The old dynamic-n gauge and dCRV delta
+    # readout were removed in this version.
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self._mp_prev_curv = raw_model_curv
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
-      self._mp_n_interp  = 0
-      self._mp_n_held    = 2.0   # gauge floor (display 3)
       self._mp_values    = [raw_model_curv] * 5
       new_desired_curvature = self.curvature
     elif self.sm.updated['modelV2']:
       self._mp_prev_curv = self._mp_cur_curv
       self._mp_cur_curv  = raw_model_curv
       self._mp_frame     = 0
-      delta     = self._mp_cur_curv - self._mp_prev_curv
-      abs_delta = abs(delta)
-      # Gauge demand from this gate's delta: floor 2 (display 3), up to 9 (display 10).
-      n_raw = min(max(2, math.ceil(abs_delta / _MP_MAX_DELTA) - 1), 9)
-      # Peak-hold with decay: snap up instantly, fall off slowly so we keep
-      # interpolating finely through the body of a corner, not just at entry.
-      if n_raw >= self._mp_n_held:
-        self._mp_n_held = float(n_raw)
-      else:
-        self._mp_n_held = max(float(n_raw), self._mp_n_held - _MP_HOLD_DECAY)
-      self._mp_n_interp = int(round(self._mp_n_held))
+      delta = self._mp_cur_curv - self._mp_prev_curv
       # Uniform slice: spread the whole model step evenly over all 5 control
-      # frames (delta/5 each), reaching cur exactly at the final sub-frame so the
-      # gate boundary is also a delta/5 step. No coarse half-steps regardless of n.
+      # frames (delta/5 each), reaching cur exactly at the final sub-frame.
       self._mp_values = [self._mp_prev_curv + ((f + 1) / 5.0) * delta for f in range(5)]
       new_desired_curvature = self._mp_values[0]
-      # Write interp count and delta to /dev/shm for dev UI on every model gate.
-      try:
-        with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write(f"{self._mp_n_interp + 1},{abs_delta:.6f}")
-      except Exception:
-        pass
     else:
       self._mp_frame = min(self._mp_frame + 1, 4)
       new_desired_curvature = self._mp_values[self._mp_frame]
+    # Dev-UI INTERP indicator: constant 5 while engaged, 0 when paused. Written
+    # at the 20Hz model rate so it also serves as an "interp alive" heartbeat.
+    if self.sm.updated['modelV2']:
+      try:
+        with open('/dev/shm/lat_interp', 'w') as _f:
+          _f.write("5" if CC.latActive else "0")
+      except Exception:
+        pass
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 

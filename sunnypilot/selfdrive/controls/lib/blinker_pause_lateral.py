@@ -13,7 +13,14 @@ from openpilot.common.params import Params
 # stays paused after the blinker turns off until the steering wheel comes
 # back within UNWIND_THRESHOLD_DEG of center. Hardcoded on for this personal
 # branch (no Params toggle — params_keys.h whitelist forbids new params).
+#
+# v3.2.1e — the wheel must now stay within UNWIND_THRESHOLD_DEG of center
+# CONTINUOUSLY for UNWIND_SETTLE_TIME seconds before lateral re-engages.
+# Briefly crossing center (e.g. the middle of an S-curve, where the wheel
+# passes through 0° on its way to the opposite lock) resets the timer, so we
+# no longer re-engage mid-maneuver.
 UNWIND_THRESHOLD_DEG = 20.0
+UNWIND_SETTLE_TIME = 1.0  # s of sustained near-center before re-engaging
 UNWIND_MODE = True
 
 
@@ -27,6 +34,7 @@ class BlinkerPauseLateral:
     self.reengage_delay = 0
     self.blinker_off_timer = 0.0
     self._blinker_was_on = False
+    self._unwind_settle_timer = 0.0
 
   def get_params(self) -> None:
     self.enabled = self.params.get_bool("BlinkerPauseLateralControl")
@@ -47,10 +55,18 @@ class BlinkerPauseLateral:
     if UNWIND_MODE:
       if paused_condition:
         self._blinker_was_on = True
+        self._unwind_settle_timer = 0.0
       elif self._blinker_was_on:
-        # Blinker just turned off — stay paused until wheel returns near center
+        # Blinker just turned off — stay paused until the wheel has been
+        # continuously within UNWIND_THRESHOLD_DEG of center for
+        # UNWIND_SETTLE_TIME. Crossing center briefly (mid S-curve) resets the
+        # timer so we don't re-engage in the middle of the maneuver.
         if abs(CS.steeringAngleDeg) < UNWIND_THRESHOLD_DEG:
-          self._blinker_was_on = False
+          self._unwind_settle_timer += DT_CTRL
+          if self._unwind_settle_timer >= UNWIND_SETTLE_TIME:
+            self._blinker_was_on = False
+        else:
+          self._unwind_settle_timer = 0.0
       return bool(paused_condition or self._blinker_was_on)
 
     if paused_condition:

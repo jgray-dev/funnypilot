@@ -273,64 +273,27 @@ class LatAccelFactorElement:
 
 
 def _read_lat_interp():
-  """Returns (n_interp, abs_delta) from /dev/shm/lat_interp, or defaults."""
+  """Returns the interp level from /dev/shm/lat_interp (0 = paused), or 0."""
   try:
     with open('/dev/shm/lat_interp') as f:
-      parts = f.read().strip().split(',')
-      return int(parts[0]), float(parts[1])
+      return int(f.read().strip())
   except Exception:
-    return 1, 0.0
+    return 0
 
 
 class LatInterpolElement:
+  # FunnyPilot v3.2.1e: interpolation is now fixed at 5-way, so this is a live
+  # "interp alive" indicator — green "INTERP 5" while engaged, white "0" when
+  # the lateral interpolation path is paused/inactive. The dynamic-n gauge and
+  # the dCRV delta readout were removed in this version.
   def __init__(self):
     self.unit = ""
-    self._peak = 1
-    self._display = 1
-    self._window_start = time.monotonic()
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
-    n, _ = _read_lat_interp()
-    now = time.monotonic()
-    self._peak = max(self._peak, n)
-    if now - self._window_start >= 1.0:
-      self._display = self._peak
-      self._peak = n
-      self._window_start = now
-    d = self._display
-    if not lat_active:
-      color = rl.WHITE
-    elif d >= 9:
-      color = rl.RED                        # extreme (9–10)
-    elif d >= 6:
-      color = rl.Color(255, 188, 0, 255)   # orange — heavy (6–8)
-    else:
-      color = rl.Color(0, 255, 0, 255)     # green — normal (3–5)
-    return UiElement(str(d), "INTERP", self.unit, color)
-
-
-class LatDeltaElement:
-  def __init__(self):
-    self.unit = ""
-    self._peak = 0.0
-    self._display = 0.0
-    self._window_start = time.monotonic()
-
-  def update(self, sm, is_metric: bool) -> UiElement:
-    lat_active = sm['carControl'].latActive
-    _, delta = _read_lat_interp()
-    now = time.monotonic()
-    self._peak = max(self._peak, delta)
-    if now - self._window_start >= 1.0:
-      self._display = self._peak
-      self._peak = 0.0
-      self._window_start = now
-    # Scale x100 so e.g. 0.000637 reads "0.0637" instead of "0.0006" — drops two
-    # wasted leading zeros and surfaces two more digits of real resolution.
-    value = f"{self._display * 100.0:.4f}"
-    color = rl.WHITE if not lat_active else rl.Color(0, 200, 255, 255)
-    return UiElement(value, "dCRV", self.unit, color)
+    n = _read_lat_interp()
+    color = rl.Color(0, 255, 0, 255) if lat_active else rl.WHITE
+    return UiElement(str(n), "INTERP", self.unit, color)
 
 
 class SteeringTorqueEpsElement:
