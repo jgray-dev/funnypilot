@@ -19,8 +19,12 @@ from openpilot.common.params import Params
 # Briefly crossing center (e.g. the middle of an S-curve, where the wheel
 # passes through 0° on its way to the opposite lock) resets the timer, so we
 # no longer re-engage mid-maneuver.
+#
+# v3.2.1st — more aggressive re-engage: the settle hold is shortened from 1.0 s
+# to 0.67 s, so lateral comes back sooner once the wheel is near center. The
+# near-center threshold is unchanged at 20°.
 UNWIND_THRESHOLD_DEG = 20.0
-UNWIND_SETTLE_TIME = 1.0  # s of sustained near-center before re-engaging
+UNWIND_SETTLE_TIME = 0.67  # s of sustained near-center before re-engaging
 UNWIND_MODE = True
 
 

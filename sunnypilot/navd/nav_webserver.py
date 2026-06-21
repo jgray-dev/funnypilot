@@ -20,7 +20,7 @@ _SHELL = "/bin/bash"
 _PORT = 8888
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.1"
+EXPECTED_VERSION = "3.2.1st"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -49,7 +49,7 @@ def _eval_diag(check_id: str, out: str):
   if check_id == "version":
     return ("pass", s) if s == EXPECTED_VERSION else ("warn", f"{s or '(empty)'} (expected {EXPECTED_VERSION})")
   if check_id == "branch":
-    return ("pass" if "3.2.1e" in s else "warn", s or "(unknown)")
+    return ("pass" if "3.2.1st" in s else "warn", s or "(unknown)")
   if check_id == "clean":
     return ("pass", "clean") if s == "" else ("fail", "MODIFIED")
   if check_id == "diff":

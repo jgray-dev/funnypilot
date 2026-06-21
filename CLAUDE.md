@@ -67,6 +67,30 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.1st Changes (based on funnypilot-3.2.1e)
+
+Stable cut of 3.2.1e with a more aggressive post-blinker lateral re-engage.
+
+- `sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py` — `UNWIND_SETTLE_TIME`
+  1.0 → 0.67 s. The wheel must still hold within `UNWIND_THRESHOLD_DEG` (20°,
+  unchanged) of center continuously, but only for 0.67 s before the pause releases,
+  so lateral re-engages sooner. The excursion-resets-the-timer logic is unchanged.
+  The tests in `test_blinker_pause_lateral.py` derive their iteration counts from
+  `UNWIND_SETTLE_TIME`, so they keep passing unmodified.
+- `selfdrive/controls/lib/latcontrol_torque.py` — Blinker-unwind re-engage ramp
+  retuned. New `_REENGAGE_RAMP_START = 0.15` (was an implicit 0%) and
+  `_REENGAGE_RAMP_DUR` 4.0 → 3.0 s. The per-frame scale is now
+  `_REENGAGE_RAMP_START + (1 - _REENGAGE_RAMP_START) * progress`, i.e. 15% → 100%
+  over 3 s. Non-blinker engages keep the `-1e9` sentinel → `progress` saturates to
+  1.0 → scale 1.0 (still an exact no-op).
+- `FUNNYPILOT_VERSION` — `3.2.1` → `3.2.1st` (stable channel; mirrors the
+  funnypilot-3.1.1st convention of carrying the suffix in the version file, which
+  `home.py` displays as "FunnyPilot 3.2.1st").
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` `3.2.1` → `3.2.1st` and the
+  `branch` diagnostic now matches `"3.2.1st"`, so `/api/diagnostics` stays green on
+  the stable branch. The `code_*` grep markers are untouched and still present
+  (`v3.2.1e` in controlsd.py, `_REENGAGE_RAMP_DUR`, `UNWIND_SETTLE_TIME`).
+
 ### v3.2.1e Changes (based on funnypilot-3.1.2)
 
 - `selfdrive/controls/controlsd.py` — Interpolation hard-fixed at 5-way uniform

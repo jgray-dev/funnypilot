@@ -1,3 +1,19 @@
+FunnyPilot v3.2.1st (2026-06-21)
+========================
+* tweak: More aggressive post-blinker lateral re-engage (stable cut of 3.2.1e).
+  - Settle hold shortened 1.0 s → 0.67 s: after the blinker turns off, lateral
+    resumes once the wheel has been held within ±20° of center (threshold
+    unchanged) for 0.67 s instead of 1.0 s. Brief center crossings still reset the
+    timer. (sunnypilot/.../blinker_pause_lateral.py — UNWIND_SETTLE_TIME)
+  - Re-engage torque ramp now starts at 15% (was 0%) and reaches 100% over 3 s
+    (was 4 s), so steering authority returns sooner without snapping to full
+    torque. (latcontrol_torque.py — _REENGAGE_RAMP_START, _REENGAGE_RAMP_DUR)
+* note: Stable release based on funnypilot-3.2.1e. All other 3.2.1e behavior —
+  fixed 5-way interpolation + INTERP heartbeat and the "Verify" diagnostics modal —
+  carries over unchanged. FUNNYPILOT_VERSION → 3.2.1st; /api/diagnostics
+  EXPECTED_VERSION and branch check updated to match so the on-device self-check
+  stays green on the stable branch.
+
 FunnyPilot v3.2.1e (2026-06-20) [EXPERIMENTAL]
 ========================
 * change: Interpolation is now FIXED at 5-way uniform slicing, unconditionally.
