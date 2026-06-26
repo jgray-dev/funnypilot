@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from cereal import car, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, DT_MDL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_curvature_from_plan
+from openpilot.selfdrive.controls.lib.lat_interp import LatInterp, SETTLE
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -27,6 +30,12 @@ LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
+
+# FunnyPilot v3.2.2: which lateral interpolation method controlsd uses between
+# 20 Hz model frames. SETTLE (default) = delay-aware smoothing with a model-plan
+# lookahead; LINEAR = the validated uniform delta/5 feel. Pinned in code per the
+# fork's convention (cf. locked LAF, UNWIND_MODE); flip to LINEAR to A/B by flash.
+INTERP_METHOD = SETTLE
 
 
 class Controls(ControlsExt):
@@ -50,11 +59,11 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.2.1e: fixed 5-way interpolation between model frames.
-    self._mp_prev_curv = 0.0
-    self._mp_cur_curv  = 0.0
-    self._mp_frame     = 0
-    self._mp_values    = [0.0] * 5
+    # FunnyPilot v3.2.2: cadence-independent curvature interpolation between model
+    # frames. Time-anchored so it can't silently degrade after offroad/reboot when
+    # the 100:20 Hz cadence drifts. Default = SETTLE (delay-aware smoothing); set
+    # INTERP_METHOD = LINEAR above for the plain validated delta/5 feel.
+    self.lat_interp = LatInterp(method=INTERP_METHOD)
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -139,41 +148,39 @@ class Controls(ControlsExt):
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    # FunnyPilot v3.2.1e: fixed uniform interpolation between model frames.
-    # Every 20Hz model step is spread evenly across the 5 control frames
-    # (delta/5 per frame), reaching the new target exactly at the final
-    # sub-frame. This is the validated "INTERP 5" feel, applied unconditionally
-    # regardless of corner intensity. The old dynamic-n gauge and dCRV delta
-    # readout were removed in this version.
+    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+
+    # FunnyPilot v3.2.2: cadence-independent curvature interpolation between the
+    # 20 Hz model frames (selfdrive/controls/lib/lat_interp.py). Time-anchored to
+    # the model's fixed 20 Hz period and elapsed wall-clock — NOT a control-frame
+    # counter — so it can't silently degrade to the old ~20%-of-step stall when
+    # the 100:20 Hz cadence drifts under thermal/CPU load (the "interp deactivates
+    # after offroad/reboot" symptom). SETTLE additionally eases the wheel into the
+    # apex using a one-model-step lookahead from the model's own plan (free compute
+    # inside the actuator-delay window), while never leaving the model's desire
+    # bracket and never lagging the linear path.
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
-      self._mp_prev_curv = raw_model_curv
-      self._mp_cur_curv  = raw_model_curv
-      self._mp_frame     = 0
-      self._mp_values    = [raw_model_curv] * 5
+      self.lat_interp.reset(self.curvature)
       new_desired_curvature = self.curvature
-    elif self.sm.updated['modelV2']:
-      self._mp_prev_curv = self._mp_cur_curv
-      self._mp_cur_curv  = raw_model_curv
-      self._mp_frame     = 0
-      delta = self._mp_cur_curv - self._mp_prev_curv
-      # Uniform slice: spread the whole model step evenly over all 5 control
-      # frames (delta/5 each), reaching cur exactly at the final sub-frame.
-      self._mp_values = [self._mp_prev_curv + ((f + 1) / 5.0) * delta for f in range(5)]
-      new_desired_curvature = self._mp_values[0]
     else:
-      self._mp_frame = min(self._mp_frame + 1, 4)
-      new_desired_curvature = self._mp_values[self._mp_frame]
-    # Dev-UI INTERP indicator: constant 5 while engaged, 0 when paused. Written
-    # at the 20Hz model rate so it also serves as an "interp alive" heartbeat.
+      next_curv_est = None
+      if self.lat_interp.method == SETTLE and self.sm.updated['modelV2']:
+        next_curv_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo)
+      new_desired_curvature = self.lat_interp.update(raw_model_curv, self.sm.updated['modelV2'],
+                                                     time.monotonic(), CS.vEgo, next_curv_est)
+    # Dev-UI INTERP indicator: the REALIZED control-frames-per-model-frame (~5 when
+    # healthy, lower when the interpolation is losing sub-frame headroom), or 0 when
+    # paused. An honest health signal, not a constant "alive" heartbeat — so a
+    # degradation is now visible instead of masked. Written at the 20 Hz model rate.
     if self.sm.updated['modelV2']:
       try:
+        n = round(self.lat_interp.health_frames) if CC.latActive else 0
         with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write("5" if CC.latActive else "0")
+          _f.write(str(n))
       except Exception:
         pass
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
@@ -192,6 +199,24 @@ class Controls(ControlsExt):
         setattr(actuators, p, 0.0)
 
     return CC, lac_log
+
+  def _model_lookahead_curv(self, model_v2, lat_delay, vego):
+    # FunnyPilot v3.2.2: estimate where the model's desired curvature is heading
+    # one model step ahead, used only to shape the SETTLE ease-out. The model's
+    # action.desiredCurvature is its plan curvature at (lat_delay + DT_MDL); we
+    # sample the same published plan one step further (lat_delay + 2*DT_MDL).
+    # Pure read of an already-computed trajectory — free compute in the delay
+    # window. Returns None if the plan is unavailable/invalid (SETTLE then falls
+    # back to linear), so this never injects an out-of-range curvature.
+    try:
+      yaws = model_v2.orientation.z
+      yaw_rates = model_v2.orientationRate.z
+      if len(yaws) < len(ModelConstants.T_IDXS) or len(yaw_rates) < 1:
+        return None
+      c = float(get_curvature_from_plan(yaws, yaw_rates, ModelConstants.T_IDXS, vego, lat_delay + 2 * DT_MDL))
+      return c if math.isfinite(c) else None
+    except Exception:
+      return None
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']

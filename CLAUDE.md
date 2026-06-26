@@ -67,6 +67,56 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.2 Changes (based on funnypilot-3.2.1st)
+
+Robust, cadence-independent lateral interpolation + a new delay-aware "settle"
+smoothing method (default), fixing the "interp deactivates after offroad/reboot"
+symptom and the dishonest INTERP indicator.
+
+- `selfdrive/controls/lib/lat_interp.py` — NEW module. `LatInterp` class with two
+  methods: `LINEAR` (validated uniform delta/5 feel) and `SETTLE` (default). Both
+  are TIME-ANCHORED: the sub-frame phase is `alpha = clip(elapsed/T_MODEL +
+  PHASE_LEAD, 0, 1)` with `T_MODEL = 0.05` (the model's FIXED 20 Hz period, not a
+  measured/EMA period — measuring it from the consumer side re-creates the chronic
+  lag) and `PHASE_LEAD = 0.2` (reproduces the old `prev + 0.2*delta` phase advance,
+  so the healthy-100 Hz feel is bit-compatible with 3.1.0e+). Replaces the
+  open-loop control-frame COUNTER that froze at ~20% of each step when the 100:20
+  cadence drifted. A `health` term (`realized control-frames-per-model-frame /
+  HEALTH_FULL_FRAMES`, clamped 0..1) blends the output toward the raw model desire
+  when sub-frame headroom is lost — worst case degrades to stock, never to a stall.
+  SETTLE adds `g(alpha) = alpha + w*alpha*(1-alpha)` (an ease-out that is provably
+  ≥ linear and within [0,1]), with `w` from a one-model-step lookahead
+  (`_settle_weight`): `w = clip(1 - next_delta/delta, 0, 1)`, 0 when deepening (full
+  turn-in responsiveness), →1 when flattening/reversing (gentle apex settle). A
+  LOAD-BEARING final clamp to `[min(prev,cur), max(prev,cur)]` (not the curve shape)
+  guarantees the output never leaves the model's desire bracket. SETTLE falls back
+  to linear below `SETTLE_MIN_SPEED = 6.7` m/s and on any non-finite/out-of-range
+  lookahead. NaN model desire → holds last good knot. `reset()` on inactive →
+  clean re-engage (first active frame passes the model desire through, clip ramps).
+- `selfdrive/controls/controlsd.py` — Removed the `_mp_prev_curv/_mp_cur_curv/
+  _mp_frame/_mp_values` frame-counter. Added module-level `INTERP_METHOD = SETTLE`
+  (flip to `LINEAR` per-branch to A/B). `self.lat_interp = LatInterp(INTERP_METHOD)`.
+  The interpolation block now calls `lat_interp.reset()/update()`; `lat_delay` was
+  moved above the block so `_model_lookahead_curv()` (new helper) can sample the
+  model plan at `lat_delay + 2*DT_MDL` via `get_curvature_from_plan` (the model's
+  `action.desiredCurvature` is its plan at `lat_delay + DT_MDL`). The lookahead is
+  only computed for SETTLE on model-update frames. The `/dev/shm/lat_interp` write
+  now emits the realized health-frames int (≈5 healthy) instead of a constant "5".
+- `selfdrive/controls/lib/tests/test_lat_interp.py` — NEW. Proves the invariants:
+  in-bracket, reaches cur at the model frame, SETTLE ≥ linear, linear == old
+  schedule, cadence independence, degraded-beats-old-20%-stall, NaN/re-engage/
+  low-speed contained. Import-light so it runs without the full openpilot env.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — `LatInterpolElement`
+  now an HONEST health gauge: green ≥4, orange 2–3, red 1, white when paused. The
+  number is the realized frames-per-model, so degradation shows instead of a
+  constant green "5".
+- `FUNNYPILOT_VERSION` — `3.2.1st` → `3.2.2`.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` → `3.2.2`; `branch`
+  diagnostic matches `"3.2.2"`; `code_controlsd` greps `v3.2.2`; new `code_latinterp`
+  check greps `class LatInterp` in `lat_interp.py`. The interp heartbeat check now
+  also serves as the realized-health readout. (Device-side revert cause documented
+  in CHANGELOG: check `UpdaterTargetBranch` if the running code isn't 3.2.2.)
+
 ### v3.2.1st Changes (based on funnypilot-3.2.1e)
 
 Stable cut of 3.2.1e with a more aggressive post-blinker lateral re-engage.

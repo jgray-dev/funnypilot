@@ -273,7 +273,8 @@ class LatAccelFactorElement:
 
 
 def _read_lat_interp():
-  """Returns the interp level from /dev/shm/lat_interp (0 = paused), or 0."""
+  """Returns the realized control-frames-per-model-frame written by controlsd to
+  /dev/shm/lat_interp (~5 healthy, lower = degraded, 0 = paused), or 0."""
   try:
     with open('/dev/shm/lat_interp') as f:
       return int(f.read().strip())
@@ -282,17 +283,26 @@ def _read_lat_interp():
 
 
 class LatInterpolElement:
-  # FunnyPilot v3.2.1e: interpolation is now fixed at 5-way, so this is a live
-  # "interp alive" indicator — green "INTERP 5" while engaged, white "0" when
-  # the lateral interpolation path is paused/inactive. The dynamic-n gauge and
-  # the dCRV delta readout were removed in this version.
+  # FunnyPilot v3.2.2: honest interpolation-health indicator. controlsd now writes
+  # the REALIZED control-frames-per-model-frame (≈5 at a healthy 100:20 Hz), not a
+  # constant "5" heartbeat — so if the interpolation loses sub-frame headroom
+  # (thermal/load) the number drops and the color warns, instead of always reading
+  # green "5" while the steering quietly degrades. Green ≥4, orange 2–3, red 1,
+  # white when paused.
   def __init__(self):
     self.unit = ""
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
     n = _read_lat_interp()
-    color = rl.Color(0, 255, 0, 255) if lat_active else rl.WHITE
+    if not lat_active:
+      color = rl.WHITE
+    elif n >= 4:
+      color = rl.Color(0, 255, 0, 255)    # healthy
+    elif n >= 2:
+      color = rl.Color(255, 165, 0, 255)  # degrading
+    else:
+      color = rl.Color(255, 0, 0, 255)    # stalled / no headroom
     return UiElement(str(n), "INTERP", self.unit, color)
 
 

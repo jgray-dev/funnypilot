@@ -1,3 +1,52 @@
+FunnyPilot v3.2.2 (2026-06-26)
+========================
+* fix: Interpolation no longer silently degrades after offroad/reboot. Root cause:
+  the old interpolation COUNTED control frames and assumed exactly 5 per model
+  frame (100 Hz / 20 Hz). When controlsd's effective rate drifts toward the model
+  rate under thermal/CPU load — which builds up the longer the device runs, i.e.
+  exactly after an offroad/reboot cycle rather than after a cool fresh flash — the
+  frame counter stopped advancing and the steering command FROZE at ~20% of every
+  model step (the "big bites / feels deactivated" symptom). The interpolation is
+  now TIME-ANCHORED: the sub-frame phase is real elapsed wall-clock time over the
+  model's fixed 20 Hz period, so it reaches the model's desire on time at any loop
+  rate and can't stall. A health term blends toward the model's raw desire when
+  sub-frame headroom is lost, so the worst case degrades to STOCK openpilot —
+  never to a laggy stall. The healthy-100 Hz feel is bit-compatible with 3.1.0e+.
+  (new selfdrive/controls/lib/lat_interp.py; selfdrive/controls/controlsd.py)
+* feat: New SETTLE interpolation method, now the DEFAULT. Full responsiveness INTO
+  a corner (mathematically never below the linear path — no added turn-in lag),
+  then a gentle ease-out as the model's desired curvature flattens toward the
+  apex/exit, so the wheel SETTLES instead of arriving in a 20 Hz jerk impulse
+  (the "whiplash"). The "is it flattening?" decision uses a one-model-step
+  lookahead sampled from the model's OWN published plan (orientation /
+  orientationRate) — free compute available inside the actuator/software-delay
+  window. Guaranteed to never sit outside the model's [prev, cur] desire bracket
+  and to equal the model exactly at each model frame (the model stays the
+  reference). Falls back to linear below ~15 mph and on any invalid lookahead.
+  Set `INTERP_METHOD = LINEAR` in controlsd.py for the plain validated delta/5
+  feel (A/B by flashing, per the fork's pin-in-code convention).
+* feat: Honest INTERP health indicator. controlsd writes the REALIZED
+  control-frames-per-model-frame to /dev/shm/lat_interp (≈5 healthy, lower =
+  losing sub-frame headroom, 0 = paused) instead of a constant "5" heartbeat.
+  The dev-UI element colors it green ≥4 / orange 2–3 / red 1, so a degradation is
+  now VISIBLE on-device instead of masked by an always-green "5".
+  (selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py)
+* test: New selfdrive/controls/lib/tests/test_lat_interp.py proves the safety
+  invariants (in-bracket / never outside model desire, reaches cur at the model
+  frame, SETTLE never below linear, linear == old delta/5 schedule, cadence
+  independence, degraded-beats-old-20%-stall, NaN/re-engage/low-speed contained).
+* note: A SECOND, device-side cause of "works after reflash, reverts after offroad"
+  is possible and is NOT fixable in this repo: the openpilot updater can fetch a
+  different `UpdaterTargetBranch` over offroad wifi and swap it in on reboot.
+  Confirm on-device with `cat /data/params/d/UpdaterTargetBranch` and
+  `grep -c v3.2.2 /data/openpilot/selfdrive/controls/controlsd.py` (the web-UI
+  "Verify" button now checks both the version and the new lat_interp module). If
+  the running code isn't 3.2.2 after a reboot, the updater reverted it — re-flash
+  funnypilot-3.2.2 and check that the updater target branch matches.
+* chore: FUNNYPILOT_VERSION → 3.2.2; /api/diagnostics EXPECTED_VERSION, branch
+  check, and code markers updated (controlsd grep `v3.2.2`, new `lat_interp`
+  module check) so the on-device self-check stays green on this branch.
+
 FunnyPilot v3.2.1st (2026-06-21)
 ========================
 * tweak: More aggressive post-blinker lateral re-engage (stable cut of 3.2.1e).
