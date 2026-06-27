@@ -20,7 +20,7 @@ _SHELL = "/bin/bash"
 _PORT = 8888
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.2"
+EXPECTED_VERSION = "3.2.3st"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -33,8 +33,10 @@ DIAG_CHECKS = [
   {"id": "head",           "name": "Git HEAD commit",                    "cmd": f"{_GIT} log -1 --format='%h %s' 2>&1"},
   {"id": "clean",          "name": "Working tree unmodified",            "cmd": f"{_GIT} status --porcelain 2>&1"},
   {"id": "diff",           "name": "Tracked-file changes (diff stat)",   "cmd": f"{_GIT} diff --stat 2>&1"},
-  {"id": "code_controlsd", "name": "controlsd 3.2.2 interp code present",  "cmd": "grep -c 'v3.2.2' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
+  {"id": "code_controlsd", "name": "controlsd interp + lane-change code",  "cmd": "grep -c 'v3.2.3st' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
   {"id": "code_latinterp", "name": "lat_interp module present",           "cmd": "grep -c 'class LatInterp' /data/openpilot/selfdrive/controls/lib/lat_interp.py 2>&1"},
+  {"id": "code_override",  "name": "driver-override softening present",   "cmd": "grep -c '_OVERRIDE_MIN_SCALE' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
+  {"id": "code_chime",     "name": "brake-with-lead chime fix present",   "cmd": "grep -c 'v3.2.3st' /data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py 2>&1"},
   {"id": "code_latctrl",   "name": "latcontrol re-engage ramp present",  "cmd": "grep -c '_REENGAGE_RAMP_DUR' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
   {"id": "code_blinker",   "name": "blinker settle-time present",        "cmd": "grep -c 'UNWIND_SETTLE_TIME' /data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py 2>&1"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
@@ -50,7 +52,7 @@ def _eval_diag(check_id: str, out: str):
   if check_id == "version":
     return ("pass", s) if s == EXPECTED_VERSION else ("warn", f"{s or '(empty)'} (expected {EXPECTED_VERSION})")
   if check_id == "branch":
-    return ("pass" if "3.2.2" in s else "warn", s or "(unknown)")
+    return ("pass" if "3.2.3st" in s else "warn", s or "(unknown)")
   if check_id == "clean":
     return ("pass", "clean") if s == "" else ("fail", "MODIFIED")
   if check_id == "diff":

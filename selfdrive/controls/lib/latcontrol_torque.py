@@ -81,6 +81,20 @@ class LatControlTorque(LatControl):
     self._inactive_saw_blinker  = False
     self._reengage_start_time   = -1e9
 
+    # FunnyPilot v3.2.3st: driver-override softening. The v3.2.2 interpolation
+    # sends firmer, more consistent curvature commands, so manually pushing the
+    # wheel away now meets more resistance. When the driver is actively applying
+    # torque (CS.steeringPressed) we scale the TOTAL output torque down to
+    # _OVERRIDE_MIN_SCALE so it takes less force to retake the wheel. The scale is
+    # ramped through a FirstOrderFilter so engaging/releasing the override doesn't
+    # step the torque, and it's an EXACT no-op (scale 1.0) whenever the driver
+    # isn't pressing. This does NOT touch the interpolation/smoothing, and the
+    # panda's hardware torque limits remain the safety backstop.
+    self._OVERRIDE_MIN_SCALE  = 0.6   # total-torque floor while the driver presses
+    self._OVERRIDE_TAU        = 0.15  # s, ramp time constant in/out of override
+    self._override_scale      = 1.0
+    self._override_filter     = FirstOrderFilter(1.0, self._OVERRIDE_TAU, self.dt)
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
     self.torque_params.latAccelOffset = latAccelOffset
@@ -135,6 +149,8 @@ class LatControlTorque(LatControl):
     if not active:
       output_torque = 0.0
       pid_log.active = False
+      # keep the driver-override softening reset so a re-engage starts at full scale
+      self._override_scale = self._override_filter.update(1.0)
     else:
       # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
@@ -194,6 +210,16 @@ class LatControlTorque(LatControl):
       if speed_mph < 15.0:
         torque_scale = max(0.0, speed_mph / 15.0)
         output_torque *= torque_scale
+
+      # FunnyPilot v3.2.3st: driver-override softening — while the driver is
+      # actively pressing the wheel, ramp the total torque down to
+      # _OVERRIDE_MIN_SCALE so it takes less force to retake the wheel against the
+      # firmer v3.2.2 interpolation. FirstOrderFilter ramps both in and out, so
+      # there is no step when the override starts/ends; exact no-op (scale -> 1.0)
+      # when the driver isn't pressing. The interpolation/smoothing is untouched.
+      override_target = self._OVERRIDE_MIN_SCALE if CS.steeringPressed else 1.0
+      self._override_scale = self._override_filter.update(override_target)
+      output_torque *= self._override_scale
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)

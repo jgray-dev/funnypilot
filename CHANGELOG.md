@@ -1,3 +1,38 @@
+FunnyPilot v3.2.3st (2026-06-26)
+========================
+Stable cut of 3.2.2 with three follow-up fixes from on-road feedback.
+
+* fix: Smooth lane changes restored. The v3.2.2 SETTLE ease-out leads the curvature
+  as it flattens, which sharpened the S-shaped lane-change path and made lane
+  changes feel sharp/jerky vs the smooth 3.2.1st feel. SETTLE is now forced OFF
+  during a lane change (model laneChangeState != off) so the maneuver uses the
+  plain linear ramp again — identical to 3.2.1st. Normal-driving SETTLE smoothing
+  is unchanged, and the soft-lane-change TORQUE scaling in latcontrol_torque.py was
+  always untouched. (selfdrive/controls/lib/lat_interp.py — new `lane_change` arg;
+  controlsd.py passes it.)
+* feat: Driver-override softening — easier to retake the wheel by hand. The v3.2.2
+  interpolation sends firmer, more consistent curvature commands, so manually
+  pushing the wheel away met more resistance. When the driver is actively applying
+  torque (CS.steeringPressed), the TOTAL output torque now ramps down to 60%
+  (_OVERRIDE_MIN_SCALE), via a FirstOrderFilter so there's no step in or out, and
+  an exact no-op (100%) when not pressing. The interpolation/smoothing is untouched
+  and the panda's hardware torque limits remain the safety backstop. Tune
+  _OVERRIDE_MIN_SCALE in latcontrol_torque.py if you want lighter/heavier override.
+* fix: Brake-with-lead disengage chime silenced (2021 Kia K5 GT, STOCK
+  longitudinal). Root cause: the K5 is a classic-CAN button-cancel car, and when
+  you brake to disengage, the brake pedal ALREADY cancels the factory cruise — but
+  openpilot also spams a redundant CLU11 CANCEL, and doing that while the SCC was
+  following a lead is what makes the car chime (no lead -> no chime, matching the
+  report). The redundant CANCEL is now suppressed WHILE the brake is pressed; the
+  instant the brake releases, CANCEL resumes if cruise is somehow still enabled, so
+  cruise can never get stuck engaged. (opendbc_repo/.../hyundai/carcontroller.py)
+  VERIFY ON-DEVICE: confirm braking still reliably cancels cruise (it does so via
+  the pedal natively); if the chime persists it is coming from a different layer —
+  report back and we'll re-trace with a CAN log.
+* chore: FUNNYPILOT_VERSION -> 3.2.3st; /api/diagnostics EXPECTED_VERSION/branch
+  bumped, plus new `code_override` and `code_chime` self-checks and `code_controlsd`
+  now greps `v3.2.3st`. New test_lane_change_forces_linear in test_lat_interp.py.
+
 FunnyPilot v3.2.2 (2026-06-26)
 ========================
 * fix: Interpolation no longer silently degrades after offroad/reboot. Root cause:

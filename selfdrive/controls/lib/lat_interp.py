@@ -103,7 +103,8 @@ class LatInterp:
     self._seeded = False
 
   def update(self, model_desired: float, model_updated: bool, now: float,
-             vego: float, next_curv_est: float | None = None) -> float:
+             vego: float, next_curv_est: float | None = None,
+             lane_change: bool = False) -> float:
     if not _finite(model_desired):
       model_desired = self._cur  # bad frame -> hold last good model desire
 
@@ -137,10 +138,14 @@ class LatInterp:
     alpha = (now - self._t0) / T_MODEL + PHASE_LEAD
     alpha = 0.0 if alpha < 0.0 else (1.0 if alpha > 1.0 else alpha)
 
-    if self.method == SETTLE and self._w > 0.0:
+    if self.method == SETTLE and self._w > 0.0 and not lane_change:
       # g(alpha) = alpha + w*alpha*(1-alpha): an ease-out that is ALWAYS >= alpha
       # (>= the linear path, so never laggier) and ALWAYS within [0,1] (so the
       # value stays in the [prev,cur] bracket), reaching 1 exactly at alpha=1.
+      # Forced OFF during a lane change: the SETTLE ease-out leads the curvature
+      # as it flattens, which sharpens the S-shaped lane-change path. Falling back
+      # to the plain linear ramp restores the smooth 3.2.1st lane-change feel
+      # (the soft-lane-change torque scaling in latcontrol_torque.py is unchanged).
       g = alpha + self._w * alpha * (1.0 - alpha)
     else:
       g = alpha

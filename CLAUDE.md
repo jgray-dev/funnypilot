@@ -67,6 +67,40 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.3st Changes (based on funnypilot-3.2.2)
+
+Stable cut of 3.2.2 with three on-road follow-ups: smooth lane changes restored,
+easier manual override, and the brake-with-lead disengage chime silenced.
+
+- `selfdrive/controls/lib/lat_interp.py` — `update()` gains a `lane_change` arg.
+  When True, the SETTLE ease-out is forced off (`g = alpha`, plain linear) so a
+  lane change keeps the smooth 3.2.1st feel; the v3.2.2 ease-out otherwise leads
+  the curvature as it flattens, which sharpened the S-curve. New
+  `test_lane_change_forces_linear` asserts settle(lane_change=True) == linear.
+- `selfdrive/controls/controlsd.py` — captures `lane_change_active =
+  model_v2.meta.laneChangeState != LaneChangeState.off` (reused from the blinker
+  block) and passes it to `lat_interp.update(..., lane_change=lane_change_active)`.
+- `selfdrive/controls/lib/latcontrol_torque.py` — driver-override softening. New
+  `_OVERRIDE_MIN_SCALE = 0.6`, `_OVERRIDE_TAU = 0.15`, `_override_filter`
+  (FirstOrderFilter). While `CS.steeringPressed`, the TOTAL output torque ramps to
+  60% so manual takeover needs less force against the firmer v3.2.2 interpolation;
+  filtered both directions (no step), exact no-op when not pressed, reset to 1.0 on
+  the inactive branch. Composes after the lane-change / re-engage / smooth-stop
+  scales. Does NOT touch the interpolation; panda torque limits remain the backstop.
+- `opendbc_repo/opendbc/car/hyundai/carcontroller.py` — brake-with-lead chime fix
+  (classic-CAN `create_can_msgs`, stock-long button-cancel path). The K5_2021 is
+  classic CAN (`CHECKSUM_CRC8`, no CANFD flag) so it cancels via `create_clu11(...
+  Buttons.CANCEL)`, NOT `hyundaicanfd.create_acc_cancel`. The brake pedal natively
+  cancels the factory cruise, so the redundant CANCEL spam (which drops a tracked
+  lead and triggers the car's chime) is suppressed `and not CS.out.brakePressed`.
+  CANCEL resumes the instant the brake releases, so cruise can never stay stuck.
+  HYPOTHESIS-BASED (the chime is the car's, not an openpilot AudibleAlert) — verify
+  on-device that braking still cancels cruise; if the chime persists, re-trace.
+- `FUNNYPILOT_VERSION` — `3.2.2` → `3.2.3st`.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION`/`branch` → `3.2.3st`;
+  `code_controlsd` greps `v3.2.3st`; new `code_override` (`_OVERRIDE_MIN_SCALE`) and
+  `code_chime` (`v3.2.3st` in carcontroller.py) self-checks.
+
 ### v3.2.2 Changes (based on funnypilot-3.2.1st)
 
 Robust, cadence-independent lateral interpolation + a new delay-aware "settle"

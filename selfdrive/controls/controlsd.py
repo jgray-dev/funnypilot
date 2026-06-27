@@ -134,7 +134,8 @@ class Controls(ControlsExt):
     actuators.longControlState = self.LoC.long_control_state
 
     # Enable blinkers while lane changing
-    if model_v2.meta.laneChangeState != LaneChangeState.off:
+    lane_change_active = model_v2.meta.laneChangeState != LaneChangeState.off
+    if lane_change_active:
       CC.leftBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.left
       CC.rightBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.right
 
@@ -158,7 +159,8 @@ class Controls(ControlsExt):
     # after offroad/reboot" symptom). SETTLE additionally eases the wheel into the
     # apex using a one-model-step lookahead from the model's own plan (free compute
     # inside the actuator-delay window), while never leaving the model's desire
-    # bracket and never lagging the linear path.
+    # bracket and never lagging the linear path. SETTLE is forced off during a
+    # lane change (v3.2.3st) so the maneuver keeps the smooth 3.2.1st linear feel.
     raw_model_curv = model_v2.action.desiredCurvature
     if not CC.latActive:
       self.lat_interp.reset(self.curvature)
@@ -168,7 +170,8 @@ class Controls(ControlsExt):
       if self.lat_interp.method == SETTLE and self.sm.updated['modelV2']:
         next_curv_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo)
       new_desired_curvature = self.lat_interp.update(raw_model_curv, self.sm.updated['modelV2'],
-                                                     time.monotonic(), CS.vEgo, next_curv_est)
+                                                     time.monotonic(), CS.vEgo, next_curv_est,
+                                                     lane_change=lane_change_active)
     # Dev-UI INTERP indicator: the REALIZED control-frames-per-model-frame (~5 when
     # healthy, lower when the interpolation is losing sub-frame headroom), or 0 when
     # paused. An honest health signal, not a constant "alive" heartbeat — so a

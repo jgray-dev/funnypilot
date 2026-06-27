@@ -151,7 +151,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # Button messages
     if not self.CP.openpilotLongitudinalControl:
-      if CC.cruiseControl.cancel:
+      # FunnyPilot v3.2.3st: silence the brake-with-lead disengage chime. On this
+      # stock-longitudinal (button-cancel) car, pressing the brake already cancels
+      # the factory cruise natively, so openpilot's redundant CLU11 CANCEL spam is
+      # superfluous while braking — and sending it as the SCC drops a tracked lead
+      # is what makes the car chime (no lead -> no chime, matching the report).
+      # Suppress CANCEL only during the brake press; the moment the brake releases,
+      # if cruise is somehow still enabled, CANCEL resumes — so cruise can never get
+      # stuck engaged. Disengage behavior is otherwise unchanged.
+      if CC.cruiseControl.cancel and not CS.out.brakePressed:
         can_sends.append(hyundaican.create_clu11(self.packer, self.frame, CS.clu11, Buttons.CANCEL, self.CP))
       elif CC.cruiseControl.resume:
         # send resume at a max freq of 10Hz

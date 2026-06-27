@@ -154,6 +154,23 @@ def test_nan_and_reengage_contained():
   assert abs(v - 0.08) < 1e-9, f"re-engage should pass model desire, got {v}"
 
 
+def test_lane_change_forces_linear():
+  # During a lane change, SETTLE must fall back to the plain linear ramp (the
+  # smooth 3.2.1st feel) — settle output with lane_change=True == linear output.
+  knots = [0.0, 0.03, 0.06, 0.05, 0.0, -0.04, -0.02, 0.0]
+  st = LatInterp(SETTLE)
+  lin = LatInterp(LINEAR)
+  now_s = now_l = 500.0
+  for i, k in enumerate(knots):
+    nxt = knots[i + 1] if i + 1 < len(knots) else None
+    for f in range(5):
+      vs = st.update(k, f == 0, now_s, FAST, next_curv_est=nxt, lane_change=True)
+      vl = lin.update(k, f == 0, now_l, FAST, next_curv_est=nxt)
+      assert abs(vs - vl) < 1e-12, f"lane-change settle {vs} != linear {vl}"
+      now_s += DT_CTRL
+      now_l += DT_CTRL
+
+
 def test_low_speed_settle_falls_back_to_linear():
   st = LatInterp(SETTLE)
   lin = LatInterp(LINEAR)
