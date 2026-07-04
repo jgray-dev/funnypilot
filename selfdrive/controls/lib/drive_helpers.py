@@ -22,6 +22,26 @@ def smooth_value(val, prev_val, tau, dt=DT_MDL):
   alpha = 1 - np.exp(-dt/tau) if tau > 0 else 1
   return alpha * val + (1 - alpha) * prev_val
 
+# smooth_value() passes a fixed fraction of any change between consecutive model
+# outputs, so when one output differs wildly from the previous one the smoothed
+# action still takes a large step. These jerk budgets bound how fast the smoothed
+# action target may move, no matter how large the jump is. They are loose enough
+# that the exponential filter stays in charge for realistic frame-to-frame changes
+# (the limiter only engages on outliers, so it adds no steady-state delay), and
+# tighter than the ISO limits controlsd enforces downstream.
+MAX_TARGET_LAT_JERK = 2.5        # m/s^3, lateral jerk implied by the change in target curvature
+MAX_TARGET_LONG_JERK_UP = 2.5    # m/s^3, toward more accel / brake release
+MAX_TARGET_LONG_JERK_DOWN = 7.5  # m/s^3, toward braking, loose so model-initiated stops are barely delayed
+
+def smooth_curvature(curvature, prev_curvature, v_ego, tau, dt=DT_MDL):
+  smoothed = smooth_value(curvature, prev_curvature, tau, dt)
+  max_step = MAX_TARGET_LAT_JERK / max(v_ego, MIN_SPEED) ** 2 * dt
+  return float(np.clip(smoothed, prev_curvature - max_step, prev_curvature + max_step))
+
+def smooth_accel(accel, prev_accel, tau, dt=DT_MDL):
+  smoothed = smooth_value(accel, prev_accel, tau, dt)
+  return float(np.clip(smoothed, prev_accel - MAX_TARGET_LONG_JERK_DOWN * dt, prev_accel + MAX_TARGET_LONG_JERK_UP * dt))
+
 def clip_curvature(v_ego, prev_curvature, new_curvature, roll) -> tuple[float, bool]:
   # This function respects ISO lateral jerk and acceleration limits + a max curvature
   v_ego = max(v_ego, MIN_SPEED)
