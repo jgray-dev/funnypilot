@@ -104,6 +104,12 @@ Pipfile
 PLAN.md
 TASK.md
 
+# FunnyPilot: runtime artifacts written into /data/openpilot on-device.
+# Not shipped code — keep them out of `git status` so the web UI "Verify"
+# working-tree check stays green.
+.nav_secrets
+.funnypilot_nav_cache
+
 ### JetBrains ###
 !.idea/customTargets.xml
 !.idea/tools/*

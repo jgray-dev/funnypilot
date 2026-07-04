@@ -101,6 +101,10 @@ guards; no control-path changes (3.2.4e feel carries over byte-identical).
   `code_controlsd`/`code_chime` greps still match `v3.2.3st` markers — those
   files are unchanged since 3.2.3st; do not "fix" the greps without also
   changing the markers.
+- `.gitignore` — `.nav_secrets` and `.funnypilot_nav_cache` (runtime artifacts
+  written into /data/openpilot on-device, not created by any code in this repo)
+  are ignored so the Verify "Working tree unmodified" check (`git status
+  --porcelain`) stays green.
 - `FUNNYPILOT_VERSION` — `3.2.3st` → `3.2.5st` (the 3.2.4e branch never bumped
   the file).
 

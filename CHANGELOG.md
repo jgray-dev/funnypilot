@@ -45,6 +45,10 @@ reboot doesn't help, only a web-page reflash (~9MB) brings it back".
   `updater_off` reports whether DisableUpdates is actually set (catches the
   cancelled-reboot-dialog trap), and new `code_bootguard` / `code_updtarget`
   self-checks verify the two guards are present in the running code.
+* fix: "Working tree unmodified" Verify check no longer fails on the on-device
+  runtime artifacts `.nav_secrets` and `.funnypilot_nav_cache` — they are not
+  shipped code and are now listed in .gitignore, so `git status --porcelain`
+  (what the check runs) ignores them.
 * chore: FUNNYPILOT_VERSION 3.2.3st -> 3.2.5st (3.2.4e never bumped the file);
   /api/diagnostics EXPECTED_VERSION/branch checks -> 3.2.5st. No control-path
   changes: the 3.2.4e interpolation/smoothing (lat_interp SETTLE + jerk-limited
