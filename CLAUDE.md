@@ -67,6 +67,43 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.5st Changes (based on funnypilot-3.2.4e)
+
+Fixes the "interpolation feels disabled after the device sits offroad; reboot
+doesn't help; only a ~9MB web reflash fixes it" revert. Root cause: the stock
+updater staged its stale `UpdaterTargetBranch` (never updated by the web-UI
+flash) into /data/safe_staging while offroad (metered hotspot delays the fetch
+until a 3-day timer expires — hence "sits long enough"), and launch_chffrplus.sh
+blindly swapped it into /data/openpilot on the next boot. Three independent
+guards; no control-path changes (3.2.4e feel carries over byte-identical).
+
+- `launch_chffrplus.sh` — boot-time branch guard. Before installing a finalized
+  staged update, compares `git rev-parse --abbrev-ref HEAD` of /data/openpilot
+  vs the finalized copy; mismatch (or unreadable current branch) discards the
+  staged update by deleting `.overlay_consistent`. Branch switching on this fork
+  is therefore ONLY possible via explicit flash (web UI / ssh); the sunnypilot
+  settings-menu branch selector can no longer switch branches (intentional).
+- `system/updated/updated.py` — (1) startup self-heal: if BASEDIR is on a
+  `funnypilot-*` branch and `UpdaterTargetBranch` differs, rewrite the param to
+  the flashed branch (runs before the first `set_params`, which would otherwise
+  re-persist the stale value). (2) fetch skip: if the target branch isn't in the
+  `origin` ls-remote results, skip the fetch cleanly (counts as a successful
+  cycle, so no UpdateFailedCount growth / connectivity-needed alerts, which
+  hardwared uses as an engagement startup condition).
+- `sunnypilot/navd/nav_webserver.py` — `/api/flash` writes `UpdaterTargetBranch`
+  (best-effort, lazy Params import) and, after a successful checkout, unmounts
+  `/data/safe_staging/merged` and `rm -rf /data/safe_staging` before rebooting.
+  Diagnostics: `EXPECTED_VERSION` → 3.2.5st; branch check uses EXPECTED_VERSION;
+  new checks `updater_target` (fail on branch mismatch), `staged_branch` (warn if
+  a different branch is staged), `updater_off` (info: DisableUpdates state),
+  `code_bootguard` (greps FINALIZED_BRANCH in launch_chffrplus.sh),
+  `code_updtarget` (greps "adopting flashed branch" in updated.py). The
+  `code_controlsd`/`code_chime` greps still match `v3.2.3st` markers — those
+  files are unchanged since 3.2.3st; do not "fix" the greps without also
+  changing the markers.
+- `FUNNYPILOT_VERSION` — `3.2.3st` → `3.2.5st` (the 3.2.4e branch never bumped
+  the file).
+
 ### v3.2.3st Changes (based on funnypilot-3.2.2)
 
 Stable cut of 3.2.2 with three on-road follow-ups: smooth lane changes restored,

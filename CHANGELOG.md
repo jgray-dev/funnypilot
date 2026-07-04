@@ -1,3 +1,55 @@
+FunnyPilot v3.2.5st (2026-07-04)
+========================
+Root-cause fix for "interpolation feels disabled after the device sits offroad,
+reboot doesn't help, only a web-page reflash (~9MB) brings it back".
+
+* fix: The stock openpilot updater was SILENTLY REVERTING the flashed code. The
+  chain: the web-UI flash does a plain `git checkout` in /data/openpilot but
+  never updates the updater's `UpdaterTargetBranch` param, which still points at
+  an older branch from a previous install. While the device sits offroad,
+  `updated` runs every ~1.5 h; on a metered hotspot it skips fetching UNTIL its
+  3-day timer expires (why it only happens after sitting long enough), then it
+  git-fetches the stale target branch (the same ~9MB class of traffic seen on a
+  reflash), checks it out in an overlay, and "finalizes" it into
+  /data/safe_staging. On the next soft-off -> boot, launch_chffrplus.sh swapped
+  /data/openpilot for that finalized copy WITH NO BRANCH CHECK — interpolation
+  gone. Reboots can't fix it (the wrong code is now what's installed); a reflash
+  fixes it only because it resets the code and its .git mtimes block the swap
+  until the updater re-arms, so the cycle repeated. Also explains why "auto
+  update off" didn't help: the sunnypilot "Disable Updates" toggle only persists
+  if the reboot dialog is CONFIRMED (cancel silently reverts it), and even a
+  pre-staged update would still have been installed by the boot swap.
+  Fixed in three independent layers (any one alone stops the revert):
+  - launch_chffrplus.sh — boot-time branch guard: a finalized staged update is
+    only installed if it is on the SAME git branch as the currently flashed
+    code; otherwise it is discarded (`.overlay_consistent` removed) and a
+    message is logged. Branch switches now only ever happen via an explicit
+    flash (web UI or ssh), never via the boot swap. NOTE: this intentionally
+    makes the sunnypilot settings-menu branch selector unable to switch
+    branches on this fork — use the web UI Flash button instead.
+  - system/updated/updated.py — target self-heal: on startup, if the checked
+    out branch is a funnypilot-* branch and `UpdaterTargetBranch` differs, the
+    param is rewritten to the flashed branch, so the updater can only ever
+    stage the code that is already installed. Also, if the target branch does
+    not exist on the `origin` remote, the fetch is skipped cleanly instead of
+    failing forever (which would eventually raise the connectivity-needed
+    offroad alerts that can block engagement).
+  - sunnypilot/navd/nav_webserver.py — the /api/flash endpoint now writes
+    `UpdaterTargetBranch` to the branch being flashed and wipes
+    /data/safe_staging (unmounting the updater overlay first) before rebooting,
+    so a previously staged wrong-branch update can't be installed by the very
+    reboot the flash triggers.
+* feat: /api/diagnostics ("Verify" button) now surfaces the revert vector:
+  `updater_target` FAILS if UpdaterTargetBranch points at a different branch,
+  `staged_branch` WARNS if a different branch is staged in /data/safe_staging,
+  `updater_off` reports whether DisableUpdates is actually set (catches the
+  cancelled-reboot-dialog trap), and new `code_bootguard` / `code_updtarget`
+  self-checks verify the two guards are present in the running code.
+* chore: FUNNYPILOT_VERSION 3.2.3st -> 3.2.5st (3.2.4e never bumped the file);
+  /api/diagnostics EXPECTED_VERSION/branch checks -> 3.2.5st. No control-path
+  changes: the 3.2.4e interpolation/smoothing (lat_interp SETTLE + jerk-limited
+  model action smoothing) carries over byte-identical.
+
 FunnyPilot v3.2.3st (2026-06-26)
 ========================
 Stable cut of 3.2.2 with three follow-up fixes from on-road feedback.

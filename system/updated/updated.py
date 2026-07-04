@@ -426,6 +426,22 @@ def main() -> None:
       params.put("InstallDate", t)
 
     updater = Updater()
+
+    # FunnyPilot v3.2.5st: the canonical install flow flashes funnypilot-*
+    # branches directly into BASEDIR (web UI / ssh) without ever touching
+    # UpdaterTargetBranch, so a stale target from an earlier install makes us
+    # fetch and stage that OTHER branch — and the boot script would then swap
+    # the flashed code out (the "interp feels disabled after sitting offroad"
+    # revert). Adopt whatever funnypilot branch is actually checked out.
+    try:
+      current_branch = updater.get_branch(BASEDIR)
+      stale_target = params.get("UpdaterTargetBranch")
+      if current_branch.startswith("funnypilot-") and stale_target != current_branch:
+        cloudlog.warning(f"UpdaterTargetBranch {stale_target!r} != flashed branch {current_branch!r}, adopting flashed branch")
+        params.put("UpdaterTargetBranch", current_branch)
+    except Exception:
+      cloudlog.exception("failed to adopt flashed branch as updater target")
+
     update_failed_count = 0 # TODO: Load from param?
     wait_helper = WaitTimeHelper()
 
@@ -468,6 +484,11 @@ def main() -> None:
           cloudlog.info("skipping fetch, connection metered")
         elif wait_helper.user_request == UserRequest.CHECK:
           cloudlog.info("skipping fetch, only checking")
+        elif updater.branches.get(updater.target_branch) is None:
+          # FunnyPilot: funnypilot-* branches may not exist on the origin
+          # remote; a fetch would fail forever and eventually raise the
+          # connectivity-needed offroad alerts. Skip cleanly instead.
+          cloudlog.warning(f"target branch {updater.target_branch!r} not found on remote, skipping fetch")
         else:
           updater.fetch_update()
           write_time_to_param(params, "UpdaterLastFetchTime")

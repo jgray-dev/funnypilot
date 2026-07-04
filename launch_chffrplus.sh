@@ -46,7 +46,19 @@ function launch {
       echo "${DIR} has been modified, skipping overlay update installation"
     else
       if [ -f "${STAGING_ROOT}/finalized/.overlay_consistent" ]; then
-        if [ ! -d /data/safe_staging/old_openpilot ]; then
+        # FunnyPilot v3.2.5st: only install a staged update that is on the SAME
+        # branch as the currently flashed code. The stock updater stages
+        # UpdaterTargetBranch, which the web-UI/ssh flash flow never updates, so
+        # a stale target could get silently swapped in right here after an
+        # offroad fetch — the "interpolation feels disabled after sitting
+        # offroad, only a reflash fixes it" revert. Branch switches must come
+        # from an explicit flash, never from this boot-time swap.
+        CURRENT_BRANCH=$(git -C ${DIR} -c safe.directory="${DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        FINALIZED_BRANCH=$(git -C ${STAGING_ROOT}/finalized -c safe.directory="${STAGING_ROOT}/finalized" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" != "$FINALIZED_BRANCH" ]; then
+          echo "staged update is branch '${FINALIZED_BRANCH}' but '${CURRENT_BRANCH}' is flashed, discarding staged update"
+          rm -f "${STAGING_ROOT}/finalized/.overlay_consistent"
+        elif [ ! -d /data/safe_staging/old_openpilot ]; then
           echo "Valid overlay update found, installing"
           LAUNCHER_LOCATION="${BASH_SOURCE[0]}"
 

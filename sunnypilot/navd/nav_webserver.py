@@ -20,7 +20,7 @@ _SHELL = "/bin/bash"
 _PORT = 8888
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.3st"
+EXPECTED_VERSION = "3.2.5st"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -39,8 +39,13 @@ DIAG_CHECKS = [
   {"id": "code_chime",     "name": "brake-with-lead chime fix present",   "cmd": "grep -c 'v3.2.3st' /data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py 2>&1"},
   {"id": "code_latctrl",   "name": "latcontrol re-engage ramp present",  "cmd": "grep -c '_REENGAGE_RAMP_DUR' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
   {"id": "code_blinker",   "name": "blinker settle-time present",        "cmd": "grep -c 'UNWIND_SETTLE_TIME' /data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py 2>&1"},
+  {"id": "code_bootguard", "name": "boot-time branch guard present",     "cmd": "grep -c 'FINALIZED_BRANCH' /data/openpilot/launch_chffrplus.sh 2>&1"},
+  {"id": "code_updtarget", "name": "updater target self-heal present",   "cmd": "grep -c 'adopting flashed branch' /data/openpilot/system/updated/updated.py 2>&1"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
   {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
+  {"id": "updater_target", "name": "Updater target branch",              "cmd": "cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"},
+  {"id": "updater_off",    "name": "DisableUpdates param",               "cmd": "cat /data/params/d/DisableUpdates 2>/dev/null || echo '(unset)'"},
+  {"id": "staged_branch",  "name": "Staged (finalized) update branch",   "cmd": f"{_GIT.replace('/data/openpilot', '/data/safe_staging/finalized')} rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(none staged)'"},
   {"id": "staging",        "name": "Updater staging dir",               "cmd": "ls -la /data/safe_staging/ 2>&1 || echo '(none)'"},
   {"id": "overlay",        "name": "Overlay mounts (updater)",           "cmd": "mount 2>/dev/null | grep -i overlay || echo '(none)'"},
 ]
@@ -52,7 +57,17 @@ def _eval_diag(check_id: str, out: str):
   if check_id == "version":
     return ("pass", s) if s == EXPECTED_VERSION else ("warn", f"{s or '(empty)'} (expected {EXPECTED_VERSION})")
   if check_id == "branch":
-    return ("pass" if "3.2.3st" in s else "warn", s or "(unknown)")
+    return ("pass" if EXPECTED_VERSION in s else "warn", s or "(unknown)")
+  if check_id == "updater_target":
+    # A target that differs from the flashed branch is exactly what caused the
+    # "reverts after sitting offroad" issue — the updater stages that branch.
+    ok = s == "(unset)" or EXPECTED_VERSION in s
+    return ("pass", s) if ok else ("fail", f"{s} (updater targets a DIFFERENT branch)")
+  if check_id == "staged_branch":
+    ok = s == "(none staged)" or EXPECTED_VERSION in s
+    return ("pass", s) if ok else ("warn", f"{s} (boot guard will discard this staged update)")
+  if check_id == "updater_off":
+    return ("info", "updates disabled" if s == "1" else "updates enabled")
   if check_id == "clean":
     return ("pass", "clean") if s == "" else ("fail", "MODIFIED")
   if check_id == "diff":
@@ -148,12 +163,27 @@ async def handle_flash(request: web.Request) -> web.Response:
     if not allowed:
       return web.json_response({"error": "disallowed branch"}, status=403)
 
+    # Keep the stock updater aligned with the explicit flash: point its target
+    # at the flashed branch so it can never stage (and boot-swap in) a stale
+    # branch after an offroad fetch. Best-effort — the launch_chffrplus.sh
+    # branch guard and the updated.py self-heal are the real backstops.
+    try:
+      from openpilot.common.params import Params
+      Params().put("UpdaterTargetBranch", branch)
+    except Exception:
+      pass
+
+    # After a successful checkout, also discard any previously staged update
+    # (unmount the updater overlay first) so the reboot below can't swap in
+    # code that was finalized before this flash.
     script = (
       f"cd /data/openpilot && "
       f"sudo git -c http.sslVerify=false fetch funnypilot {branch} && "
       f"sudo git checkout {branch} && "
       f"sudo git reset --hard funnypilot/{branch} && "
-      f"sudo reboot"
+      f"{{ sudo umount -l /data/safe_staging/merged 2>/dev/null; "
+      f"sudo rm -rf /data/safe_staging; "
+      f"sudo reboot; }}"
     )
     proc = await asyncio.create_subprocess_exec(
       "/bin/bash", "-c", script,
