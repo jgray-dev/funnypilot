@@ -125,6 +125,41 @@ removed — do not reintroduce accel-domain overrides downstream of the MPC.
 - `selfdrive/controls/tests/test_longcontrol.py` — added
   `test_bumpless_pid_entry`, `test_starting_ramp` (+ `_make_long_control`
   helper with a minimal tuned CP).
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py` — REWRITTEN
+  (was dead: sampled the removed `lateralPlan` service, exception handler
+  returned 0 lat accel -> never activated). Now reads
+  `modelV2.orientationRate.z * velocity.x` and does POINTWISE corner-speed
+  planning: per plan point, v_c = v*sqrt(a_lat_limit/a_pred), allowed-now =
+  v_c + 1.2*t_i; raw cap = min. No ENTERING/TURNING state machine — the
+  braking point falls out of the time term. `a_lat_target` (2.4 m/s^2,
+  LongV2Tuning) with fric influence BOUNDED to [0.7, 1.1]x — liveParameters
+  friction is a steering-model value, NOT road grip. Honors the
+  SmartCruiseControlVision toggle. update() signature gained `v_cruise`.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — REWRITTEN
+  (was dead: parsed MapTargetVelocities as {v,dist,radius}; mapd writes
+  [{latitude,longitude,velocity},...]). Parses the real route data
+  (nearest-point + forward slice, vectorized haversine, 400 m lookahead);
+  cap per point = sqrt(v_curve^2 + 2*1.0*d_eff), d_eff arrives 2 s early;
+  `sccm_speed_trim` (0.95) trims mapd speeds; UNtrimmed speed must be
+  below cruise for a point to count (straights never become constraints).
+  Injectable position/velocities readers for tests. corner_radius_m is a
+  display-only estimate v_curve^2/a_lat_target.
+- `sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py` — NEW shared
+  `CurveSpeedCap`: 2-frame debounce, cap seeded at current speed on
+  activation (returns WITHOUT applying EMA that frame — no step), EMA 0.35
+  down-tracking, 2.5 m/s^2 rate-limited release, auto-deactivate once
+  released to within 0.5 m/s of cruise. Both SCC controllers are
+  SPEED-DOMAIN governors; MPC + shaper own decel.
+- `sunnypilot/selfdrive/controls/lib/long_v2/tuning.py` — new fields
+  `a_lat_target` (2.4), `sccm_speed_trim` (0.95); `k_sccv`/`k_sccm` kept
+  parseable but DEPRECATED (nothing reads them).
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` (SP) — legacy
+  v1 `SmartCruiseControl` removed (its output was computed then discarded
+  by the LongV2 governor); SCC-V update now takes `v_cruise`.
+- `sunnypilot/selfdrive/controls/lib/long_v2/tests/test_scc_v2.py` — NEW,
+  import-light (16 cases): envelope math for both controllers, approach
+  tightening, in-corner hold, release ramp, passed-curve/no-data, bounded
+  fric, cap seeding/debounce.
 - `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
   REWRITTEN. Model: "the cluster set speed IS the SLA target". States:
   disabled -> inactive (silently armed, no prompts/auto-activation) ->
@@ -158,8 +193,9 @@ removed — do not reintroduce accel-domain overrides downstream of the MPC.
   rejection, limit dropout hold.
 - `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.2.6e; new
   `code_longshape` (`class AccelJerkShaper`), `code_longplan`
-  (`v3.2.6e` marker in longitudinal_planner.py) and `code_sla`
-  (`tap-to-adopt` in speed_limit_assist.py) self-checks.
+  (`v3.2.6e` marker in longitudinal_planner.py), `code_sla`
+  (`tap-to-adopt` in speed_limit_assist.py) and `code_sccv2`
+  (`class CurveSpeedCap` in curve_cap.py) self-checks.
 - KNOWN pre-existing: long_v2/tests/test_physics.py corner-speed/braking
   expectations fail on 3.2.5st too (test-only math mismatch, untouched).
 - NOT runnable in CI containers: plant/maneuver tests need the aarch64

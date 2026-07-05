@@ -11,7 +11,6 @@ from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
@@ -33,7 +32,6 @@ class LongitudinalPlannerSP:
     self.events_sp = EventsSP()
     self.resolver = SpeedLimitResolver()
     self.dec = DynamicExperimentalController(CP, mpc)
-    self.scc = SmartCruiseControl()
     self.resolver = SpeedLimitResolver()
     self.sla = SpeedLimitAssist(CP, CP_SP)
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
@@ -67,9 +65,6 @@ class LongitudinalPlannerSP:
     # Update friction estimate
     self._fric = get_fric(sm)
 
-    # Smart Cruise Control (legacy — kept for compatibility)
-    self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
-
     # Speed Limit Resolver
     self.resolver.update(v_ego, sm)
 
@@ -79,7 +74,7 @@ class LongitudinalPlannerSP:
                     self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
 
     # LongV2: SCC-Vision v2
-    self._scc_vision_v2.update(sm, long_enabled, long_override, v_ego, a_ego, self._fric)
+    self._scc_vision_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)
 
     # LongV2: SCC-Map v2
     self._scc_map_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)

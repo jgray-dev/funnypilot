@@ -4,7 +4,6 @@ Override by writing JSON to Params key "LongV2Tuning".
 """
 import json
 from dataclasses import dataclass, field, asdict
-from typing import Dict
 
 try:
   from openpilot.common.params import Params
@@ -14,9 +13,15 @@ except ImportError:
 
 @dataclass
 class LongV2Tuning:
-  # SCC-V threshold scaling factor (fraction of μg that triggers corner slow)
+  # v3.2.6e: comfort lateral acceleration target for curve speed control [m/s^2].
+  # SCC-V slows so predicted lat accel stays under this; SCC-M uses it only to
+  # estimate the displayed corner radius. Friction trims it by at most +/-30%.
+  a_lat_target: float = 2.4
+  # v3.2.6e: direct multiplier on mapd's suggested curve speeds (<1 = slower).
+  sccm_speed_trim: float = 0.95
+  # DEPRECATED (pre-3.2.6e sqrt(fric*g) formulas) — kept so existing
+  # LongV2Tuning param JSON blobs still parse; no longer read by control code.
   k_sccv: float = 0.72
-  # SCC-M physics cross-validation scale factor
   k_sccm: float = 0.78
   # Default time headway [s]
   thw_default: float = 2.7
@@ -31,7 +36,7 @@ class LongV2Tuning:
   # Comfort acceleration [m/s²]
   accel_comfort: float = 1.5
   # Speed limit offsets by road type [m/s]
-  speed_limit_offsets: Dict[str, float] = field(default_factory=lambda: {
+  speed_limit_offsets: dict[str, float] = field(default_factory=lambda: {
     "motorway": 3.13,       # +7 mph
     "trunk": 2.24,          # +5 mph
     "primary": 2.24,        # +5 mph
@@ -42,7 +47,7 @@ class LongV2Tuning:
     "service": 0.0,
   })
   # Road type hard caps [m/s]
-  road_type_caps: Dict[str, float] = field(default_factory=lambda: {
+  road_type_caps: dict[str, float] = field(default_factory=lambda: {
     "living_street": 8.94,  # 20 km/h
     "service": 8.94,        # 20 km/h
     "residential": 11.11,   # 40 km/h (only when no posted limit)

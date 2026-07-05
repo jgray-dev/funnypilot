@@ -78,8 +78,43 @@ vehicle owes its passengers longitudinally:
   - tests: test_speed_limit_assist.py rewritten import-light (17 cases,
     including both examples above, snap idempotency, clamp at +/-50%,
     long-press/stale-tap rejection).
+* fix(SCC-V, SCC-M): both v2 curve controllers were DEAD CODE — they have
+  never activated. SCC-V sampled the removed `lateralPlan` service (the
+  read threw every frame; the handler returned 0 predicted lateral accel),
+  and SCC-M parsed MapTargetVelocities as {v, dist, radius} when mapd
+  writes [{latitude, longitude, velocity}, ...]. The only live curve logic
+  was the legacy v1 SCC, whose output the LongV2 governor discarded.
+  Rewritten:
+  - SCC-V reads modelV2 (orientationRate.z x velocity.x, the proven V-TSC
+    signal) and does pointwise corner-speed planning over the plan
+    horizon: for each point, corner speed v*sqrt(a_lat_limit/a_pred) plus
+    a 1.2 m/s^2 approach-decel budget scaled by time-to-corner. The
+    braking point falls out of the math — no ENTERING/TURNING tier
+    machine. In-corner it holds corner speed until the plan flattens.
+  - SCC-M parses the real mapd route data (nearest-point + forward slice,
+    vectorized haversine, 400 m lookahead) and applies a constant-decel
+    envelope sqrt(v_curve^2 + 2*a*d) with a 2 s early-arrival buffer —
+    replacing jerk-integral braking math that also had a broken quadratic
+    root (`/ 2 * a` multiplied by a/2). Straight-road map points are
+    never trimmed into constraints.
+  - shared long_v2/curve_cap.py: debounced activation (2 frames), cap
+    seeded at current speed (no step), fast down-tracking, 2.5 m/s^2-rate
+    release, clean deactivation. Both controllers are speed-domain
+    governors only — the MPC + shaper own the actual deceleration.
+  - honest physics: lat-accel target is now a comfort constant (2.4
+    m/s^2, LongV2Tuning `a_lat_target`) with the friction estimate
+    bounded to +/-30% influence — `liveParameters` friction is a steering
+    -model parameter, not road grip; the old k*fric*g formula demanded
+    5.6 m/s^2 lateral before acting. New `sccm_speed_trim` (0.95) trims
+    mapd curve speeds directly. k_sccv/k_sccm remain parseable but dead.
+  - controllers now honor the SmartCruiseControlVision/Map toggles; the
+    legacy v1 SCC (computed, discarded) is removed from the SP planner.
+  - tests: new long_v2/tests/test_scc_v2.py (16 cases: activation
+    envelopes, approach tightening, in-corner hold, release, passed-curve
+    and no-data handling, bounded fric influence, cap seeding/debounce).
 * chore: FUNNYPILOT_VERSION -> 3.2.6e; /api/diagnostics EXPECTED_VERSION ->
-  3.2.6e, new code_longshape / code_longplan / code_sla self-checks.
+  3.2.6e, new code_longshape / code_longplan / code_sla / code_sccv2
+  self-checks.
 
 FunnyPilot v3.2.5st (2026-07-04)
 ========================
