@@ -1,10 +1,34 @@
 #!/usr/bin/env python3
+"""FunnyPilot v3.2.6e — longitudinal planner, rewritten single-authority.
+
+What we expect from an autonomous vehicle's longitudinal control, in strict
+priority order:
+
+  1. SAFETY. The MPC owns the safe-following problem — headway, braking
+     envelope, danger-zone constraint, FCW. Nothing downstream may weaken or
+     delay its braking. Heuristics may only shape its INPUTS (cruise speed,
+     headway), never clamp its output. The 3.2.5st FollowingControllerV2
+     accel/jerk overrides (whose 0.5 m/s^3 jerk cap could delay a 3 m/s^2
+     braking demand by SECONDS while tiers escalated) are gone.
+  2. COMFORT. Bounded acceleration (A_CRUISE_MAX table, turn limiting) and
+     bounded jerk, applied in exactly ONE place (long_shaping.AccelJerkShaper)
+     with asymmetric limits: throttle is applied gently, braking is slew-
+     limited only as much as the demanded deceleration allows, FCW bypasses
+     shaping entirely.
+  3. PREDICTABILITY. Set speed means set speed — the hidden 0.9x cruise
+     offset is removed. No time-boxed personality gas gates, no lead-cap
+     blending, no stacked output filters. The command is a deterministic
+     function of the plan.
+  4. ROBUSTNESS. Lead flicker and departures are handled in the SPEED domain
+     (long_shaping.LeadGrace): the cap is floored at v_ego, so it can hold
+     the car back after a lead drops but can never brake it.
+"""
 import math
 import numpy as np
 
 import cereal.messaging as messaging
-from cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from cereal import log
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
@@ -13,18 +37,23 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
-# FunnyPilot: Reduced max acceleration to 70% for smoother driving
+# FunnyPilot: reduced max acceleration (70% of stock) for smoother driving
 A_CRUISE_MAX_VALS = [1.12, 0.84, 0.56, 0.42]  # 70% of [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
-HIDDEN_CRUISE_OFFSET = 0.9
+
+# Up-jerk (throttle application) by personality, m/s^3
+JERK_UP_AGGRESSIVE = 2.5
+JERK_UP_STANDARD = 1.8
+JERK_UP_RELAXED = 1.4
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -35,6 +64,13 @@ def get_max_accel(v_ego):
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+def get_jerk_up(personality):
+  if personality == log.LongitudinalPersonality.aggressive:
+    return JERK_UP_AGGRESSIVE
+  elif personality == log.LongitudinalPersonality.relaxed:
+    return JERK_UP_RELAXED
+  return JERK_UP_STANDARD
 
 def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
   """
@@ -64,17 +100,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
-    self._a_target_filter = FirstOrderFilter(init_a, 0.35, self.dt)
+    self.shaper = AccelJerkShaper(self.dt, a_init=init_a)
+    self.lead_grace = LeadGrace(self.dt)
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
-
-    # FunnyPilot: Personality transition gas gating
-    # When switching to longer follow distance, gas gate instead of braking
-    self._prev_personality = None
-    self._personality_gas_gate_frames = 0
-    self._PERSONALITY_GAS_GATE_DURATION = int(4.0 / DT_MDL)  # 4 seconds of gas gating after dist increase
 
   @staticmethod
   def parse_model(model_msg):
@@ -128,6 +159,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       # Clip aEgo to cruise limits to prevent large accelerations when becoming active
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
+      self.shaper.reset(self.a_desired)
+      self.lead_grace.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -140,42 +173,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       clipped_accel_coast_interp = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [accel_clip[1], clipped_accel_coast])
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
-    # Get new v_cruise and a_desired from Smart Cruise Control and Speed Limit Assist
+    # Get new v_cruise from Smart Cruise Control, Speed Limit Assist and the speed governor
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
 
     if force_slow_decel:
-      # Maintain 20% margin under current speed instead of full stop for smoother safety decel
+      # Maintain 20% margin under current speed for a smooth safety decel toward a stop
       v_cruise = min(v_cruise, max(0.0, v_ego * 0.8))
 
-    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
-      cruise_only = self.source == LongitudinalPlanSource.cruise and not self._following_v2.plan_source_is_lead
-      if cruise_only:
-        v_cruise *= HIDDEN_CRUISE_OFFSET
-
-    # Blend toward lead cap smoothly to avoid oscillations when lead acquires/drops
-    lead_cap = getattr(self._following_v2, 'v_cruise_cap', 999.0)
-    if lead_cap < v_cruise:
-      blend = 0.2
-      v_cruise = blend * lead_cap + (1.0 - blend) * v_cruise
+    # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
+    lead_one = sm['radarState'].leadOne
+    following = self.mpc.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
+    v_cruise = self.lead_grace.update(bool(lead_one.status), following, lead_one.vLead, v_ego, v_cruise)
 
     personality = sm['selfdriveState'].personality
-
-    # FunnyPilot: Detect when switching to a longer follow distance -> gas gate instead of brake
-    # Personality order (shorter to longer follow): aggressive < standard < relaxed
-    _PERSONALITY_ORDER = {
-      log.LongitudinalPersonality.aggressive: 0,
-      log.LongitudinalPersonality.standard: 1,
-      log.LongitudinalPersonality.relaxed: 2,
-    }
-    if self._prev_personality is not None and personality != self._prev_personality:
-      curr_order = _PERSONALITY_ORDER.get(personality, 1)
-      prev_order = _PERSONALITY_ORDER.get(self._prev_personality, 1)
-      if curr_order > prev_order:
-        self._personality_gas_gate_frames = self._PERSONALITY_GAS_GATE_DURATION
-    self._prev_personality = personality
-    if self._personality_gas_gate_frames > 0:
-      self._personality_gas_gate_frames -= 1
-
     self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
     self.mpc.update(sm['radarState'], v_cruise, personality=personality)
@@ -194,7 +204,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.a_desired = float(np.interp(self.dt, CONTROL_N_T_IDX, self.a_desired_trajectory))
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.a_desired + a_prev) / 2.0
 
-    action_t =  self.CP.longitudinalActuatorDelay + DT_MDL
+    action_t = self.CP.longitudinalActuatorDelay + DT_MDL
     output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
                                                                         action_t=action_t, vEgoStopping=self.CP.vEgoStopping)
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
@@ -212,27 +222,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
 
-    # FunnyPilot: Gas gate when transitioning to longer follow distance
-    if self._personality_gas_gate_frames > 0:
-      output_a_target = min(output_a_target, 0.0)
-
-    # LongV2: Apply following controller a_override if set
-    fv2 = self._following_v2
-    if fv2.a_override is not None:
-      output_a_target = min(output_a_target, fv2.a_override)
-
-    # LongV2: Apply per-tier jerk limit from following controller
-    if fv2.jerk_limit_override is not None:
-      from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
-      jerk_lim = fv2.jerk_limit_override
-      max_delta_jerk = jerk_lim * self.dt
-      output_a_target = max(self.output_a_target - max_delta_jerk,
-                            min(self.output_a_target + max_delta_jerk, output_a_target))
-
-    if output_a_target < self.output_a_target:
-      self._a_target_filter.x = output_a_target
-    else:
-      output_a_target = self._a_target_filter.update(output_a_target)
+    # Single comfort-shaping stage: asymmetric jerk limit, FCW bypasses
+    output_a_target = self.shaper.update(output_a_target, jerk_up=get_jerk_up(personality), bypass=self.fcw)
 
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip

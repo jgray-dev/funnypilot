@@ -1,3 +1,60 @@
+FunnyPilot v3.2.6e (2026-07-05)
+========================
+EXPERIMENTAL — longitudinal control rewritten around a single-authority
+architecture. Design rules, in strict priority order, of what an autonomous
+vehicle owes its passengers longitudinally:
+  1. Safety is never comfort-limited. The MPC owns the safe-following problem
+     (headway, braking envelope, danger-zone constraint, FCW); nothing
+     downstream may weaken or delay its braking. Heuristics may shape its
+     INPUTS (cruise speed, headway) but never clamp its output.
+  2. Comfort is enforced in exactly one place: a single asymmetric jerk
+     shaper. Throttle applies gently; braking slew scales with the demanded
+     deceleration; FCW bypasses shaping entirely.
+  3. Predictability: set speed means set speed; the command is a
+     deterministic function of the plan.
+  4. Robustness lives in the speed domain: lead flicker/departure handling
+     can hold the car back but can never brake it.
+
+* feat: NEW selfdrive/controls/lib/long_shaping.py — AccelJerkShaper (up-jerk
+  1.4-2.5 m/s^3 by personality; down-jerk 4 m/s^3 for mild demands scaling
+  continuously to 12 m/s^3 at -3.5 m/s^2, so hard braking is executed near-
+  unshaped) and LeadGrace (on losing a lead we were actually following for
+  >= 1 s: hold cruise at the lead's last speed 1.5 s, ramp out over 2 s; cap
+  floored at v_ego so it can never command braking).
+* fix(SAFETY): removed the FollowingControllerV2 accel/jerk overrides. Its
+  0.5 m/s^3 "normal" jerk cap applied to the FINAL output could delay a
+  3 m/s^2 braking demand by several seconds while its TTC tiers escalated,
+  and its tier logic fought the MPC's own (correct) solution to the same
+  problem. Following is now owned solely by the MPC.
+* feat: follow distance is a constant TIME headway per personality
+  (aggressive 1.25 s / standard 1.60 s / relaxed 2.05 s, +0.35 s cushion
+  below city speeds) replacing the 3.2.5st speed-indexed tables that were
+  most cautious where risk is lowest (3.75 s at city speed, 1.5 s at
+  highway speed). COMFORT_BRAKE 2.0 -> 2.2 (earlier-than-stock brake
+  initiation WITHOUT the closing-rate obstacle inflation hack, which
+  double-counted braking distance and caused early/phantom braking).
+  STOP_DISTANCE 11 -> 7.5 m (roomier than stock 6 m, no longer invites
+  cut-ins). Relaxed personality now also gets a higher MPC jerk cost (2.0).
+* fix(predictability): removed the hidden 0.9x cruise offset (car now
+  actually drives the set speed), the 4 s personality-switch gas gate (the
+  MPC's accel-change cost already smooths headway transitions), the lead-cap
+  blend, and the asymmetric output filter (instant-down/0.35 s-up) — all
+  replaced by the one shaper stage.
+* feat: longcontrol.py — bumpless transfer: entering PID from
+  stopping/starting seeds the integrator so the first frame continues from
+  the last commanded accel instead of stepping; the starting state slews
+  toward startAccel at 6 m/s^3 instead of stepping (kills the launch
+  head-snap, still fast enough to release brake-hold).
+* chore: deleted sunnypilot/.../long_v2/following_v2.py; SP planner keeps
+  only the speed-domain governors (SCC-V/SCC-M/SLA/weather/road caps).
+* test: NEW selfdrive/controls/lib/tests/test_long_shaping.py (22 cases:
+  jerk asymmetry, strong-braking-barely-delayed safety invariant, FCW
+  bypass, NaN containment, LeadGrace arm/hold/release/never-brake
+  invariants); test_longcontrol.py gains bumpless-entry and starting-ramp
+  cases. All import-light, run without the full openpilot env.
+* chore: FUNNYPILOT_VERSION -> 3.2.6e; /api/diagnostics EXPECTED_VERSION ->
+  3.2.6e, new code_longshape / code_longplan self-checks.
+
 FunnyPilot v3.2.5st (2026-07-04)
 ========================
 Root-cause fix for "interpolation feels disabled after the device sits offroad,

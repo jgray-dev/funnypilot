@@ -67,6 +67,72 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.6e Changes (based on funnypilot-3.2.5st)
+
+EXPERIMENTAL longitudinal control rewrite: single-authority architecture. The
+MPC owns following/braking; ONE shaper stage owns comfort; robustness
+heuristics live in the speed domain and can never brake the car. All 3.2.5st
+output-path hacks (hidden cruise offset, personality gas gate, lead-cap blend,
+FollowingControllerV2 a_override/jerk override, asymmetric output filter) are
+removed — do not reintroduce accel-domain overrides downstream of the MPC.
+
+- `selfdrive/controls/lib/long_shaping.py` — NEW, import-light (numpy only).
+  `AccelJerkShaper`: asymmetric jerk limiter on the planner's output accel.
+  Up-jerk passed per-call (1.4/1.8/2.5 m/s^3 relaxed/standard/aggressive);
+  down-jerk interpolated on the DEMANDED accel (`JERK_DOWN_BP [-3.5,-1.0] ->
+  [12,4] m/s^3`) so hard braking unlocks a high slew rate immediately —
+  comfort can only ever soften throttle, never dilute braking. `bypass=True`
+  (FCW) passes the demand through and re-seeds; NaN target -> 0 + re-seed.
+  `LeadGrace`: speed-domain lead-loss handling. Arms only after a lead has
+  been tracked >= 1.0 s WHILE being the MPC's active constraint (`following`
+  flag = mpc.source in lead0/lead1). On loss: cap v_cruise at the lead's last
+  speed for 1.5 s (rides out radar flicker), then linear ramp out over 2 s.
+  The cap is floored at v_ego — LOAD-BEARING invariant: grace can suppress a
+  surge but can never command braking.
+- `selfdrive/controls/lib/longitudinal_planner.py` — rewritten output path.
+  Flow: reset-state handling (also reseeds shaper + grace) -> allow_throttle /
+  coast clip (unchanged) -> SP speed governors -> force_slow_decel (20%
+  margin, unchanged) -> LeadGrace cap -> MPC -> get_accel_from_plan (actuator-
+  delay-aware, unchanged) -> e2e min-blend (unchanged) -> AccelJerkShaper
+  (bypass on FCW) -> rate-limited accel_clip. Removed: HIDDEN_CRUISE_OFFSET,
+  personality gas gate, lead-cap blend, fv2 overrides, `_a_target_filter`.
+  Kept: FunnyPilot 70% A_CRUISE_MAX table, turn accel limiting.
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` — `get_T_FOLLOW`
+  now constant time headway per personality (1.25/1.60/2.05 s) + 0.35 s
+  cushion below 4 m/s fading out by 14 m/s (replaces the speed-indexed
+  mph tables). `COMFORT_BRAKE` 2.0 -> 2.2, `STOP_DISTANCE` 11 -> 7.5,
+  removed the closing-rate `inflate_obstacle` hack (double-counted braking
+  distance vs `get_stopped_equivalence_factor`), relaxed jerk factor 1.0 ->
+  2.0. NOTE: solver .so files in c_generated_code are prebuilt aarch64 —
+  these constants are runtime parameters, no codegen needed.
+- `selfdrive/controls/lib/longcontrol.py` — bumpless transfer: on
+  stopping/starting -> pid entry, the PID integrator is seeded
+  (`last_output_accel - a_target - kp*error`, clipped to accel limits) so
+  the first frame continues from the last commanded accel. Starting state
+  slews from `last_output_accel` toward `CP.startAccel` at
+  `STARTING_ACCEL_RATE = 6.0 m/s^3` instead of stepping. State machine
+  (`long_control_state_trans`) unchanged.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` — dropped
+  FollowingControllerV2 (import, instance, update call, v_cruise_cap
+  application). Speed governor pipeline (SCC-V/SCC-M/SLA/road/weather caps)
+  unchanged. `update_targets` signature unchanged.
+- `sunnypilot/selfdrive/controls/lib/long_v2/following_v2.py` — DELETED.
+  `tuning.py`/`fric.py`/`jerk_filter.py` retained (SCC + tests use them).
+- `selfdrive/controls/lib/tests/test_long_shaping.py` — NEW, import-light.
+  Key invariants: strong braking (-3.5 m/s^2) reached in <= 6 frames;
+  mild braking comfort-limited at 4 m/s^3; FCW bypass immediate; grace cap
+  >= v_ego always; short-lived/non-constraining leads never arm grace.
+- `selfdrive/controls/tests/test_longcontrol.py` — added
+  `test_bumpless_pid_entry`, `test_starting_ramp` (+ `_make_long_control`
+  helper with a minimal tuned CP).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.2.6e; new
+  `code_longshape` (`class AccelJerkShaper`) and `code_longplan`
+  (`v3.2.6e` marker in longitudinal_planner.py) self-checks.
+- KNOWN pre-existing: long_v2/tests/test_physics.py corner-speed/braking
+  expectations fail on 3.2.5st too (test-only math mismatch, untouched).
+- NOT runnable in CI containers: plant/maneuver tests need the aarch64
+  acados solver; validate following/stopping feel on-device.
+
 ### v3.2.5st Changes (based on funnypilot-3.2.4e)
 
 Fixes the "interpolation feels disabled after the device sits offroad; reboot

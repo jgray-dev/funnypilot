@@ -53,27 +53,32 @@ T_IDXS_LST = [index_function(idx, max_val=MAX_T, max_idx=N) for idx in range(N+1
 T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
-# FunnyPilot: Tuned longitudinal constants for natural driving feel
-COMFORT_BRAKE = 2.0       # Reduced from 2.5 -> brake earlier and gentler
-STOP_DISTANCE = 11.0       # Increased for larger buffer at stops
+# FunnyPilot v3.2.6e: first-principles longitudinal constants.
+# COMFORT_BRAKE is the planning deceleration assumed for the safe-distance
+# envelope: 2.2 m/s^2 sits between stock (2.5) and the old fork value (2.0),
+# giving earlier-than-stock brake initiation without the separate
+# closing-rate obstacle inflation hack that double-counted braking distance.
+COMFORT_BRAKE = 2.2
+# Standstill gap to a stopped lead. 7.5 m is roomier than stock (6.0) without
+# the cut-in-inviting 11 m gap of 3.2.5st.
+STOP_DISTANCE = 7.5
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
 
-# FunnyPilot: Variable follow distance breakpoints (speed in m/s)
-# Breakpoints: 0, 20, 35, 50, 75 mph with gradients between 20-35 and 50-75
-# Distance 2 (standard): 2.5s@<=20mph, 1.5s@35-50mph, 1.0s@>=75mph
-# Distance 1 (aggressive): 15% shorter = 2.125s@<=20mph, 1.275s@35-50mph, 0.85s@>=75mph
-# Distance 3 (relaxed):    15% longer  = 2.875s@<=20mph, 1.725s@35-50mph, 1.15s@>=75mph
-_T_FOLLOW_V_MPH = [0., 20., 35., 50., 75.]
-_T_FOLLOW_V_MPS = [v * 0.44704 for v in _T_FOLLOW_V_MPH]  # convert mph to m/s
-_T_FOLLOW_AGGRESSIVE  = [3.1875, 3.1875, 1.9125, 1.9125, 1.275]  # 50% longer vs previous aggressive
-_T_FOLLOW_STANDARD    = [3.75,   3.75,   2.25,   2.25,   1.5]   # 50% longer vs previous standard
-_T_FOLLOW_RELAXED     = [4.3125, 4.3125, 2.5875, 2.5875, 1.725]  # 50% longer vs previous relaxed
+# FunnyPilot v3.2.6e: follow distance is a constant TIME headway per
+# personality — the quantity that is actually invariant in human following —
+# instead of the 3.2.5st speed-indexed tables (3.75 s at city speed shrinking
+# to 1.5 s at highway speed, i.e. most cautious where risk is lowest). A small
+# additive cushion below city speeds absorbs stop-and-go noise.
+_T_FOLLOW_AGGRESSIVE = 1.25
+_T_FOLLOW_STANDARD = 1.60
+_T_FOLLOW_RELAXED = 2.05
+_LOW_SPEED_HEADWAY_CUSHION = 0.35  # s, fully applied below 4 m/s, gone by 14 m/s
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
-    return 1.0
+    return 2.0
   elif personality==log.LongitudinalPersonality.standard:
     return 1.0
   elif personality==log.LongitudinalPersonality.aggressive:
@@ -83,25 +88,17 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
 
 
 def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=None):
-  """FunnyPilot: Speed-dependent follow time. Closer at high speed, more buffer at low speed."""
-  if v_ego is not None:
-    if personality == log.LongitudinalPersonality.relaxed:
-      return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_RELAXED))
-    elif personality == log.LongitudinalPersonality.standard:
-      return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_STANDARD))
-    elif personality == log.LongitudinalPersonality.aggressive:
-      return float(np.interp(v_ego, _T_FOLLOW_V_MPS, _T_FOLLOW_AGGRESSIVE))
-    else:
-      raise NotImplementedError("Longitudinal personality not supported")
-  # Static fallback (used during initialization)
   if personality == log.LongitudinalPersonality.relaxed:
-    return 1.75
+    t_follow = _T_FOLLOW_RELAXED
   elif personality == log.LongitudinalPersonality.standard:
-    return 1.45
+    t_follow = _T_FOLLOW_STANDARD
   elif personality == log.LongitudinalPersonality.aggressive:
-    return 1.25
+    t_follow = _T_FOLLOW_AGGRESSIVE
   else:
     raise NotImplementedError("Longitudinal personality not supported")
+  if v_ego is not None:
+    t_follow += _LOW_SPEED_HEADWAY_CUSHION * float(np.interp(v_ego, [4., 14.], [1., 0.]))
+  return float(t_follow)
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
@@ -350,15 +347,6 @@ class LongitudinalMpc:
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
-
-    # Strengthen safety envelope: inflate obstacle when closing rapidly
-    def inflate_obstacle(lead_obstacle, lead_xv):
-      dv = np.maximum(0.0, self.x0[1] - lead_xv[:,1])
-      extra = (dv ** 2) / (2 * max(COMFORT_BRAKE * 0.8, 0.1))
-      return lead_obstacle + extra
-
-    lead_0_obstacle = inflate_obstacle(lead_0_obstacle, lead_xv_0)
-    lead_1_obstacle = inflate_obstacle(lead_1_obstacle, lead_xv_1)
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.

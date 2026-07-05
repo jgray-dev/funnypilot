@@ -20,7 +20,7 @@ _SHELL = "/bin/bash"
 _PORT = 8888
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.5st"
+EXPECTED_VERSION = "3.2.6e"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -41,6 +41,8 @@ DIAG_CHECKS = [
   {"id": "code_blinker",   "name": "blinker settle-time present",        "cmd": "grep -c 'UNWIND_SETTLE_TIME' /data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py 2>&1"},
   {"id": "code_bootguard", "name": "boot-time branch guard present",     "cmd": "grep -c 'FINALIZED_BRANCH' /data/openpilot/launch_chffrplus.sh 2>&1"},
   {"id": "code_updtarget", "name": "updater target self-heal present",   "cmd": "grep -c 'adopting flashed branch' /data/openpilot/system/updated/updated.py 2>&1"},
+  {"id": "code_longshape", "name": "long output shaper present",         "cmd": "grep -c 'class AccelJerkShaper' /data/openpilot/selfdrive/controls/lib/long_shaping.py 2>&1"},
+  {"id": "code_longplan",  "name": "v3.2.6e longitudinal planner present", "cmd": "grep -c 'v3.2.6e' /data/openpilot/selfdrive/controls/lib/longitudinal_planner.py 2>&1"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
   {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
   {"id": "updater_target", "name": "Updater target branch",              "cmd": "cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"},

@@ -17,11 +17,11 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolve
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
-# LongV2 components
+# LongV2 components (speed-domain governors only; following is owned by the
+# MPC as of v3.2.6e — see selfdrive/controls/lib/longitudinal_planner.py)
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.following_v2 import FollowingControllerV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
@@ -46,7 +46,6 @@ class LongitudinalPlannerSP:
     # LongV2 components
     self._scc_vision_v2 = SCCVisionV2()
     self._scc_map_v2 = SCCMapV2()
-    self._following_v2 = FollowingControllerV2()
     self._speed_governor = SpeedGovernor()
     self._fric = 0.8
 
@@ -85,9 +84,6 @@ class LongitudinalPlannerSP:
     # LongV2: SCC-Map v2
     self._scc_map_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)
 
-    # LongV2: Following controller
-    self._following_v2.update(sm, v_ego, a_ego, self._fric)
-
     # LongV2: Speed governor selects minimum of all v_targets
     v_scc_vision = self._scc_vision_v2.output_v_target
     v_scc_map = self._scc_map_v2.output_v_target
@@ -105,10 +101,6 @@ class LongitudinalPlannerSP:
       v_cruise, v_scc_map, v_scc_vision, v_sla,
       road_type, speed_limit_posted, self._fric
     )
-
-    # Apply following controller cap on top of speed governor
-    if self._following_v2.v_cruise_cap < v_governed:
-      v_governed = self._following_v2.v_cruise_cap
 
     # Source tracking — prefer most restrictive non-cruise source for display
     if v_governed < v_cruise - 0.5:

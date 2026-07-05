@@ -7,6 +7,12 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
+# FunnyPilot v3.2.6e: slew rate for the starting state, m/s^3. Replaces the
+# instantaneous step to CP.startAccel — reaches a typical 1.2-1.6 m/s^2 launch
+# accel in ~0.2-0.3 s, fast enough to release brake-hold on cars that need the
+# kick, without the head-snap of a step command.
+STARTING_ACCEL_RATE = 6.0
+
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
 
@@ -65,6 +71,7 @@ class LongControl:
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
 
+    prev_state = self.long_control_state
     self.long_control_state = long_control_state_trans(self.CP, self.CP_SP, active, self.long_control_state, CS.vEgo,
                                                        should_stop, CS.brakePressed,
                                                        CS.cruiseState.standstill)
@@ -80,11 +87,19 @@ class LongControl:
       self.reset()
 
     elif self.long_control_state == LongCtrlState.starting:
-      output_accel = self.CP.startAccel
+      # Jerk-limited ramp toward startAccel instead of a step
+      output_accel = min(self.last_output_accel + STARTING_ACCEL_RATE * DT_CTRL, self.CP.startAccel)
       self.reset()
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
+      if prev_state in (LongCtrlState.stopping, LongCtrlState.starting):
+        # Bumpless transfer: seed the integrator so the first PID output
+        # continues from the last commanded accel instead of stepping to
+        # feedforward + P from a zeroed controller.
+        self.pid.speed = CS.vEgo
+        self.pid.i = float(np.clip(self.last_output_accel - a_target - self.pid.k_p * error,
+                                   accel_limits[0], accel_limits[1]))
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target)
 
