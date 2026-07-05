@@ -43,6 +43,7 @@ DIAG_CHECKS = [
   {"id": "code_updtarget", "name": "updater target self-heal present",   "cmd": "grep -c 'adopting flashed branch' /data/openpilot/system/updated/updated.py 2>&1"},
   {"id": "code_longshape", "name": "long output shaper present",         "cmd": "grep -c 'class AccelJerkShaper' /data/openpilot/selfdrive/controls/lib/long_shaping.py 2>&1"},
   {"id": "code_longplan",  "name": "v3.2.6e longitudinal planner present", "cmd": "grep -c 'v3.2.6e' /data/openpilot/selfdrive/controls/lib/longitudinal_planner.py 2>&1"},
+  {"id": "code_sla",       "name": "v3.2.6e SLA tap-to-adopt present",     "cmd": "grep -ci 'tap-to-adopt' /data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py 2>&1"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
   {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
   {"id": "updater_target", "name": "Updater target branch",              "cmd": "cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"},

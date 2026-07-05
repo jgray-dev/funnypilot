@@ -52,8 +52,34 @@ vehicle owes its passengers longitudinally:
   bypass, NaN containment, LeadGrace arm/hold/release/never-brake
   invariants); test_longcontrol.py gains bumpless-entry and starting-ramp
   cases. All import-light, run without the full openpilot env.
+* feat: Speed Limit Assist rewritten ("the cluster set speed IS the SLA
+  target") to fix the dynamic-offset carryover and the activation jerk:
+  - Tap-to-adopt activation: with SLA armed (mode = Assist, long engaged —
+    no prompts, no auto-activation), a SHORT cruise-down tap activates SLA
+    and ADOPTS the current set speed unchanged: going a set 50 mph in a 45
+    zone -> active at +11%, zero speed change. The tap is swallowed in
+    cruise.py so it no longer also decrements the set speed. Long presses
+    remain ordinary speed adjustments and never activate SLA.
+  - Offset %% carryover between zones, working: 60 set in a 50 zone = +20%;
+    a 30 zone becomes 36. Manually dropping to 33 re-locks the ratio at
+    +10%; the next 40 zone becomes 44. ROOT CAUSE FIX: the old cruise
+    helper snapped the set speed to the RAW limit on every zone change
+    (it never knew the ratio), and SLA then recomputed the ratio from that
+    snapped value -> ratio wiped to ~0 at every zone boundary. The helper
+    now snaps to limit*(1+ratio) (reads slaDynamicOffset from
+    longitudinalPlanSP), which makes SLA's recompute-from-cluster
+    idempotent — manual button taps and our own snaps use one code path.
+  - Deactivation only on longitudinal disengage or turning the mode off
+    (ratio resets). Losing the speed limit source holds the last known
+    zone. The preActive confirm flow, CST thresholds and pending state are
+    gone; the SLA gas-gating accel path (dead since 3.2.5st — published
+    but never consumed) is removed per the single-authority rule: SLA is
+    speed-domain only, braking into a lower zone is the MPC's job.
+  - tests: test_speed_limit_assist.py rewritten import-light (17 cases,
+    including both examples above, snap idempotency, clamp at +/-50%,
+    long-press/stale-tap rejection).
 * chore: FUNNYPILOT_VERSION -> 3.2.6e; /api/diagnostics EXPECTED_VERSION ->
-  3.2.6e, new code_longshape / code_longplan self-checks.
+  3.2.6e, new code_longshape / code_longplan / code_sla self-checks.
 
 FunnyPilot v3.2.5st (2026-07-04)
 ========================

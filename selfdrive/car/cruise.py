@@ -109,9 +109,10 @@ class VCruiseHelper(VCruiseHelperSP):
       return
 
     # Speed Limit Assist for Non PCM long cars.
-    # True: Disallow set speed changes when user confirmed the target set speed during preActive state
-    # False: Allow set speed changes as SLA is not requesting user confirmation
-    if self.update_speed_limit_assist_pre_active_confirmed(button_type):
+    # FunnyPilot v3.2.6e: a short cruise-down tap while SLA is armed is the
+    # SLA activation gesture — it adopts the current set speed, so the set
+    # speed must not change here.
+    if self.update_speed_limit_assist_pre_active_confirmed(button_type, long_press):
       return
 
     long_press, v_cruise_delta = VCruiseHelperSP.update_v_cruise_delta(self, long_press, v_cruise_delta)

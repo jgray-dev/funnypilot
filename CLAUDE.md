@@ -125,9 +125,41 @@ removed — do not reintroduce accel-domain overrides downstream of the MPC.
 - `selfdrive/controls/tests/test_longcontrol.py` — added
   `test_bumpless_pid_entry`, `test_starting_ramp` (+ `_make_long_control`
   helper with a minimal tuned CP).
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
+  REWRITTEN. Model: "the cluster set speed IS the SLA target". States:
+  disabled -> inactive (silently armed, no prompts/auto-activation) ->
+  active/adapting. Activation ONLY by short cruise-down tap (tap-to-adopt):
+  ratio = (set_speed - limit)/limit clamped +/-50%, set speed untouched.
+  While active, any cluster change re-derives the ratio
+  (`_set_ratio_from_cluster`) — IDEMPOTENT with the cruise_ext zone-change
+  snap because the snap writes exactly limit*(1+ratio) (this idempotency is
+  what fixes the v0.9.8 ratio self-wipe at zone boundaries). Ratio basis is
+  `speed_limit_final_last` (posted limit + static offset). Deactivation only
+  on long disengage / mode off (ratio reset). Import-light: Params/helpers
+  imports are guarded so tests run containerless; `params` injectable.
+  `sla_locked` property now == is_active (drives the UI badge).
+  preActive/pending/CST/confirm flows and the dead gas-gating accel path
+  removed — SLA is SPEED-DOMAIN ONLY (output_a_target = a_ego, display).
+  Kept for compat: update() signature, ACTIVE_STATES/ENABLED_STATES,
+  published fields, update_car_state (tap classifier, 100 Hz from plannerd).
+- `sunnypilot/selfdrive/car/cruise_ext.py` — reads `slaDynamicOffset` from
+  longitudinalPlanSP; `update_speed_limit_assist_v_cruise_non_pcm` snaps
+  v_cruise to `limit*(1+ratio)` ONLY on zone change while ALREADY active
+  (never on activation — adoption keeps set speed).
+  `update_speed_limit_assist_pre_active_confirmed(button_type, long_press)`
+  now swallows short decel taps while armed (the activation gesture) so the
+  tap doesn't decrement the set speed; long presses pass through.
+  req_plus/req_minus confirm machinery removed.
+- `selfdrive/car/cruise.py` — passes `long_press` to the swallow hook.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/tests/test_speed_limit_assist.py`
+  — REWRITTEN import-light (FakeParams/FakeEvents, 17 cases): both user
+  examples (60/50 -> +20% -> 36 in a 30 zone; drop to 33 -> +10% -> 44 in a
+  40 zone), no-jerk adoption, snap idempotency, clamp, long-press/stale-tap
+  rejection, limit dropout hold.
 - `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.2.6e; new
-  `code_longshape` (`class AccelJerkShaper`) and `code_longplan`
-  (`v3.2.6e` marker in longitudinal_planner.py) self-checks.
+  `code_longshape` (`class AccelJerkShaper`), `code_longplan`
+  (`v3.2.6e` marker in longitudinal_planner.py) and `code_sla`
+  (`tap-to-adopt` in speed_limit_assist.py) self-checks.
 - KNOWN pre-existing: long_v2/tests/test_physics.py corner-speed/braking
   expectations fail on 3.2.5st too (test-only math mismatch, untouched).
 - NOT runnable in CI containers: plant/maneuver tests need the aarch64

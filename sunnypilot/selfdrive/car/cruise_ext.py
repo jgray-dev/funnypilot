@@ -12,7 +12,6 @@ from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import ACTIVE_STATES as SLA_ACTIVE_STATES
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target
 
 ButtonType = car.CarState.ButtonEvent.Type
 SpeedLimitAssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
@@ -61,8 +60,7 @@ class VCruiseHelperSP:
     self.speed_limit_final_last = 0.
     self.speed_limit_final_last_kph = 0.
     self.prev_speed_limit_final_last_kph = 0.
-    self.req_plus = False
-    self.req_minus = False
+    self.sla_ratio = 0.  # FunnyPilot v3.2.6e: dynamic offset ratio carried between zones
 
   def read_custom_set_speed_params(self) -> None:
     self.custom_acc_enabled = self.params.get_bool("CustomAccIncrementsEnabled")
@@ -110,29 +108,37 @@ class VCruiseHelperSP:
   def update_speed_limit_assist(self, is_metric, LP_SP: custom.LongitudinalPlanSP) -> None:
     resolver = LP_SP.speedLimit.resolver
     self.has_speed_limit = resolver.speedLimitValid or resolver.speedLimitLastValid
-    self.speed_limit_final_last = LP_SP.speedLimit.resolver.speedLimitFinalLast
+    self.speed_limit_final_last = resolver.speedLimitFinalLast
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
-    self.req_plus, self.req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
-                                                           self.speed_limit_final_last, is_metric)
+    self.sla_ratio = LP_SP.speedLimit.assist.slaDynamicOffset
 
   @property
   def update_speed_limit_final_last_changed(self) -> bool:
     return self.has_speed_limit and bool(self.speed_limit_final_last_kph != self.prev_speed_limit_final_last_kph)
 
-  def update_speed_limit_assist_pre_active_confirmed(self, button_type: car.CarState.ButtonEvent.Type) -> bool:
-    if self.sla_state == SpeedLimitAssistState.preActive or self.prev_sla_state == SpeedLimitAssistState.preActive:
-      if button_type == ButtonType.decelCruise and self.req_minus:
-        return True
-      if button_type == ButtonType.accelCruise and self.req_plus:
-        return True
+  def update_speed_limit_assist_pre_active_confirmed(self, button_type: car.CarState.ButtonEvent.Type, long_press: bool = False) -> bool:
+    """FunnyPilot v3.2.6e: swallow the SLA activation tap.
 
-    return False
+    While SLA is armed (silently waiting), a SHORT cruise-down tap activates
+    SLA and adopts the current set speed — so the tap must NOT also decrement
+    the set speed. Long presses stay ordinary speed adjustments.
+    """
+    if long_press or button_type != ButtonType.decelCruise:
+      return False
+
+    armed = self.sla_state in (SpeedLimitAssistState.inactive, SpeedLimitAssistState.preActive)
+    return armed and self.has_speed_limit
 
   def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
-    if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
-                                                self.update_speed_limit_final_last_changed):
-      self.v_cruise_kph = np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
+    # FunnyPilot v3.2.6e: while SLA is active the cluster set speed IS the SLA
+    # target. On a zone change, carry the dynamic offset ratio into the new
+    # zone: set speed := new_limit * (1 + ratio). On ACTIVATION nothing is
+    # written — tap-to-adopt keeps the set speed exactly as it was.
+    if (self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES and
+            self.update_speed_limit_final_last_changed):
+      target_kph = self.speed_limit_final_last_kph * (1.0 + self.sla_ratio)
+      self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
     self.prev_sla_state = self.sla_state
     self.prev_speed_limit_final_last_kph = self.speed_limit_final_last_kph
