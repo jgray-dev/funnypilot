@@ -67,6 +67,48 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.7 Changes (based on funnypilot-3.2.6e)
+
+FORENSICS BUILD — the "smoothing feels off after sitting parked" issue
+RETURNED on 3.2.5st despite the updater guards. 3.2.7 changes no control
+behavior; it records evidence to discriminate hypotheses: (A) code swap
+while parked, (B) runtime lat_interp degradation, (C) live-tuning drift.
+Root-cause fix goes in the NEXT version after the user copies logs from a
+reproduction. When triaging: read code_identity.jsonl first (any
+pulse-change record = hypothesis A; hashes catch non-git swaps), then
+lat_interp.jsonl hmin around the user's marks.jsonl timestamps (hmin < 4 =
+hypothesis B), then compare ctx blocks across days (hypothesis C).
+
+- `selfdrive/controls/lib/triage_recorder.py` — NEW, stdlib-only.
+  `TriageRecorder`: rotating JSONL appender (/data/funnypilot_triage, 4MB,
+  one .1 backup, every operation try/excepted — returns False, never
+  raises). `LatInterpMonitor`: aggregates 100 Hz control-loop samples into
+  1 Hz records {n, la, lo, hmin, havg, v, lc, clim, at, ac} + `ctx` every
+  10th record via context_fn (exceptions -> ctx=null). hmin is the per-
+  second MINIMUM health so transient stalls survive aggregation.
+- `selfdrive/controls/controlsd.py` — instantiates the monitor and calls
+  `triage.sample(...)` once per control frame after clip_curvature (uses
+  lane_change_active, curvature_limited, long_plan.aTarget,
+  actuators.accel already in scope). context_fn reads liveTorqueParameters
+  (latAccelFactorFiltered/frictionCoefficientFiltered), liveParameters
+  (angleOffsetDeg/stiffnessFactor), liveDelay.lateralDelay.
+- `sunnypilot/navd/nav_webserver.py` — code-identity snapshots: on startup
+  (kind=boot) and every 10 min (`_pulse_task`; full record only on change:
+  kind=pulse-change, else tiny pulse-ok heartbeat) capturing branch,
+  commit, dirty, version, UpdaterTargetBranch, staged branch,
+  .overlay_consistent, boot_id, uptime, sha1[:12] of lat_interp.py /
+  long_shaping.py / controlsd.py / latcontrol_torque.py (_FEEL_FILES).
+  Endpoints: GET /api/logs (list), GET /api/logs/{name}?tail_kb=N
+  (whitelist `_TRIAGE_NAME_RE`, tail-read, partial first line dropped),
+  POST /api/logs/mark (user marker + note -> marks.jsonl).
+  EXPECTED_VERSION -> 3.2.7; new diag rows: code_triage (grep), and
+  triage_boot/triage_lat (info: last records inline in Verify).
+- `sunnypilot/navd/nav_web/index.html` — "Logs" topbar button + bottom-
+  sheet modal: file chips, 128K tail viewer, Copy (clipboard +
+  execCommand fallback), purple "⚑ Mark issue now" (prompt for note).
+- `FUNNYPILOT_VERSION` — 3.2.6e -> 3.2.7.
+- `selfdrive/controls/lib/tests/test_triage_recorder.py` — NEW (10 cases).
+
 ### v3.2.6e Changes (based on funnypilot-3.2.5st)
 
 EXPERIMENTAL longitudinal control rewrite: single-authority architecture. The

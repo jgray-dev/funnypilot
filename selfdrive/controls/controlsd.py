@@ -14,6 +14,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_curvature_from_plan
 from openpilot.selfdrive.controls.lib.lat_interp import LatInterp, SETTLE
+from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -64,6 +65,11 @@ class Controls(ControlsExt):
     # the 100:20 Hz cadence drifts. Default = SETTLE (delay-aware smoothing); set
     # INTERP_METHOD = LINEAR above for the plain validated delta/5 feel.
     self.lat_interp = LatInterp(method=INTERP_METHOD)
+
+    # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
+    # recurring "smoothing feels off after sitting parked" report. Viewable and
+    # copyable from the web UI (Logs button). Best-effort: never breaks controls.
+    self.triage = LatInterpMonitor(TriageRecorder("lat_interp"))
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -184,6 +190,20 @@ class Controls(ControlsExt):
       except Exception:
         pass
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
+
+    # FunnyPilot v3.2.7: 1 Hz triage record — interp health, active fractions,
+    # long targets; live-tuning context every 10 s (angle offset / torque
+    # learner / lateral delay drift is hypothesis C for the "feels off" report).
+    self.triage.sample(time.monotonic(), CC.latActive, CC.longActive, CS.vEgo,
+                       self.lat_interp.health_frames, lane_change_active, curvature_limited,
+                       long_plan.aTarget, actuators.accel,
+                       context_fn=lambda: {
+                         "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
+                         "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),
+                         "aOff": round(float(lp.angleOffsetDeg), 3),
+                         "stiff": round(float(lp.stiffnessFactor), 3),
+                         "latDelay": round(float(self.sm['liveDelay'].lateralDelay), 3),
+                       })
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,

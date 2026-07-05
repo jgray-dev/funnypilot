@@ -5,11 +5,14 @@ POST /api/flash  — hard-sets device to chosen funnypilot branch and reboots.
 GET  /api/branches — list funnypilot branches, newest first.
 """
 import asyncio
+import hashlib
 import json
 import os
 import pty
 import fcntl
+import re
 import termios
+import time
 import struct
 import aiohttp
 from aiohttp import web
@@ -19,8 +22,22 @@ _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
 _SHELL = "/bin/bash"
 _PORT = 8888
 
+# FunnyPilot v3.2.7: triage flight-recorder logs (see
+# selfdrive/controls/lib/triage_recorder.py for the format and rationale).
+TRIAGE_DIR = "/data/funnypilot_triage"
+_TRIAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(jsonl|jsonl\.1|log)$")
+_PULSE_PERIOD_S = 600  # code-identity pulse every 10 min, catches mid-parked swaps
+_PULSE_MAX_BYTES = 1024 * 1024
+# files whose on-disk content defines the "smoothing" feel — hashed each pulse
+_FEEL_FILES = [
+  "/data/openpilot/selfdrive/controls/lib/lat_interp.py",
+  "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
+  "/data/openpilot/selfdrive/controls/controlsd.py",
+  "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
+]
+
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.6e"
+EXPECTED_VERSION = "3.2.7"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -45,6 +62,9 @@ DIAG_CHECKS = [
   {"id": "code_longplan",  "name": "v3.2.6e longitudinal planner present", "cmd": "grep -c 'v3.2.6e' /data/openpilot/selfdrive/controls/lib/longitudinal_planner.py 2>&1"},
   {"id": "code_sla",       "name": "v3.2.6e SLA tap-to-adopt present",     "cmd": "grep -ci 'tap-to-adopt' /data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py 2>&1"},
   {"id": "code_sccv2",     "name": "v3.2.6e SCC curve cap present",        "cmd": "grep -c 'class CurveSpeedCap' /data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py 2>&1"},
+  {"id": "code_triage",    "name": "v3.2.7 triage recorder present",       "cmd": "grep -c 'class TriageRecorder' /data/openpilot/selfdrive/controls/lib/triage_recorder.py 2>&1"},
+  {"id": "triage_boot",    "name": "Last code-identity records",           "cmd": "tail -3 /data/funnypilot_triage/code_identity.jsonl 2>/dev/null || echo '(no triage log yet)'"},
+  {"id": "triage_lat",     "name": "Last onroad interp records",           "cmd": "tail -3 /data/funnypilot_triage/lat_interp.jsonl 2>/dev/null || echo '(no triage log yet)'"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
   {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
   {"id": "updater_target", "name": "Updater target branch",              "cmd": "cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"},
@@ -294,6 +314,145 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
   return ws
 
 
+# ---------------------------------------------------------------------------
+# FunnyPilot v3.2.7 triage: code-identity snapshots + log access for the web UI
+# ---------------------------------------------------------------------------
+
+async def _sh(cmd: str, timeout: float = 10) -> str:
+  try:
+    proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE,
+                                                 stderr=asyncio.subprocess.STDOUT)
+    out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    return out_b.decode(errors="replace").strip()
+  except Exception as e:
+    return f"(error: {e})"
+
+
+def _file_hash(path: str) -> str:
+  try:
+    with open(path, "rb") as f:
+      return hashlib.sha1(f.read()).hexdigest()[:12]
+  except Exception:
+    return "(missing)"
+
+
+def _append_jsonl(name: str, record: dict, max_bytes: int = _PULSE_MAX_BYTES) -> None:
+  try:
+    os.makedirs(TRIAGE_DIR, exist_ok=True)
+    path = os.path.join(TRIAGE_DIR, name)
+    if os.path.exists(path) and os.path.getsize(path) >= max_bytes:
+      os.replace(path, path + ".1")
+    record.setdefault("t", round(time.time(), 2))  # noqa: TID251 (wall clock is correct for log records)
+    with open(path, "a") as f:
+      f.write(json.dumps(record, separators=(",", ":")) + "\n")
+  except Exception:
+    pass
+
+
+async def _code_identity() -> dict:
+  """Everything needed to prove whether the code on disk changed (hypothesis A)."""
+  ident = {
+    "branch": await _sh(f"{_GIT} rev-parse --abbrev-ref HEAD"),
+    "commit": await _sh(f"{_GIT} rev-parse --short HEAD"),
+    "dirty": await _sh(f"{_GIT} status --porcelain | head -5"),
+    "version": await _sh("cat /data/openpilot/FUNNYPILOT_VERSION"),
+    "updater_target": await _sh("cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"),
+    "staged": await _sh("git -c safe.directory='*' -C /data/safe_staging/finalized rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(none)'"),
+    "overlay_consistent": os.path.exists("/data/safe_staging/.overlay_consistent"),
+    "hashes": {os.path.basename(p): _file_hash(p) for p in _FEEL_FILES},
+  }
+  try:
+    with open("/proc/sys/kernel/random/boot_id") as f:
+      ident["boot_id"] = f.read().strip()
+    with open("/proc/uptime") as f:
+      ident["uptime_s"] = round(float(f.read().split()[0]), 1)
+  except Exception:
+    pass
+  return ident
+
+
+async def _boot_snapshot() -> None:
+  ident = await _code_identity()
+  ident["kind"] = "boot"
+  _append_jsonl("code_identity.jsonl", ident)
+
+
+async def _pulse_task() -> None:
+  """Every 10 min, log the code identity — if something swaps the code while the
+  car sits parked, this pins down WHEN it happened, not just that it happened."""
+  last = None
+  while True:
+    try:
+      ident = await _code_identity()
+      key = (ident.get("branch"), ident.get("commit"), json.dumps(ident.get("hashes", {}), sort_keys=True),
+             ident.get("updater_target"), ident.get("staged"), bool(ident.get("dirty")))
+      if key != last:
+        # identity changed (or first pulse): always record, flag the change
+        ident["kind"] = "pulse-change" if last is not None else "pulse-start"
+        _append_jsonl("code_identity.jsonl", ident)
+        last = key
+      else:
+        _append_jsonl("code_identity.jsonl", {"kind": "pulse-ok", "commit": ident.get("commit"),
+                                              "uptime_s": ident.get("uptime_s")})
+    except Exception:
+      pass
+    await asyncio.sleep(_PULSE_PERIOD_S)
+
+
+async def handle_logs_list(request: web.Request) -> web.Response:
+  try:
+    files = []
+    if os.path.isdir(TRIAGE_DIR):
+      for name in sorted(os.listdir(TRIAGE_DIR)):
+        if _TRIAGE_NAME_RE.match(name):
+          p = os.path.join(TRIAGE_DIR, name)
+          st = os.stat(p)
+          files.append({"name": name, "size": st.st_size, "mtime": int(st.st_mtime)})
+    return web.json_response({"dir": TRIAGE_DIR, "files": files})
+  except Exception as e:
+    return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_logs_get(request: web.Request) -> web.Response:
+  try:
+    name = request.match_info["name"]
+    if not _TRIAGE_NAME_RE.match(name):
+      return web.json_response({"error": "bad name"}, status=400)
+    path = os.path.join(TRIAGE_DIR, name)
+    if not os.path.isfile(path):
+      return web.json_response({"error": "not found"}, status=404)
+    tail_kb = min(int(request.query.get("tail_kb", "128")), 2048)
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+      if size > tail_kb * 1024:
+        f.seek(size - tail_kb * 1024)
+        f.readline()  # drop the partial first line
+      text = f.read().decode(errors="replace")
+    return web.json_response({"name": name, "size": size, "truncated": size > tail_kb * 1024, "text": text})
+  except Exception as e:
+    return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_logs_mark(request: web.Request) -> web.Response:
+  """User-aligned ground truth: 'the issue is happening RIGHT NOW'."""
+  try:
+    note = ""
+    try:
+      body = await request.json()
+      note = str(body.get("note", ""))[:500]
+    except Exception:
+      pass
+    _append_jsonl("marks.jsonl", {"kind": "user-mark", "note": note})
+    return web.json_response({"ok": True})
+  except Exception as e:
+    return web.json_response({"error": str(e)}, status=500)
+
+
+async def _start_triage_background(app: web.Application) -> None:
+  await _boot_snapshot()
+  app["triage_pulse"] = asyncio.create_task(_pulse_task())
+
+
 async def handle_index(request: web.Request) -> web.Response:
   index_path = os.path.join(_STATIC_DIR, "index.html")
   if os.path.exists(index_path):
@@ -310,6 +469,10 @@ def main():
   app.router.add_get("/api/branches", handle_branches)
   app.router.add_post("/api/flash", handle_flash)
   app.router.add_post("/api/diagnostics", handle_diagnostics)
+  app.router.add_get("/api/logs", handle_logs_list)
+  app.router.add_get("/api/logs/{name}", handle_logs_get)
+  app.router.add_post("/api/logs/mark", handle_logs_mark)
+  app.on_startup.append(_start_triage_background)
 
   if os.path.isdir(_STATIC_DIR):
     app.router.add_static("/static", _STATIC_DIR)

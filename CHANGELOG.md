@@ -1,3 +1,48 @@
+FunnyPilot v3.2.7 (2026-07-05)
+========================
+Forensics build for the RETURNED "smoothing feels turned off after the car
+sits parked" issue (came back after ~8 h parked despite the 3.2.5st
+updater-revert guards). This version changes NO control behavior vs 3.2.6e —
+it adds a black-box flight recorder so the next occurrence produces evidence
+instead of a feeling. Copy the logs from the web UI when it happens; the
+root-cause fix ships in the next version once the data says which
+hypothesis is real:
+
+  A. CODE SWAP — something still replaces the code while parked/at boot.
+     nav_webserver logs a code-identity record at startup and every 10 min
+     (branch, commit, dirty flag, FUNNYPILOT_VERSION, UpdaterTargetBranch,
+     staged-update branch, .overlay_consistent, boot_id, uptime, and sha1
+     hashes of the four feel-defining files: lat_interp.py, long_shaping.py,
+     controlsd.py, latcontrol_torque.py). Pulses only write full records on
+     CHANGE (pulse-change) — so if a swap happens at 3am while parked, the
+     log pins down when, not just that.
+  B. RUNTIME DEGRADATION — code fine, but lat_interp loses sub-frame
+     headroom or falls into fallbacks. controlsd writes a 1 Hz record while
+     onroad: interp health min/avg (5 healthy, <4 degrading — min is kept
+     so a transient stall can't be averaged away), lat/long active
+     fractions, v_ego, lane-change flag, ISO curvature-clip count, long
+     aTarget vs commanded accel.
+  C. TUNING DRIFT — same code, different feel: every 10 s the 1 Hz record
+     embeds a live-tuning context (torque latAccelFactorFiltered, torque
+     friction, angleOffsetDeg, stiffnessFactor, lateralDelay) — if the
+     learners moved while parked, it shows here.
+
+* feat: NEW selfdrive/controls/lib/triage_recorder.py — TriageRecorder
+  (size-capped rotating JSONL, /data/funnypilot_triage, 4MB + .1 backup,
+  all IO best-effort so telemetry can never break controls) +
+  LatInterpMonitor (100 Hz samples -> 1 Hz aggregate records).
+* feat: web UI "Logs" button — list, view (128K tail), and one-tap COPY of
+  every triage log, plus a purple "Mark issue now" button that appends a
+  timestamped marker (with optional note) to marks.jsonl so the subjective
+  moment can be lined up with the recordings.
+* feat: /api/logs, /api/logs/{name}?tail_kb=N, POST /api/logs/mark
+  (filename whitelist, no path traversal); Verify gains code_triage +
+  triage_boot/triage_lat info rows showing the latest records inline.
+* chore: FUNNYPILOT_VERSION -> 3.2.7; EXPECTED_VERSION -> 3.2.7.
+* tests: test_triage_recorder.py (10 cases: rotation, 1 Hz cadence,
+  min-not-averaged aggregation, context cadence + exception containment,
+  name whitelist, hash helper).
+
 FunnyPilot v3.2.6e (2026-07-05)
 ========================
 EXPERIMENTAL — longitudinal control rewritten around a single-authority
