@@ -75,6 +75,31 @@ class TestLatInterpMonitor:
     assert recs[10].get("ctx") == {"laf": 2.75}
     assert all("ctx" not in r for r in recs[1:10])
 
+  def test_oscillation_evidence_fields(self, tmp_path):
+    # a driver-override limit cycle: steeringPressed toggles every 20 frames,
+    # override scale dips to 0.6 while pressed
+    mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
+    for i in range(105):
+      pressed = (i // 20) % 2 == 1  # off 20, on 20, ... -> rising edges at 20, 60, 100
+      self._sample(mon, i * 0.01, steering_pressed=pressed,
+                   override_scale=0.6 if pressed else 1.0,
+                   saturated=pressed, torque=0.9 if pressed else 0.4)
+    recs = read_jsonl(tmp_path / "lat.jsonl")
+    r = recs[0]
+    assert r["spe"] == 3          # the limit cycle is directly countable
+    assert 0.3 <= r["sp"] <= 0.7
+    assert r["ovr"] == 0.6        # softening engaged this second
+    assert r["tqx"] == 0.9
+    assert 0.3 <= r["sat"] <= 0.7
+
+  def test_edge_across_record_boundary_counted_once(self, tmp_path):
+    mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
+    # pressed continuously across the 1 s boundary: only ONE edge total
+    for i in range(210):
+      self._sample(mon, i * 0.01, steering_pressed=(i >= 90))
+    recs = read_jsonl(tmp_path / "lat.jsonl")
+    assert recs[0]["spe"] + recs[1]["spe"] == 1
+
   def test_context_fn_exception_contained(self, tmp_path):
     mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
     def boom():

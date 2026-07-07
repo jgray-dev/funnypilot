@@ -78,6 +78,16 @@ class LatInterpMonitor:
     clim     frames where curvature was clipped by ISO limits
     at/ac    last long plan aTarget / commanded accel (smoothing sanity)
     ctx      every CONTEXT_EVERY records: live tuning snapshot (hypothesis C)
+
+  Lateral-oscillation evidence (the "bite then loosen" report):
+    sp       fraction of frames with CS.steeringPressed
+    spe      steeringPressed RISING EDGES this second — a driver-override
+             limit cycle shows up directly as spe >= 2 while hands are off
+    ovr      MINIMUM driver-override torque scale this second (1.0 = no
+             softening; 0.6 = fully softened — a 40% torque cut)
+    sat      fraction of frames with the lat controller output saturated
+    slb      fraction of frames with steer_limited_by_safety
+    tqx      max |commanded steer torque| this second (normalized 0..1)
   """
 
   PERIOD = 1.0
@@ -87,6 +97,7 @@ class LatInterpMonitor:
     self.recorder = recorder
     self._emits = 0
     self._t0 = None
+    self._sp_prev = False  # persists across records so edges spanning seconds count once
     self._reset_acc()
 
   def _reset_acc(self):
@@ -100,9 +111,17 @@ class LatInterpMonitor:
     self._curv_limited = 0
     self._a_target = 0.0
     self._accel = 0.0
+    self._sp = 0
+    self._sp_edges = 0
+    self._ovr_min = 1.0
+    self._sat = 0
+    self._slb = 0
+    self._tq_max = 0.0
 
   def sample(self, mono_t: float, lat_active: bool, long_active: bool, v_ego: float, health_frames: float,
-             lane_change: bool, curvature_limited: bool, a_target: float, accel: float, context_fn=None) -> None:
+             lane_change: bool, curvature_limited: bool, a_target: float, accel: float,
+             steering_pressed: bool = False, override_scale: float = 1.0, saturated: bool = False,
+             steer_limited: bool = False, torque: float = 0.0, context_fn=None) -> None:
     try:
       if self._t0 is None:
         self._t0 = mono_t
@@ -117,6 +136,14 @@ class LatInterpMonitor:
       self._curv_limited += int(curvature_limited)
       self._a_target = float(a_target)
       self._accel = float(accel)
+      self._sp += int(steering_pressed)
+      if steering_pressed and not self._sp_prev:
+        self._sp_edges += 1
+      self._sp_prev = bool(steering_pressed)
+      self._ovr_min = min(self._ovr_min, float(override_scale))
+      self._sat += int(saturated)
+      self._slb += int(steer_limited)
+      self._tq_max = max(self._tq_max, abs(float(torque)))
 
       if mono_t - self._t0 < self.PERIOD:
         return
@@ -132,6 +159,12 @@ class LatInterpMonitor:
         "clim": self._curv_limited,
         "at": round(self._a_target, 3),
         "ac": round(self._accel, 3),
+        "sp": round(self._sp / self._n, 2),
+        "spe": self._sp_edges,
+        "ovr": round(self._ovr_min, 2),
+        "sat": round(self._sat / self._n, 2),
+        "slb": round(self._slb / self._n, 2),
+        "tqx": round(self._tq_max, 3),
       }
       if context_fn is not None and self._emits % self.CONTEXT_EVERY == 0:
         try:

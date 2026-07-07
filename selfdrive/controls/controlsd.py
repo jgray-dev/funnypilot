@@ -191,12 +191,25 @@ class Controls(ControlsExt):
         pass
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
 
+    actuators.curvature = self.desired_curvature
+    steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
+                                                       self.steer_limited_by_safety, self.desired_curvature,
+                                                       self.calibrated_pose, curvature_limited, lat_delay)
+    actuators.torque = float(steer)
+    actuators.steeringAngleDeg = float(steeringAngleDeg)
+
     # FunnyPilot v3.2.7: 1 Hz triage record — interp health, active fractions,
-    # long targets; live-tuning context every 10 s (angle offset / torque
-    # learner / lateral delay drift is hypothesis C for the "feels off" report).
+    # long targets, plus lateral-oscillation evidence (steeringPressed edges,
+    # driver-override scale, saturation) for the "bite then loosen" report;
+    # live-tuning context every 10 s (drift is hypothesis C for "feels off").
     self.triage.sample(time.monotonic(), CC.latActive, CC.longActive, CS.vEgo,
                        self.lat_interp.health_frames, lane_change_active, curvature_limited,
                        long_plan.aTarget, actuators.accel,
+                       steering_pressed=CS.steeringPressed,
+                       override_scale=getattr(self.LaC, '_override_scale', 1.0),
+                       saturated=bool(getattr(lac_log, 'saturated', False)),
+                       steer_limited=self.steer_limited_by_safety,
+                       torque=actuators.torque,
                        context_fn=lambda: {
                          "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
                          "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),
@@ -204,13 +217,6 @@ class Controls(ControlsExt):
                          "stiff": round(float(lp.stiffnessFactor), 3),
                          "latDelay": round(float(self.sm['liveDelay'].lateralDelay), 3),
                        })
-
-    actuators.curvature = self.desired_curvature
-    steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
-                                                       self.steer_limited_by_safety, self.desired_curvature,
-                                                       self.calibrated_pose, curvature_limited, lat_delay)
-    actuators.torque = float(steer)
-    actuators.steeringAngleDeg = float(steeringAngleDeg)
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)

@@ -86,10 +86,21 @@ hypothesis B), then compare ctx blocks across days (hypothesis C).
   1 Hz records {n, la, lo, hmin, havg, v, lc, clim, at, ac} + `ctx` every
   10th record via context_fn (exceptions -> ctx=null). hmin is the per-
   second MINIMUM health so transient stalls survive aggregation.
+  Post-first-drive: also {sp, spe, ovr, sat, slb, tqx} for the "bite then
+  loosen" lateral oscillation — spe counts steeringPressed RISING EDGES
+  (edge state persists across record boundaries so one long press = 1),
+  ovr is the per-second MIN of latcontrol_torque._override_scale.
+  PRIME SUSPECT: v3.2.3st driver-override softening limit cycle (0.6 scale
+  == the reported 5->3 torque drop; HKG STEER_THRESHOLD=150 w/ 5-frame
+  debounce can be tripped by wheel-inertia reaction torque during hard
+  bites; freeze_integrator on steeringPressed compounds it). spe >= 2 +
+  ovr == 0.6 during an event confirms; fix planned for 3.2.8.
 - `selfdrive/controls/controlsd.py` — instantiates the monitor and calls
-  `triage.sample(...)` once per control frame after clip_curvature (uses
+  `triage.sample(...)` once per control frame AFTER LaC.update /
+  actuators.torque (needs lac_log.saturated + torque; also uses
   lane_change_active, curvature_limited, long_plan.aTarget,
-  actuators.accel already in scope). context_fn reads liveTorqueParameters
+  actuators.accel, CS.steeringPressed, steer_limited_by_safety,
+  getattr(LaC, '_override_scale')). context_fn reads liveTorqueParameters
   (latAccelFactorFiltered/frictionCoefficientFiltered), liveParameters
   (angleOffsetDeg/stiffnessFactor), liveDelay.lateralDelay.
 - `sunnypilot/navd/nav_webserver.py` — code-identity snapshots: on startup

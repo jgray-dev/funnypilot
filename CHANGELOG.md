@@ -42,6 +42,21 @@ hypothesis is real:
 * tests: test_triage_recorder.py (10 cases: rotation, 1 Hz cadence,
   min-not-averaged aggregation, context cadence + exception containment,
   name whitelist, hash helper).
+* feat (after first 3.2.7 drive): lateral-oscillation evidence for the new
+  "bite then loosen" report. The 1 Hz record gains: sp (steeringPressed
+  fraction), spe (steeringPressed RISING EDGES per second — a
+  driver-override limit cycle is directly countable), ovr (minimum
+  driver-override torque scale, 1.0 = off / 0.6 = fully softened = exactly
+  the reported 5 -> 3 torque drop), sat (lat controller saturation
+  fraction), slb (steer_limited_by_safety fraction), tqx (max |commanded
+  torque|). PRIME SUSPECT under test: the v3.2.3st driver-override
+  softening — a hard steering bite twists the torsion bar past HKG's
+  STEER_THRESHOLD (150, 5-frame debounce) via wheel-rim inertia/resting
+  hand, steeringPressed latches, torque is scaled to 0.6 AND the PID
+  integrator freezes, the wheel decelerates, pressed clears, full torque
+  bites again -> 2-4 Hz limit cycle. spe >= 2 with ovr 0.6 during an
+  oscillation event confirms it; fix lands in 3.2.8. Still zero
+  control-behavior changes in 3.2.7.
 
 FunnyPilot v3.2.6e (2026-07-05)
 ========================
