@@ -1,3 +1,39 @@
+FunnyPilot v3.2.8 (2026-07-07)
+========================
+Fix for the "bite then loosen" lateral oscillation reported on the first
+3.2.7 drive: strong back-and-forth alternation during large steering
+adjustments — a hard initial bite, an immediate ~40% loosen, repeating at a
+few Hz.
+
+* fix: the v3.2.3st driver-override softening could limit-cycle against the
+  controller's own output. It scaled TOTAL steering torque to 60% the
+  instant CS.steeringPressed latched — but steeringPressed is just
+  torsion-bar torque over a threshold (HKG: 150 counts, 5-frame debounce),
+  and a hard steering bite can cross it with NO driver involved: the wheel
+  rim's own inertia (or a lightly resting hand) resists the rapid
+  acceleration and twists the bar. Full torque -> wheel accelerates ->
+  "pressed" -> torque cut to 60% AND PID integrator frozen -> wheel
+  decelerates -> bar relaxes -> "pressed" clears -> full torque bites
+  again. NEW selfdrive/controls/lib/override_gate.py: the softening now
+  engages only after a SUSTAINED press (0.4 s continuous) and releases only
+  after a sustained let-go (0.3 s), so it structurally cannot alternate.
+  Inertia blips (~0.1-0.25 s) never qualify; a genuine takeover engages
+  ~0.4 s in and holds steady through threshold flicker. The driver always
+  wins physically regardless — panda driver-torque limits and the EPS are
+  untouched, and the takeover-comfort feature is preserved.
+* note: this is the hypothesis the 3.2.7 instrumentation was built to test
+  (spe/ovr fields). The instrumentation stays on in 3.2.8 — if oscillation
+  persists, spe/ovr/sat/slb in lat_interp.jsonl will say what it actually
+  is; if it stops, the log will show spe blips with ovr pinned at 1.0
+  (gate rejecting them). The reported "5 -> 3" was illustrative, not
+  measured; the gate is safe either way because it only ever REDUCES how
+  often the softening can engage.
+* chore: FUNNYPILOT_VERSION -> 3.2.8; EXPECTED_VERSION -> 3.2.8; new
+  code_ovrgate self-check.
+* tests: test_override_gate.py (8 cases: the limit-cycle pattern can never
+  engage, sustained press engages/holds/releases correctly, per-frame
+  toggling cannot cycle the state, reset).
+
 FunnyPilot v3.2.7 (2026-07-05)
 ========================
 Forensics build for the RETURNED "smoothing feels turned off after the car

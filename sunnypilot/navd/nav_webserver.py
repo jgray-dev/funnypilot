@@ -37,7 +37,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.7"
+EXPECTED_VERSION = "3.2.8"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -63,6 +63,7 @@ DIAG_CHECKS = [
   {"id": "code_sla",       "name": "v3.2.6e SLA tap-to-adopt present",     "cmd": "grep -ci 'tap-to-adopt' /data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py 2>&1"},
   {"id": "code_sccv2",     "name": "v3.2.6e SCC curve cap present",        "cmd": "grep -c 'class CurveSpeedCap' /data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py 2>&1"},
   {"id": "code_triage",    "name": "v3.2.7 triage recorder present",       "cmd": "grep -c 'class TriageRecorder' /data/openpilot/selfdrive/controls/lib/triage_recorder.py 2>&1"},
+  {"id": "code_ovrgate",   "name": "v3.2.8 override gate present",         "cmd": "grep -c 'class OverrideGate' /data/openpilot/selfdrive/controls/lib/override_gate.py 2>&1"},
   {"id": "triage_boot",    "name": "Last code-identity records",           "cmd": "tail -3 /data/funnypilot_triage/code_identity.jsonl 2>/dev/null || echo '(no triage log yet)'"},
   {"id": "triage_lat",     "name": "Last onroad interp records",           "cmd": "tail -3 /data/funnypilot_triage/lat_interp.jsonl 2>/dev/null || echo '(no triage log yet)'"},
   {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},

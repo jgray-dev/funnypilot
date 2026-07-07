@@ -67,6 +67,36 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.8 Changes (based on funnypilot-3.2.7)
+
+Fix for the "bite then loosen" lateral oscillation (large adjustment ->
+hard bite -> immediate ~40% loosen -> repeat at a few Hz). Root cause per
+the 3.2.7 analysis: the v3.2.3st driver-override softening limit-cycled
+against the controller's own output — wheel-inertia reaction torque during
+hard bites latches CS.steeringPressed (HKG STEER_THRESHOLD=150, 5-frame
+debounce) with no driver involved, cutting torque to 60% + freezing the
+PID integrator; the wheel decelerates, pressed clears, full torque bites
+again. NOTE: user's "5 -> 3" torque figures were illustrative, not
+measured — the 3.2.7 spe/ovr instrumentation (still active) verifies this
+on-road: fixed => spe blips with ovr pinned 1.0; persisting => spe/ovr/
+sat/slb say what it actually is (next suspects: EPS/panda rate limits via
+slb+sat, then the interpolation bracket via tqx).
+
+- `selfdrive/controls/lib/override_gate.py` — NEW, stdlib-only.
+  `OverrideGate(dt)`: dwell-time hysteresis for the override softening.
+  Engages only after ENGAGE_TIME=0.4 s of CONTINUOUS steeringPressed;
+  releases only after RELEASE_TIME=0.3 s continuous clear. Inertia blips
+  (~0.1-0.25 s alternating) can never engage it; per-frame toggling can
+  change state at most once. reset() on lateral inactive.
+- `selfdrive/controls/lib/latcontrol_torque.py` — `_override_gate` gates
+  the 0.6 softening (was raw CS.steeringPressed). The 0.15 s
+  FirstOrderFilter ramp and _OVERRIDE_MIN_SCALE=0.6 are unchanged (the
+  code_override diag grep still matches); gate reset added to the
+  inactive branch. No other lateral changes.
+- `FUNNYPILOT_VERSION` 3.2.7 -> 3.2.8; nav_webserver EXPECTED_VERSION ->
+  3.2.8 + `code_ovrgate` self-check (`class OverrideGate`).
+- `selfdrive/controls/lib/tests/test_override_gate.py` — NEW (8 cases).
+
 ### v3.2.7 Changes (based on funnypilot-3.2.6e)
 
 FORENSICS BUILD — the "smoothing feels off after sitting parked" issue
