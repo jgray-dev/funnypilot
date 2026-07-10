@@ -1,3 +1,58 @@
+FunnyPilot v3.2.9e (2026-07-10)
+========================
+EXPERIMENTAL — deep reset of the lateral smoothing stack, replacing every
+interpolation concept since v3.0.2e with one idea: RIDE THE PLAN.
+
+Hardware findings that motivated keeping this in software (2021 K5 DL3,
+Mando/Mobis MDPS): the LKAS torque interface runs at 100 Hz (LKAS11,
+STEER_STEP=1) — the SAME rate as the comma's control loop, and the EPS's
+internal motor loop is faster still, so there is NO update-rate mismatch.
+The real hardware limits are: (1) torque slew caps of +3/-7 counts per
+10 ms frame of a 384-count max (full authority takes ~1.3 s to ramp in —
+an EPS fault-tolerance constraint, not tunable), (2) modest total assist
+authority, (3) a measured ~0.48-0.50 s command-to-response lateral delay
+(liveDelay, includes EPS + chassis). None of these are removable in code;
+all of them are exactly what delay-aware control is for. Conclusion: the
+smoothing problem is legitimate software territory, but the old stack was
+solving the wrong formulation.
+
+* feat: NEW selfdrive/controls/lib/lat_plan_rider.py — PlanRider. Every
+  approach since 3.0.2e (frame counters, time-anchored knot interpolation,
+  PHASE_LEAD, SETTLE ease-outs, lookahead weights, health blends)
+  interpolated between 20 Hz POINT SAMPLES of the model's plan. But the
+  model publishes its entire smooth plan every frame. PlanRider evaluates
+  the plan itself at a continuously advancing horizon:
+      t = lat_delay + DT_MDL + (time since the plan was captured)
+  The plan segment from t to t+50 ms is by definition what the model wants
+  the car doing until the next update — riding it gives per-frame-smooth
+  curvature with ZERO added lag (we sample the plan's future, never filter
+  its past). Plan handoffs are continuous by construction (successive
+  plans are evaluated at the same wall-clock target instant); genuine
+  model revisions are bounded by a single 2.5 m/s^3 lateral-jerk clamp —
+  the ONLY shaping constant left in the lateral path.
+* Properties the old stack needed machinery for, now free: cadence
+  robustness (a late model frame is ridden further along the current plan
+  — extrapolating the model's own intent — instead of stalling; > 0.2 s
+  stale degrades to hold), no lane-change special case (nothing to force
+  off), NaN/short plans fall back to the model's action value (= stock).
+* removed: lat_interp.py (LINEAR/SETTLE) + its tests + the INTERP_METHOD
+  switch + controlsd's _model_lookahead_curv. The /dev/shm/lat_interp
+  dev-UI heartbeat and triage hmin/havg fields now carry PlanRider plan
+  freshness (5 = fresh, 0 = stale/held) — same scale, same consumers.
+  Torque-side features (lane-change scale, re-engage ramp, smooth stop,
+  3.2.8 override gate) are untouched.
+* note: the pasted triage window for this report happened to cover only
+  parked idle (la=0, v=0, tqx=0 throughout) — the drive around the user's
+  mark wasn't in the copied tail, so the 3.2.8 gate verdict is still
+  open; the recorder keeps running unchanged on this branch.
+* chore: FUNNYPILOT_VERSION -> 3.2.9e; EXPECTED_VERSION -> 3.2.9e;
+  code_latinterp -> code_planrider check, code_controlsd greps v3.2.9e,
+  _FEEL_FILES hashes lat_plan_rider.py.
+* tests: test_lat_plan_rider.py (9 cases: exact tracking on constant-
+  curvature plans, NO-STAIRCASE invariant on ramps, continuous handoffs,
+  jerk-clamped model revisions, late-frame ride-through, stale hold +
+  health decay, fallback, bad-plan rejection, reset seeding).
+
 FunnyPilot v3.2.8 (2026-07-07)
 ========================
 Fix for the "bite then loosen" lateral oscillation reported on the first

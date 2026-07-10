@@ -17,7 +17,7 @@ in priority order (what an autonomous vehicle owes its passengers):
      never command braking.
 
 This module is import-light (numpy only) so its tests run without the full
-openpilot environment, mirroring lat_interp.py.
+openpilot environment.
 """
 import numpy as np
 

@@ -67,6 +67,41 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.9e Changes (based on funnypilot-3.2.8)
+
+EXPERIMENTAL deep reset of lateral smoothing: "ride the plan". All knot-
+interpolation machinery since 3.0.2e deleted. K5 hardware research
+conclusion (recorded in CHANGELOG): LKAS torque interface is 100 Hz (same
+as controls; no rate mismatch); real limits are slew (+3/-7 of 384 per
+frame), authority, and ~0.5 s measured actuation delay — software must
+account for them, they don't make smoothing impossible.
+
+- `selfdrive/controls/lib/lat_plan_rider.py` — NEW. `PlanRider`: stores
+  the model plan (orientation.z / orientationRate.z) each model frame and
+  every 100 Hz frame evaluates `get_curvature_from_plan` at
+  `lat_delay + DT_MDL + plan_age`. Zero added lag, cadence-independent
+  (stale plans are ridden up to RIDE_EXTRA_S=0.2 s past nominal, then
+  hold), single 2.5 m/s^3 lateral-jerk clamp bounds handoffs/revisions,
+  fallback = model action.desiredCurvature (stock) when no valid plan.
+  `health_frames` = plan freshness on the old 0-5 scale (dev UI + triage
+  compat). Import-light (numpy + drive_helpers + ModelConstants).
+- `selfdrive/controls/controlsd.py` — LatInterp/INTERP_METHOD/
+  _model_lookahead_curv removed; PlanRider wired (set_plan on model
+  update; update each frame; reset(self.curvature) when lat inactive).
+  /dev/shm/lat_interp heartbeat + triage hmin/havg now carry plan
+  freshness. NOTE: the v3.2.3st controlsd grep marker is gone — the
+  code_controlsd diag check now greps `v3.2.9e`.
+- `selfdrive/controls/lib/lat_interp.py` + `tests/test_lat_interp.py` —
+  DELETED (LINEAR/SETTLE, PHASE_LEAD, settle lookahead, health blend).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.2.9e;
+  `code_planrider` replaces `code_latinterp`; `code_controlsd` greps
+  v3.2.9e; `_FEEL_FILES` hashes lat_plan_rider.py instead of lat_interp.
+- `FUNNYPILOT_VERSION` — 3.2.8 -> 3.2.9e.
+- `selfdrive/controls/lib/tests/test_lat_plan_rider.py` — NEW (9 cases,
+  incl. the no-staircase invariant: on a curvature ramp with 20 Hz plan
+  updates, consecutive 100 Hz outputs each advance ~a*dt — never flat-
+  then-5x). Torque-side scales and the 3.2.8 override gate untouched.
+
 ### v3.2.8 Changes (based on funnypilot-3.2.7)
 
 Fix for the "bite then loosen" lateral oscillation (large adjustment ->

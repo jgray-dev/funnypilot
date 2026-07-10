@@ -7,15 +7,14 @@ from cereal import car, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, DT_CTRL, DT_MDL, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_curvature_from_plan
-from openpilot.selfdrive.controls.lib.lat_interp import LatInterp, SETTLE
+from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.lat_plan_rider import PlanRider
 from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
-from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -31,13 +30,6 @@ LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
-
-# FunnyPilot v3.2.2: which lateral interpolation method controlsd uses between
-# 20 Hz model frames. SETTLE (default) = delay-aware smoothing with a model-plan
-# lookahead; LINEAR = the validated uniform delta/5 feel. Pinned in code per the
-# fork's convention (cf. locked LAF, UNWIND_MODE); flip to LINEAR to A/B by flash.
-INTERP_METHOD = SETTLE
-
 
 class Controls(ControlsExt):
   def __init__(self) -> None:
@@ -60,11 +52,12 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.2.2: cadence-independent curvature interpolation between model
-    # frames. Time-anchored so it can't silently degrade after offroad/reboot when
-    # the 100:20 Hz cadence drifts. Default = SETTLE (delay-aware smoothing); set
-    # INTERP_METHOD = LINEAR above for the plain validated delta/5 feel.
-    self.lat_interp = LatInterp(method=INTERP_METHOD)
+    # FunnyPilot v3.2.9e: deep reset of the lateral smoothing stack. PlanRider
+    # continuously resamples the model's own published plan at an advancing
+    # horizon (lat_delay + DT_MDL + plan age) instead of interpolating between
+    # 20 Hz point samples — zero added lag, cadence-independent, one lateral
+    # jerk clamp, no settle/lookahead/health heuristics. See lat_plan_rider.py.
+    self.plan_rider = PlanRider(DT_CTRL)
 
     # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
     # recurring "smoothing feels off after sitting parked" report. Viewable and
@@ -157,34 +150,27 @@ class Controls(ControlsExt):
     # Steering PID loop and lateral MPC
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
-    # FunnyPilot v3.2.2: cadence-independent curvature interpolation between the
-    # 20 Hz model frames (selfdrive/controls/lib/lat_interp.py). Time-anchored to
-    # the model's fixed 20 Hz period and elapsed wall-clock — NOT a control-frame
-    # counter — so it can't silently degrade to the old ~20%-of-step stall when
-    # the 100:20 Hz cadence drifts under thermal/CPU load (the "interp deactivates
-    # after offroad/reboot" symptom). SETTLE additionally eases the wheel into the
-    # apex using a one-model-step lookahead from the model's own plan (free compute
-    # inside the actuator-delay window), while never leaving the model's desire
-    # bracket and never lagging the linear path. SETTLE is forced off during a
-    # lane change (v3.2.3st) so the maneuver keeps the smooth 3.2.1st linear feel.
-    raw_model_curv = model_v2.action.desiredCurvature
+    # FunnyPilot v3.2.9e: PlanRider — evaluate the model's own published plan at
+    # a continuously advancing horizon (lat_delay + DT_MDL + plan age) instead of
+    # interpolating between its 20 Hz point samples. The segment of the plan from
+    # t to t+50ms IS what the model wants the car doing until the next update, so
+    # riding it gives per-frame-smooth curvature with zero added lag and no
+    # cadence assumptions. Falls back to the model's action value (stock) when
+    # the plan is unavailable; a single lateral-jerk clamp bounds plan handoffs.
+    if self.sm.updated['modelV2']:
+      self.plan_rider.set_plan(model_v2.orientation.z, model_v2.orientationRate.z, time.monotonic())
     if not CC.latActive:
-      self.lat_interp.reset(self.curvature)
+      self.plan_rider.reset(self.curvature)
       new_desired_curvature = self.curvature
     else:
-      next_curv_est = None
-      if self.lat_interp.method == SETTLE and self.sm.updated['modelV2']:
-        next_curv_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo)
-      new_desired_curvature = self.lat_interp.update(raw_model_curv, self.sm.updated['modelV2'],
-                                                     time.monotonic(), CS.vEgo, next_curv_est,
-                                                     lane_change=lane_change_active)
-    # Dev-UI INTERP indicator: the REALIZED control-frames-per-model-frame (~5 when
-    # healthy, lower when the interpolation is losing sub-frame headroom), or 0 when
-    # paused. An honest health signal, not a constant "alive" heartbeat — so a
-    # degradation is now visible instead of masked. Written at the 20 Hz model rate.
+      new_desired_curvature = self.plan_rider.update(time.monotonic(), lat_delay, CS.vEgo,
+                                                     fallback=model_v2.action.desiredCurvature)
+    # Dev-UI INTERP indicator: plan freshness (5 = riding a fresh plan, decaying
+    # to 0 as a stale plan runs out of ride headroom), or 0 when paused. Written
+    # at the 20 Hz model rate.
     if self.sm.updated['modelV2']:
       try:
-        n = round(self.lat_interp.health_frames) if CC.latActive else 0
+        n = round(self.plan_rider.health_frames) if CC.latActive else 0
         with open('/dev/shm/lat_interp', 'w') as _f:
           _f.write(str(n))
       except Exception:
@@ -203,7 +189,7 @@ class Controls(ControlsExt):
     # driver-override scale, saturation) for the "bite then loosen" report;
     # live-tuning context every 10 s (drift is hypothesis C for "feels off").
     self.triage.sample(time.monotonic(), CC.latActive, CC.longActive, CS.vEgo,
-                       self.lat_interp.health_frames, lane_change_active, curvature_limited,
+                       self.plan_rider.health_frames, lane_change_active, curvature_limited,
                        long_plan.aTarget, actuators.accel,
                        steering_pressed=CS.steeringPressed,
                        override_scale=getattr(self.LaC, '_override_scale', 1.0),
@@ -228,24 +214,6 @@ class Controls(ControlsExt):
         setattr(actuators, p, 0.0)
 
     return CC, lac_log
-
-  def _model_lookahead_curv(self, model_v2, lat_delay, vego):
-    # FunnyPilot v3.2.2: estimate where the model's desired curvature is heading
-    # one model step ahead, used only to shape the SETTLE ease-out. The model's
-    # action.desiredCurvature is its plan curvature at (lat_delay + DT_MDL); we
-    # sample the same published plan one step further (lat_delay + 2*DT_MDL).
-    # Pure read of an already-computed trajectory — free compute in the delay
-    # window. Returns None if the plan is unavailable/invalid (SETTLE then falls
-    # back to linear), so this never injects an out-of-range curvature.
-    try:
-      yaws = model_v2.orientation.z
-      yaw_rates = model_v2.orientationRate.z
-      if len(yaws) < len(ModelConstants.T_IDXS) or len(yaw_rates) < 1:
-        return None
-      c = float(get_curvature_from_plan(yaws, yaw_rates, ModelConstants.T_IDXS, vego, lat_delay + 2 * DT_MDL))
-      return c if math.isfinite(c) else None
-    except Exception:
-      return None
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
