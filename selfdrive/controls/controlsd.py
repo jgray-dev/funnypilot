@@ -13,7 +13,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
-from openpilot.selfdrive.controls.lib.lat_plan_rider import PlanRider
+from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother
 from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -52,12 +52,11 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.2.9e: deep reset of the lateral smoothing stack. PlanRider
-    # continuously resamples the model's own published plan at an advancing
-    # horizon (lat_delay + DT_MDL + plan age) instead of interpolating between
-    # 20 Hz point samples — zero added lag, cadence-independent, one lateral
-    # jerk clamp, no settle/lookahead/health heuristics. See lat_plan_rider.py.
-    self.plan_rider = PlanRider(DT_CTRL)
+    # FunnyPilot v3.2.10: the validated knot interpolation (3.1.0e delta/5
+    # feel), minimal and time-anchored — the 3.2.9e plan-riding experiment is
+    # deleted (post-mortem in lat_smooth.py). Guarantees per-frame wheel motion
+    # of delta/5 between 20 Hz model actions; continuity at any cadence.
+    self.lat_smooth = LatSmoother()
 
     # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
     # recurring "smoothing feels off after sitting parked" report. Viewable and
@@ -150,27 +149,22 @@ class Controls(ControlsExt):
     # Steering PID loop and lateral MPC
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
-    # FunnyPilot v3.2.9e: PlanRider — evaluate the model's own published plan at
-    # a continuously advancing horizon (lat_delay + DT_MDL + plan age) instead of
-    # interpolating between its 20 Hz point samples. The segment of the plan from
-    # t to t+50ms IS what the model wants the car doing until the next update, so
-    # riding it gives per-frame-smooth curvature with zero added lag and no
-    # cadence assumptions. Falls back to the model's action value (stock) when
-    # the plan is unavailable; a single lateral-jerk clamp bounds plan handoffs.
-    if self.sm.updated['modelV2']:
-      self.plan_rider.set_plan(model_v2.orientation.z, model_v2.orientationRate.z, time.monotonic())
+    # FunnyPilot v3.2.10: interpolate the model's 20 Hz desired curvature across
+    # the control frames — the validated delta/5 feel (see lat_smooth.py for the
+    # 3.2.9e post-mortem). prev is always the last OUTPUT so the command is
+    # continuous at any cadence; time-anchoring to the fixed model period means
+    # nothing counts frames and nothing can silently stall.
     if not CC.latActive:
-      self.plan_rider.reset(self.curvature)
+      self.lat_smooth.reset(self.curvature)
       new_desired_curvature = self.curvature
     else:
-      new_desired_curvature = self.plan_rider.update(time.monotonic(), lat_delay, CS.vEgo,
-                                                     fallback=model_v2.action.desiredCurvature)
-    # Dev-UI INTERP indicator: plan freshness (5 = riding a fresh plan, decaying
-    # to 0 as a stale plan runs out of ride headroom), or 0 when paused. Written
-    # at the 20 Hz model rate.
+      new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
+                                                     self.sm.updated['modelV2'], time.monotonic())
+    # Dev-UI INTERP indicator: realized control-frames-per-model-frame (5 =
+    # healthy cadence), or 0 when paused. Written at the 20 Hz model rate.
     if self.sm.updated['modelV2']:
       try:
-        n = round(self.plan_rider.health_frames) if CC.latActive else 0
+        n = round(self.lat_smooth.health_frames) if CC.latActive else 0
         with open('/dev/shm/lat_interp', 'w') as _f:
           _f.write(str(n))
       except Exception:
@@ -189,7 +183,7 @@ class Controls(ControlsExt):
     # driver-override scale, saturation) for the "bite then loosen" report;
     # live-tuning context every 10 s (drift is hypothesis C for "feels off").
     self.triage.sample(time.monotonic(), CC.latActive, CC.longActive, CS.vEgo,
-                       self.plan_rider.health_frames, lane_change_active, curvature_limited,
+                       self.lat_smooth.health_frames, lane_change_active, curvature_limited,
                        long_plan.aTarget, actuators.accel,
                        steering_pressed=CS.steeringPressed,
                        override_scale=getattr(self.LaC, '_override_scale', 1.0),

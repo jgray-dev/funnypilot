@@ -67,6 +67,36 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.10 Changes (based on funnypilot-3.2.9e)
+
+Restores the validated delta/5 lateral feel; deletes the failed 3.2.9e
+PlanRider after one drive ("two 45-degree bites instead of ten 9-degree
+ones"). POST-MORTEM, do not repeat: get_curvature_from_plan's output is
+nearly t-invariant inside a curve, so advancing the sampling horizon
+between model frames produces ~zero motion and each new plan lands the
+whole 50 ms of turn progression as ONE step — the 20 Hz staircase reborn
+with its largest steps in sharp turns. Idealized ramp-plan tests are NOT
+evidence of on-road smoothness; smoothness must be guaranteed by
+construction (spread the knot delta across the period).
+
+- `selfdrive/controls/lib/lat_smooth.py` — NEW. `LatSmoother`: on each
+  20 Hz model action, prev <- last OUTPUT, cur <- action; each 100 Hz
+  frame emits prev + clip(elapsed/T_MODEL + PHASE_LEAD(0.2), 0, 1) *
+  (cur - prev). Bit-compatible with the validated 3.1.0e schedule at
+  healthy cadence; provably moves every frame; in-bracket; continuous at
+  any cadence; holds cur on model stall; NaN-safe; stdlib-only.
+  `health_frames` = realized control-frames-per-model-frame (0-5).
+- `selfdrive/controls/controlsd.py` — LatSmoother wired (update with
+  action.desiredCurvature + sm.updated['modelV2']; reset(self.curvature)
+  when lat inactive). Marker for code_controlsd grep: `v3.2.10`.
+- `selfdrive/controls/lib/lat_plan_rider.py` + tests — DELETED.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.2.10;
+  `code_latsmooth` replaces `code_planrider`; `code_controlsd` greps
+  v3.2.10; `_FEEL_FILES` hashes lat_smooth.py.
+- `FUNNYPILOT_VERSION` — 3.2.9e -> 3.2.10.
+- `selfdrive/controls/lib/tests/test_lat_smooth.py` — NEW (9 cases incl.
+  exact 0.2/0.4/0.6/0.8/1.0 schedule + moves-every-frame invariant).
+
 ### v3.2.9e Changes (based on funnypilot-3.2.8)
 
 EXPERIMENTAL deep reset of lateral smoothing: "ride the plan". All knot-

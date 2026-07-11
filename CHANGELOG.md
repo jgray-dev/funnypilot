@@ -1,3 +1,42 @@
+FunnyPilot v3.2.10 (2026-07-10)
+========================
+Restores the VALIDATED lateral interpolation feel. The 3.2.9e PlanRider
+experiment is deleted after one drive: "feels like 3 updates a second,
+two 45-degree bites instead of ten 9-degree ones".
+
+* post-mortem (why PlanRider staircased): the plan-sampling formula
+  (2*psi/(v*t) - psi_rate/v) is nearly t-INVARIANT inside a curve —
+  advancing the sampling horizon between model frames barely moved the
+  output, and each new plan then delivered the entire 50 ms of turn
+  progression as ONE step. That is the stock 20 Hz staircase reborn, with
+  its biggest steps exactly in sharp turns, grouped by the jerk clamp
+  into a few large surges. The idealized-ramp unit tests passed because
+  synthetic ramp plans are the one case where riding is smooth; real
+  plans are state-anchored and quasi-steady in curves. Lesson recorded:
+  smoothness must be guaranteed BY CONSTRUCTION (spread the knot delta),
+  not hoped for from a formula's behavior between knots.
+* feat: NEW selfdrive/controls/lib/lat_smooth.py — LatSmoother, the
+  months-validated 3.1.0e delta/5 schedule in its minimal robust form:
+  on each 20 Hz model action, prev <- last OUTPUT, cur <- new action;
+  every 100 Hz frame emits prev + clip(elapsed/T_MODEL + 0.2, 0, 1) *
+  (cur - prev). Bit-compatible with the validated feel at healthy 100 Hz
+  (0.2/0.4/0.6/0.8/1.0 x delta), provably moves EVERY control frame,
+  output always inside [prev, cur], continuous at ANY cadence (prev is
+  the last output, so early/late knots can never step the command),
+  holds cur if the model stalls, NaN-safe. No SETTLE, no lookahead, no
+  health blend, no frame counters — 40 lines, nothing left to degrade.
+* removed: lat_plan_rider.py + its tests. Dev-UI INTERP gauge and triage
+  hmin/havg return to realized control-frames-per-model-frame (5 =
+  healthy). Torque-side features and the 3.2.8 override gate untouched;
+  triage recorder unchanged.
+* chore: FUNNYPILOT_VERSION -> 3.2.10; EXPECTED_VERSION -> 3.2.10;
+  code_planrider -> code_latsmooth; code_controlsd greps v3.2.10;
+  _FEEL_FILES hashes lat_smooth.py.
+* tests: test_lat_smooth.py (9 cases: exact validated schedule,
+  moves-every-frame, bracket containment, early/late-knot continuity,
+  model-stall hold, 50 Hz cadence independence, NaN hold, re-engage,
+  health counting).
+
 FunnyPilot v3.2.9e (2026-07-10)
 ========================
 EXPERIMENTAL — deep reset of the lateral smoothing stack, replacing every

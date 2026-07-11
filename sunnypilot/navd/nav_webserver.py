@@ -30,14 +30,14 @@ _PULSE_PERIOD_S = 600  # code-identity pulse every 10 min, catches mid-parked sw
 _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
 _FEEL_FILES = [
-  "/data/openpilot/selfdrive/controls/lib/lat_plan_rider.py",
+  "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.2.9e"
+EXPECTED_VERSION = "3.2.10"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -50,8 +50,8 @@ DIAG_CHECKS = [
   {"id": "head",           "name": "Git HEAD commit",                    "cmd": f"{_GIT} log -1 --format='%h %s' 2>&1"},
   {"id": "clean",          "name": "Working tree unmodified",            "cmd": f"{_GIT} status --porcelain 2>&1"},
   {"id": "diff",           "name": "Tracked-file changes (diff stat)",   "cmd": f"{_GIT} diff --stat 2>&1"},
-  {"id": "code_controlsd", "name": "controlsd PlanRider wiring present",  "cmd": "grep -c 'v3.2.9e' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
-  {"id": "code_planrider", "name": "PlanRider module present",            "cmd": "grep -c 'class PlanRider' /data/openpilot/selfdrive/controls/lib/lat_plan_rider.py 2>&1"},
+  {"id": "code_controlsd", "name": "controlsd LatSmoother wiring present", "cmd": "grep -c 'v3.2.10' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
+  {"id": "code_latsmooth", "name": "LatSmoother module present",           "cmd": "grep -c 'class LatSmoother' /data/openpilot/selfdrive/controls/lib/lat_smooth.py 2>&1"},
   {"id": "code_override",  "name": "driver-override softening present",   "cmd": "grep -c '_OVERRIDE_MIN_SCALE' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
   {"id": "code_chime",     "name": "brake-with-lead chime fix present",   "cmd": "grep -c 'v3.2.3st' /data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py 2>&1"},
   {"id": "code_latctrl",   "name": "latcontrol re-engage ramp present",  "cmd": "grep -c '_REENGAGE_RAMP_DUR' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
