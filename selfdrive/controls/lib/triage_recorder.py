@@ -178,3 +178,79 @@ class LatInterpMonitor:
     except Exception:
       # never let telemetry break controls
       self._t0 = mono_t if self._t0 is None else self._t0
+
+
+class RadarTracksMonitor:
+  """FunnyPilot v3.3.0e: 1 Hz JSONL evidence that the Mando radar-tracks
+  enable worked, plus the data itself for longitudinal tuning.
+
+  Fields per record:
+    n / nmin / nmax  radar track points visible (this frame / min / max
+                     over the second). n stuck at 0 while driving in
+                     traffic => the 0x7D0 enable did not take.
+    pts   up to 3 closest points as [dRel, yRel, vRel] (m, m, m/s)
+    l1/l2 radarState leadOne/leadTwo as [dRel, vLead, aLeadK] or null
+    cerr  frames with radar CAN errors this second
+
+  Duck-typed access + full try/except: works with capnp readers and test
+  stubs alike, and can never take radard down.
+  """
+
+  PERIOD = 1.0
+  MAX_PTS = 3
+
+  def __init__(self, recorder: TriageRecorder):
+    self.recorder = recorder
+    self._t0 = None
+    self._n_min = None
+    self._n_max = 0
+    self._cerr = 0
+
+  @staticmethod
+  def _lead(lead) -> list | None:
+    try:
+      if lead is not None and bool(lead.status):
+        return [round(float(lead.dRel), 1), round(float(lead.vLead), 1), round(float(lead.aLeadK), 2)]
+    except Exception:
+      pass
+    return None
+
+  def sample(self, mono_t: float, live_tracks, radar_state) -> None:
+    try:
+      if self._t0 is None:
+        self._t0 = mono_t
+
+      points = list(getattr(live_tracks, 'points', None) or [])
+      n = len(points)
+      self._n_min = n if self._n_min is None else min(self._n_min, n)
+      self._n_max = max(self._n_max, n)
+      try:
+        self._cerr += int(bool(live_tracks.errors.canError))
+      except Exception:
+        pass
+
+      if mono_t - self._t0 < self.PERIOD:
+        return
+
+      pts = []
+      try:
+        for pt in sorted(points, key=lambda p: float(p.dRel))[:self.MAX_PTS]:
+          pts.append([round(float(pt.dRel), 1), round(float(pt.yRel), 1), round(float(pt.vRel), 1)])
+      except Exception:
+        pts = []
+
+      rec = {"n": n, "nmin": self._n_min, "nmax": self._n_max, "pts": pts, "cerr": self._cerr}
+      try:
+        rec["l1"] = self._lead(getattr(radar_state, 'leadOne', None))
+        rec["l2"] = self._lead(getattr(radar_state, 'leadTwo', None))
+      except Exception:
+        rec["l1"] = rec["l2"] = None
+      self.recorder.write(rec)
+
+      self._t0 = mono_t
+      self._n_min = None
+      self._n_max = 0
+      self._cerr = 0
+    except Exception:
+      # never let telemetry break radard
+      self._t0 = mono_t if self._t0 is None else self._t0

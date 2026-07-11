@@ -1,3 +1,42 @@
+FunnyPilot v3.3.0e (2026-07-10)
+========================
+EXPERIMENTAL — enables RADAR TRACKS on the 2021+ Kia K5 (DL3) and logs them
+to the web UI, groundwork for radar-grounded longitudinal tuning.
+
+* HOW IT WORKS: the sunnypilot base already auto-enables Mando radar
+  tracks (opendbc/sunnypilot _initialize_radar_tracks: a UDS config write
+  to the radar at 0x7D0 on every ignition, panda-safety allowlisted, retry
+  x2) — but only for platforms carrying HyundaiFlags.MANDO_RADAR, and
+  KIA_K5_2021 didn't have it. Added the flag: the platform gains the
+  hyundai_kia_mando_front_radar DBC, the enable runs at car init, and on
+  success the radar broadcasts its raw track table (RADAR_TRACK_500-51f,
+  32 slots, 50 Hz) which openpilot's radar interface parses into
+  liveTracks. If the radar declines the write, radarUnavailable stays True
+  and EVERYTHING behaves exactly as today (vision + SCC lead emulation) —
+  graceful, no fault path. The radar's own SCC function is not affected by
+  the tracks-output bit (long-established community config).
+* STOCK ACC IS ENOUGH FOR LOGGING — openpilot long NOT required: the
+  enable runs in card's fingerprint/init path before long-control mode
+  matters, the 0x7D0 TX is allowlisted in panda safety unconditionally,
+  radard runs onroad regardless of long mode, and liveTracks publishes
+  either way. Drive normally on stock ACC and the log fills.
+* feat: NEW RadarTracksMonitor (triage_recorder.py) wired into radard —
+  1 Hz records in radar_tracks.jsonl (web UI -> Logs): n/nmin/nmax track
+  count (n pinned at 0 in traffic = enable didn't take), 3 closest points
+  [dRel, yRel, vRel], radarState leadOne/leadTwo [dRel, vLead, aLeadK],
+  radar CAN error count. Duck-typed + fully try/excepted: telemetry can
+  never take radard down (garbage-input test included).
+* Verify gains: code_radartrk (flag present) and triage_radar (last
+  radar records inline).
+* chore: FUNNYPILOT_VERSION -> 3.3.0e; EXPECTED_VERSION -> 3.3.0e.
+* tests: 4 new RadarTracksMonitor cases; opendbc hyundai platform suite
+  green with the flag (13 passed, 383 subtests).
+* NOTE: first drive, open Verify -> triage_radar or Logs ->
+  radar_tracks.jsonl. Healthy = n in the 5-25 range in traffic with
+  plausible closest-point distances. n = 0 everywhere means the DL3
+  radar firmware rejected the config write — copy the log anyway and
+  we'll try the alternate enable payload next.
+
 FunnyPilot v3.2.12 (2026-07-10)
 ========================
 SUPERSEDES 3.2.11 — DO NOT FLASH 3.2.11. Two corrections from user feedback

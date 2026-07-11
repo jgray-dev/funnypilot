@@ -90,6 +90,37 @@ adds it to lat_delay, so enabling it costs no reaction time.
   ~0.15 so total preview stays ~0.5 s; trim further if turn-in feels
   early. 3.2.10 vs 3.2.11 is a clean A/B of exactly this change.
 
+### v3.3.0e Changes (based on funnypilot-3.2.12)
+
+Radar tracks enabled + logged for the K5 (DL3). KEY WIRING FACTS: the
+sunnypilot base auto-enables Mando radar tracks via
+`opendbc/sunnypilot/car/interfaces._initialize_radar_tracks` (UDS write to
+0x7D0, called from opendbc car_helpers.get_car -> setup_interfaces with
+can_recv/can_send at fingerprint time) — gated on
+`HyundaiFlags.MANDO_RADAR`, which KIA_K5_2021 lacked. The enable is
+LONG-MODE-INDEPENDENT (runs before long control matters; 0x7D0 TX is in
+panda safety unconditionally; radard is only_onroad regardless) — stock
+ACC suffices for log collection. Architecture note: card publishes
+liveTracks (RadarData) from the radar interface; radard SUBSCRIBES to
+liveTracks and does clustering/lead fusion.
+
+- `opendbc_repo/opendbc/car/hyundai/values.py` — KIA_K5_2021 flags gain
+  `HyundaiFlags.MANDO_RADAR` (v3.3.0e marker comment): adds the
+  hyundai_kia_mando_front_radar DBC + triggers the ignition-time enable.
+  Radar declining the write => radarUnavailable stays True, stock
+  behavior. Hyundai platform tests green (13 + 383 subtests).
+- `selfdrive/controls/lib/triage_recorder.py` — NEW `RadarTracksMonitor`:
+  1 Hz radar_tracks.jsonl {n, nmin, nmax, pts (3 closest [dRel,yRel,
+  vRel]), l1/l2 ([dRel,vLead,aLeadK] or null), cerr}. Duck-typed,
+  try/excepted end to end (garbage-input test).
+- `selfdrive/controls/radard.py` — instantiates the monitor, samples once
+  per loop after RD.publish with sm['liveTracks'] + RD.radar_state.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.3.0e; new
+  `code_radartrk` grep + `triage_radar` info rows.
+- `FUNNYPILOT_VERSION` -> 3.3.0e.
+- TRIAGE: n==0 through traffic-laden drive => enable rejected (next step:
+  alternate UDS payload); healthy is n≈5-25 with plausible distances.
+
 ### v3.2.12 Changes (based on funnypilot-3.2.11; 3.2.11 SUPERSEDED — do not flash)
 
 Delay-funded ADAPTIVE smoothing. CRITICAL FACTS learned here (do not

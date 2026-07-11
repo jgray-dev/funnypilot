@@ -1,8 +1,9 @@
 """FunnyPilot v3.2.7 — triage flight-recorder tests (import-light, stdlib only)."""
 import json
 import os
+from types import SimpleNamespace
 
-from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
+from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor, RadarTracksMonitor
 
 
 def read_jsonl(path):
@@ -108,6 +109,56 @@ class TestLatInterpMonitor:
       self._sample(mon, i * 0.01, ctx=boom)
     recs = read_jsonl(tmp_path / "lat.jsonl")
     assert recs[0]["ctx"] is None  # captured, not raised
+
+
+def make_tracks(dists, can_error=False):
+  pts = [SimpleNamespace(dRel=float(d), yRel=0.5, vRel=-1.0) for d in dists]
+  return SimpleNamespace(points=pts, errors=SimpleNamespace(canError=can_error))
+
+
+def make_radar_state(lead_d=None):
+  def lead(d):
+    if d is None:
+      return SimpleNamespace(status=False, dRel=0.0, vLead=0.0, aLeadK=0.0)
+    return SimpleNamespace(status=True, dRel=float(d), vLead=25.0, aLeadK=-0.5)
+  return SimpleNamespace(leadOne=lead(lead_d), leadTwo=lead(None))
+
+
+class TestRadarTracksMonitor:
+  def test_records_counts_and_closest_points(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    for i in range(25):  # 1.25 s at 20 Hz
+      mon.sample(i * 0.05, make_tracks([80, 12, 45, 30]), make_radar_state(lead_d=12.3))
+    recs = read_jsonl(tmp_path / "radar.jsonl")
+    r = recs[0]
+    assert r["n"] == 4 and r["nmin"] == 4 and r["nmax"] == 4
+    assert r["pts"][0][0] == 12.0  # closest first
+    assert len(r["pts"]) == 3
+    assert r["l1"][0] == 12.3
+    assert r["l2"] is None
+    assert r["cerr"] == 0
+
+  def test_no_tracks_shows_zero(self, tmp_path):
+    # the enable-failed signature: n stays 0
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    for i in range(25):
+      mon.sample(i * 0.05, make_tracks([]), make_radar_state())
+    r = read_jsonl(tmp_path / "radar.jsonl")[0]
+    assert r["n"] == 0 and r["nmax"] == 0 and r["pts"] == []
+
+  def test_can_errors_counted(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    for i in range(25):
+      mon.sample(i * 0.05, make_tracks([20], can_error=(i % 2 == 0)), make_radar_state())
+    r = read_jsonl(tmp_path / "radar.jsonl")[0]
+    assert r["cerr"] >= 10
+
+  def test_garbage_inputs_never_raise(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    for i in range(25):
+      mon.sample(i * 0.05, None, None)  # radard must never die from telemetry
+    recs = read_jsonl(tmp_path / "radar.jsonl")
+    assert recs[0]["n"] == 0
 
 
 class TestWebserverHelpers:

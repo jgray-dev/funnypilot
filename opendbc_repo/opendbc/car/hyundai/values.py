@@ -398,7 +398,12 @@ class CAR(Platforms):
   KIA_K5_2021 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Kia K5 2021-24", car_parts=CarParts.common([CarHarness.hyundai_a]))],
     CarSpecs(mass=3381 * CV.LB_TO_KG, wheelbase=2.85, steerRatio=13.27, tireStiffnessFactor=0.5),  # 2021 Kia K5 Steering Ratio (all trims)
-    flags=HyundaiFlags.CHECKSUM_CRC8,
+    # FunnyPilot v3.3.0e: MANDO_RADAR added — the DL3's SCC radar is a Mando
+    # unit; the flag gives the platform the front-radar DBC and makes
+    # opendbc/sunnypilot's _initialize_radar_tracks attempt the 0x7D0 UDS
+    # tracks-enable at every ignition. If the radar declines, radarUnavailable
+    # stays True and behavior is identical to before (vision + SCC lead).
+    flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.MANDO_RADAR,
   )
   KIA_K5_HEV_2020 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Kia K5 Hybrid 2020-22", car_parts=CarParts.common([CarHarness.hyundai_a]))],

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 from collections import deque
 from typing import Any
@@ -11,6 +12,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
+from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, RadarTracksMonitor
 
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
@@ -304,11 +306,16 @@ def main() -> None:
 
   RD = RadarD(CP, CP_SP, CP.radarDelay)
 
+  # FunnyPilot v3.3.0e: radar-tracks evidence log (web UI -> Logs ->
+  # radar_tracks.jsonl). 1 Hz; every operation best-effort.
+  triage = RadarTracksMonitor(TriageRecorder("radar_tracks"))
+
   while 1:
     sm.update()
 
     RD.update(sm, sm['liveTracks'])
     RD.publish(pm)
+    triage.sample(time.monotonic(), sm['liveTracks'], RD.radar_state)
 
 
 if __name__ == "__main__":
