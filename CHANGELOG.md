@@ -1,3 +1,39 @@
+FunnyPilot v3.3.2 (2026-07-11)
+========================
+REVERTS the v3.2.12 adaptive EMA smoothing after on-road falsification —
+steering was starting EARLIER than the validated feel ("a 2.5 in the space
+before we'd usually see the 5"), and raising the delay knob only smeared it
+further into sloppiness.
+
+* post-mortem (recorded so it is never retried): the v3.2.12 idea was
+  "EMA the knots with tau, sample the plan tau earlier, lag is pre-paid, so
+  the effective total is unchanged". The flaw: an EMA does not DELAY a
+  maneuver, it REDISTRIBUTES it. For a turn onset, the filtered command
+  begins moving immediately at the (earlier) sample point and creeps
+  through partial values across the window — so the wheel is visibly
+  turning where the pre-3.2.12 command was still flat before its decisive
+  step. "Total-preserving" holds for steady-state phase, not for onset
+  shape, and onset shape is what hands feel. No delay-knob setting fixes
+  it: more delay = an earlier sample point = more smear.
+* the delay window IS still used for interpolation — the way that was
+  always validated: the models-page delay makes every 20 Hz knot a
+  delay-compensated preview, and controlsd's LatSmoother spreads each knot
+  delta across the control frames (delta/5). That stays, untouched.
+* reverted: modeld_v2 adaptive tau + horizon shift (bundle 'lat' override
+  restored to plain upstream additive semantics; network delay input
+  unchanged throughout); stock modeld same; smooth_seconds_for_delay
+  removed from lat_smooth.py (a DO-NOT-REINTRODUCE note remains).
+  controlsd's setpoint alignment (lat_delay = lateralDelay) is kept — it
+  was a genuine pre-existing fix and is exactly correct with the EMA gone.
+* lateral timing is now byte-equivalent to 3.2.10/3.3.0e-as-validated for
+  stock-override bundles. RESTORE YOUR MODELS-PAGE DELAY to your preferred
+  per-model value (e.g. 0.35) — the compensation you added against the
+  early-steer artifact is no longer needed.
+* radar-tracks work (3.3.0e/3.3.1) carried unchanged.
+* chore: FUNNYPILOT_VERSION -> 3.3.2; EXPECTED_VERSION -> 3.3.2;
+  code_smoothsec replaced by code_smoothrev (verifies the revert is the
+  code actually running).
+
 FunnyPilot v3.3.1 (2026-07-11)
 ========================
 Radar-tracks ENABLE is now evidenced and verified (lateral confirmed good

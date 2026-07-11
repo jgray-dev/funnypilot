@@ -25,7 +25,6 @@ from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_accel, smooth_curvature, get_curvature_from_plan
-from openpilot.selfdrive.controls.lib.lat_smooth import smooth_seconds_for_delay
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
@@ -44,12 +43,11 @@ POLICY_PKL_PATH = Path(__file__).parent / 'models/driving_policy_tinygrad.pkl'
 VISION_METADATA_PATH = Path(__file__).parent / 'models/driving_vision_metadata.pkl'
 POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.pkl'
 
-# FunnyPilot v3.2.12: curvature smoothing is funded by the lateral delay
-# window instead of a fixed constant — tau = smooth_seconds_for_delay(delay in
-# use), and the action horizon is pulled EARLIER by tau so the EMA lag is paid
-# from inside the window; the effective total stays exactly the configured
-# delay. Bigger delay knob -> more smoothing, smaller -> less. This constant
-# remains only as the (zero) fallback default for get_action_from_model.
+# FunnyPilot v3.3.2: the v3.2.12 delay-funded EMA is reverted — an EMA
+# redistributes a maneuver across the window (partial early movement) rather
+# than delaying it, so turn-in onset crept earlier however the sample horizon
+# was shifted. Lateral timing is back to the validated scheme: knots at the
+# full delay, no EMA; smoothing lives solely in controlsd's LatSmoother.
 LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
@@ -347,9 +345,7 @@ def main(demo=False):
     v_ego = max(sm["carState"].vEgo, 0.)
     if sm.frame % 60 == 0:
       model.lat_delay = get_lat_delay(params, sm["liveDelay"].lateralDelay)
-    # FunnyPilot v3.2.12: smoothing funded by the delay window (see lat_smooth)
-    lat_smooth_s = smooth_seconds_for_delay(model.lat_delay)
-    lat_delay = max(model.lat_delay - lat_smooth_s, DT_MDL)
+    lat_delay = model.lat_delay + LAT_SMOOTH_SECONDS
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
@@ -395,7 +391,7 @@ def main(demo=False):
       posenet_send = messaging.new_message('cameraOdometry')
       mdv2sp_send = messaging.new_message('modelDataV2SP')
 
-      action = get_action_from_model(model_output, prev_action, lat_delay + DT_MDL, long_delay + DT_MDL, v_ego, lat_smooth_s=lat_smooth_s)
+      action = get_action_from_model(model_output, prev_action, lat_delay + DT_MDL, long_delay + DT_MDL, v_ego)
       prev_action = action
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,

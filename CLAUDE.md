@@ -90,6 +90,40 @@ adds it to lat_delay, so enabling it costs no reaction time.
   ~0.15 so total preview stays ~0.5 s; trim further if turn-in feels
   early. 3.2.10 vs 3.2.11 is a clean A/B of exactly this change.
 
+### v3.3.2 Changes (based on funnypilot-3.3.1)
+
+REVERT of v3.2.12 adaptive smoothing. POST-MORTEM, do not reintroduce
+causal filtering (EMA/FIR) on lateral knots in ANY form: an EMA
+REDISTRIBUTES a maneuver across the window rather than delaying it — the
+command creeps through partial values ("2.5 before the 5") starting at
+the shifted sample point, so turn-in onset moves EARLIER however the
+horizon is compensated. "Total-preserving" is a steady-state phase
+argument; onset shape is what the driver feels. User had to inflate the
+delay knob to fight it => sloppy; no knob value fixes it. The delay
+window's ONLY validated use is delay-compensated knots + LatSmoother's
+in-period delta/5 interpolation.
+
+- `sunnypilot/modeld_v2/modeld.py` — adaptive tau + lat_sample_delay
+  removed; `lat_delay = model.lat_delay + model.LAT_SMOOTH_SECONDS`
+  (upstream additive bundle-override semantics) for both network input
+  and action horizon; `lat_smooth_active` now just mirrors the override
+  (kept for the get_action getattr + tests). `v3.3.2` marker comment =
+  code_smoothrev grep target.
+- `selfdrive/modeld/modeld.py` — same revert; LAT_SMOOTH_SECONDS = 0.0
+  constant additive; `lat_smooth_s` kwarg on get_action_from_model kept
+  (defaults to the 0.0 constant, harmless).
+- `selfdrive/controls/lib/lat_smooth.py` — smooth_seconds_for_delay +
+  LAT_SMOOTH_FRACTION/MAX removed; DO-NOT-REINTRODUCE note in its place;
+  LatSmoother untouched. Budget tests removed from test_lat_smooth.py.
+- `selfdrive/controls/controlsd.py` — UNCHANGED from 3.2.12 (lat_delay =
+  liveDelay.lateralDelay): correct with the EMA gone, and keeps the fix
+  for the pre-existing modeld_v2 misalignment.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.3.2;
+  code_smoothsec -> code_smoothrev (greps v3.3.2 in modeld_v2).
+- `FUNNYPILOT_VERSION` -> 3.3.2. USER ACTION: restore the models-page
+  delay to the preferred per-model value (~0.35); the inflated value was
+  compensation for the reverted artifact.
+
 ### v3.3.1 Changes (based on funnypilot-3.3.0e)
 
 Verified + evidenced radar-tracks enable. ROOT CAUSE found in upstream
