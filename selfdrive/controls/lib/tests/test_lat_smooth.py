@@ -5,9 +5,36 @@ continuity at any cadence — and nothing else.
 """
 import math
 
-from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother, T_MODEL, PHASE_LEAD, HEALTH_FULL
+from openpilot.selfdrive.controls.lib.lat_smooth import (
+  LatSmoother, T_MODEL, PHASE_LEAD, HEALTH_FULL,
+  smooth_seconds_for_delay, LAT_SMOOTH_FRACTION, LAT_SMOOTH_MAX_S,
+)
 
 DT = 0.01  # 100 Hz
+
+
+class TestSmoothBudget:
+  def test_scales_with_delay_knob(self):
+    # more configured delay -> more smoothing time; less -> less
+    assert abs(smooth_seconds_for_delay(0.50) - 0.50 * LAT_SMOOTH_FRACTION) < 1e-9
+    assert smooth_seconds_for_delay(0.39 + 0.1) > smooth_seconds_for_delay(0.29 + 0.1)
+
+  def test_capped(self):
+    assert smooth_seconds_for_delay(5.0) == LAT_SMOOTH_MAX_S
+
+  def test_degenerate_inputs_are_safe(self):
+    # tonight-proofing: any garbage in -> smoothing simply off, never a crash
+    assert smooth_seconds_for_delay(0.0) == 0.0
+    assert smooth_seconds_for_delay(-1.0) == 0.0
+    assert smooth_seconds_for_delay(float("nan")) == 0.0
+    assert smooth_seconds_for_delay(float("inf")) == 0.0
+    assert smooth_seconds_for_delay(None) == 0.0
+    assert smooth_seconds_for_delay("bogus") == 0.0
+
+  def test_budget_never_exceeds_delay(self):
+    # the sample horizon (delay - tau) can never go negative from the budget
+    for d in (0.05, 0.1, 0.3, 0.5, 1.0, 3.0):
+      assert smooth_seconds_for_delay(d) < d
 
 
 class TestLatSmoother:

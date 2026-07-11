@@ -39,6 +39,27 @@ T_MODEL = 0.05    # s, fixed 20 Hz model period (== DT_MDL)
 PHASE_LEAD = 0.2  # validated phase advance: first 100 Hz frame emits prev + 0.2*delta
 HEALTH_FULL = 5   # dev-UI scale: realized control frames per model frame
 
+# FunnyPilot v3.2.12: preview-budget smoothing, derived from the delay knob.
+# The user's per-model software delay (models page) IS the interpolation
+# window: the plan is sampled that far ahead of the car's physical need. We
+# spend a fixed FRACTION of whatever delay is in use on an EMA of the desired
+# curvature, and sample the plan correspondingly EARLIER, so the smoothing lag
+# is paid from inside the window and the effective total stays exactly what
+# the user set. Bigger knob -> more smoothing time; smaller -> less.
+LAT_SMOOTH_FRACTION = 0.4
+LAT_SMOOTH_MAX_S = 0.3
+
+
+def smooth_seconds_for_delay(lat_delay: float) -> float:
+  """Curvature-smoothing time constant funded by the lateral delay in use."""
+  try:
+    d = float(lat_delay)
+  except (TypeError, ValueError):
+    return 0.0
+  if not math.isfinite(d) or d <= 0.0:
+    return 0.0
+  return min(LAT_SMOOTH_FRACTION * d, LAT_SMOOTH_MAX_S)
+
 
 class LatSmoother:
   def __init__(self):

@@ -1,3 +1,50 @@
+FunnyPilot v3.2.12 (2026-07-10)
+========================
+SUPERSEDES 3.2.11 — DO NOT FLASH 3.2.11. Two corrections from user feedback
+and a deeper code read:
+
+  (1) The models-page delay knob (0.29-0.39 per model, user-tuned, feeds the
+      model network itself via lateral_control_params) is the USER'S — the
+      smoothing must adapt to it, never require changing it.
+  (2) 3.2.11 edited the WRONG DAEMON for this device: custom Model Manager
+      bundles run through sunnypilot/modeld_v2 (NativeProcess
+      modeld_tinygrad), which has its own per-bundle smoothing override
+      ('lat', default 0). 3.2.11's stock-modeld constant would have done
+      nothing there while controlsd's +0.2 misaligned the PID setpoint
+      buffer by 0.2 s. Also corrected: latDelay 0.478->0.497 DRIFTS in the
+      logs, i.e. it is the live learner's measured value — the K5's true
+      command-to-response lag is ~0.5 s.
+
+* feat: delay-funded adaptive smoothing (lat_smooth.smooth_seconds_for_delay):
+      tau = clip(0.4 * lateral_delay_in_use, 0, 0.3)
+  and the action horizon is sampled EARLIER by tau, so the EMA's lag is paid
+  from inside the delay window: effective total ALWAYS equals the configured
+  delay. Set the knob higher -> more smoothing time; lower -> less — the
+  window is finally "filled with something useful" at any setting. At the
+  user's current ~0.5 s in-use delay: tau = 0.2 s.
+* modeld_v2 (the daemon this device runs): tau = bundle 'lat' override if
+  set, else the adaptive budget; the generation >= 10 EMA gate is respected
+  (older bundles get tau = 0 AND no horizon shift, so nothing steers early);
+  the NETWORK still receives the user's full delay via
+  lateral_control_params — per-model delay tuning is byte-identical.
+* stock modeld: same total-preserving scheme (LAT_SMOOTH_SECONDS constant
+  now only a zero fallback); controlsd aligns the PID setpoint buffer on
+  lateralDelay directly (the old +constant also silently ignored per-bundle
+  overrides when modeld_v2 was active — pre-existing misalignment fixed).
+* SAFETY PASS (pre-drive review, all paths): budget function total on
+  None/NaN/inf/negative/string -> 0.0 (smoothing off, tested); sample
+  horizon floored at DT_MDL so curv_from_psis divides by t >= 0.1 with
+  v clipped >= 1; np.interp inputs stay well inside T_IDXS; NO new array
+  indexing anywhere; smooth_value guards tau <= 0; LatSmoother passes
+  through before its first knot, holds on NaN, resets on lat-inactive;
+  latcontrol delay_frames clip handles any delay >= 0; modeld_v2 test stub
+  covered by getattr fallback; no new Params reads in hot loops.
+* chore: FUNNYPILOT_VERSION -> 3.2.12; EXPECTED_VERSION -> 3.2.12;
+  code_smoothsec now greps smooth_seconds_for_delay in modeld_v2 (the
+  daemon actually running on this device).
+* tests: 4 new budget cases (knob scaling, cap, degenerate-input safety,
+  budget < delay always); full suite 55 green.
+
 FunnyPilot v3.2.11 (2026-07-10)
 ========================
 One feel change, cleanly A/B-able against 3.2.10: spend the preview window

@@ -23,6 +23,7 @@ from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.system import sentry
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_accel, smooth_curvature
+from openpilot.selfdrive.controls.lib.lat_smooth import smooth_seconds_for_delay
 
 from openpilot.sunnypilot.modeld_v2.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState, get_curvature_from_output
 from openpilot.sunnypilot.modeld_v2.constants import Plan
@@ -69,6 +70,13 @@ class ModelState(ModelStateBase):
 
     self.LAT_SMOOTH_SECONDS = float(overrides.get('lat', ".0"))
     self.LONG_SMOOTH_SECONDS = float(overrides.get('long', ".0"))
+    # FunnyPilot v3.2.12: the curvature-smoothing time constant actually in
+    # effect this frame (bundle override if set, else a fraction of the user's
+    # lateral delay window — see lat_smooth.smooth_seconds_for_delay). Updated
+    # each iteration in the main loop; the action horizon is pulled EARLIER by
+    # the same amount so the EMA lag is paid from the delay window and the
+    # effective total stays exactly the configured delay.
+    self.lat_smooth_active = self.LAT_SMOOTH_SECONDS
     self.MIN_LAT_CONTROL_SPEED = 0.3
     self.PLANPLUS_CONTROL: float = 1.0
 
@@ -175,7 +183,10 @@ class ModelState(ModelStateBase):
     desired_curvature = get_curvature_from_output(model_output, plan, v_ego, lat_action_t, self.mlsim)
     if self.generation is not None and self.generation >= 10: # smooth curvature for post FOF models
       if v_ego > self.MIN_LAT_CONTROL_SPEED:
-        desired_curvature = smooth_curvature(desired_curvature, prev_action.desiredCurvature, v_ego, self.LAT_SMOOTH_SECONDS)
+        # lat_smooth_active is set every loop iteration; getattr fallback keeps
+        # direct callers (tests) working with just LAT_SMOOTH_SECONDS
+        tau = getattr(self, 'lat_smooth_active', self.LAT_SMOOTH_SECONDS)
+        desired_curvature = smooth_curvature(desired_curvature, prev_action.desiredCurvature, v_ego, tau)
       else:
         desired_curvature = prev_action.desiredCurvature
 
@@ -295,7 +306,20 @@ def main(demo=False):
       model.lat_delay = get_lat_delay(params, sm["liveDelay"].lateralDelay)
       model.PLANPLUS_CONTROL = params.get("PlanplusControl", return_default=True)
       camera_offset_helper.set_offset(params.get("CameraOffset", return_default=True))
-    lat_delay = model.lat_delay + model.LAT_SMOOTH_SECONDS
+    # FunnyPilot v3.2.12: smoothing funded by the delay window the user set.
+    # tau = bundle 'lat' override if provided, else a fraction of the delay in
+    # use. Only when the EMA actually runs (generation >= 10 gate inside
+    # get_action_from_model) is the action horizon pulled earlier by tau — the
+    # EMA lag restores the effective total to exactly the configured delay.
+    # The network keeps seeing the user's FULL delay (lateral_control_params),
+    # identical to before, so per-model delay tuning is untouched.
+    smoothing_runs = model.generation is not None and model.generation >= 10
+    if smoothing_runs:
+      model.lat_smooth_active = model.LAT_SMOOTH_SECONDS if model.LAT_SMOOTH_SECONDS > 0.0 else smooth_seconds_for_delay(model.lat_delay)
+    else:
+      model.lat_smooth_active = 0.0
+    lat_delay = model.lat_delay
+    lat_sample_delay = max(model.lat_delay - model.lat_smooth_active, DT_MDL)
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
@@ -345,7 +369,7 @@ def main(demo=False):
       posenet_send = messaging.new_message('cameraOdometry')
       mdv2sp_send = messaging.new_message('modelDataV2SP')
 
-      action = model.get_action_from_model(model_output, prev_action, lat_delay + DT_MDL, long_delay + DT_MDL, v_ego)
+      action = model.get_action_from_model(model_output, prev_action, lat_sample_delay + DT_MDL, long_delay + DT_MDL, v_ego)
       prev_action = action
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,

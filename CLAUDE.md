@@ -90,6 +90,41 @@ adds it to lat_delay, so enabling it costs no reaction time.
   ~0.15 so total preview stays ~0.5 s; trim further if turn-in feels
   early. 3.2.10 vs 3.2.11 is a clean A/B of exactly this change.
 
+### v3.2.12 Changes (based on funnypilot-3.2.11; 3.2.11 SUPERSEDED — do not flash)
+
+Delay-funded ADAPTIVE smoothing. CRITICAL FACTS learned here (do not
+regress): (1) custom Model Manager bundles run through
+sunnypilot/modeld_v2 (modeld_tinygrad NativeProcess), NOT
+selfdrive/modeld — lateral feel changes must be made THERE (3.2.11 missed
+this and also misaligned controlsd by +0.2 s; superseded). (2) The
+models-page delay (0.29-0.39 per model) is a USER-owned knob that feeds
+the model network via lateral_control_params — never require changing it
+and never change what the network sees. (3) latDelay in triage ctx DRIFTS
+(0.478->0.497) => it is the live learner's measurement; the K5's true
+command-to-response lag is ~0.5 s. (4) modeld_v2 has a per-bundle 'lat'
+smoothing override (default 0) and a generation >= 10 gate on
+smooth_curvature.
+
+- `selfdrive/controls/lib/lat_smooth.py` — `smooth_seconds_for_delay`:
+  tau = clip(0.4 * delay_in_use, 0, 0.3); returns 0.0 for any degenerate
+  input (None/NaN/inf/<=0/str). LAT_SMOOTH_FRACTION/LAT_SMOOTH_MAX_S.
+- `sunnypilot/modeld_v2/modeld.py` — per-loop `lat_smooth_active` (bundle
+  'lat' override if > 0, else adaptive; 0 when generation < 10 so nothing
+  steers early without the EMA); action sampled at
+  max(lat_delay - tau, DT_MDL) + DT_MDL; EMA uses tau (getattr fallback
+  for direct-call tests); network input lateral_control_params keeps the
+  FULL user delay.
+- `selfdrive/modeld/modeld.py` — same total-preserving scheme for the
+  stock daemon; LAT_SMOOTH_SECONDS constant back to 0.0 (fallback only);
+  get_action_from_model gained `lat_smooth_s` kwarg.
+- `selfdrive/controls/controlsd.py` — setpoint alignment lat_delay =
+  liveDelay.lateralDelay directly (sample-earlier + EMA-lag = total);
+  removed the modeld constant import (which had silently ignored
+  modeld_v2 bundle overrides).
+- `FUNNYPILOT_VERSION` -> 3.2.12; EXPECTED_VERSION -> 3.2.12;
+  `code_smoothsec` greps smooth_seconds_for_delay in modeld_v2.
+- tests: budget scaling/cap/degenerate-safety in test_lat_smooth.py.
+
 ### v3.2.10 Changes (based on funnypilot-3.2.9e)
 
 Restores the validated delta/5 lateral feel; deletes the failed 3.2.9e

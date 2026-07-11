@@ -20,7 +20,6 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
-from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
@@ -147,7 +146,13 @@ class Controls(ControlsExt):
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
     # Steering PID loop and lateral MPC
-    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    # FunnyPilot v3.2.12: the modeld-side smoothing is TOTAL-PRESERVING — the
+    # action is sampled earlier by its EMA time constant, so the command's
+    # effective timing equals the full configured delay. The setpoint buffer
+    # therefore aligns on lateralDelay directly, with no smoothing constant
+    # added (the previous +LAT_SMOOTH_SECONDS import also silently ignored the
+    # per-bundle override when modeld_v2 was the active daemon).
+    lat_delay = self.sm["liveDelay"].lateralDelay
 
     # FunnyPilot v3.2.10: interpolate the model's 20 Hz desired curvature across
     # the control frames — the validated delta/5 feel (see lat_smooth.py for the
