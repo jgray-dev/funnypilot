@@ -43,7 +43,15 @@ POLICY_PKL_PATH = Path(__file__).parent / 'models/driving_policy_tinygrad.pkl'
 VISION_METADATA_PATH = Path(__file__).parent / 'models/driving_vision_metadata.pkl'
 POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.pkl'
 
-LAT_SMOOTH_SECONDS = 0.0
+# FunnyPilot v3.2.11: spend part of the lateral preview window on smoothing.
+# The desired-curvature EMA below has time constant LAT_SMOOTH_SECONDS, and BOTH
+# this file's action horizon and controlsd's lat_delay add LAT_SMOOTH_SECONDS —
+# so the filter's lag is pre-paid out of the delay-compensation window and total
+# reaction time is unchanged. (This is the mechanism the fork's configured
+# LagdToggleDelay software delay was always meant to enable; it arrived zeroed
+# via a sunnypilot base sync, so the reserved window was never actually spent.)
+# Pair with reducing the models-page software delay so total preview stays put.
+LAT_SMOOTH_SECONDS = 0.2
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 

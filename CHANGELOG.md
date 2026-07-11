@@ -1,3 +1,35 @@
+FunnyPilot v3.2.11 (2026-07-10)
+========================
+One feel change, cleanly A/B-able against 3.2.10: spend the preview window
+on smoothing — the user's original "use the artificial delay to interpolate
+in realtime" concept, implemented through the mechanism upstream already
+plumbed for exactly this.
+
+* WHAT WAS FOUND: the models-page software delay (LagdToggleDelay ~0.35 s,
+  used when the live-learning toggle is off: delay = steerActuatorDelay +
+  LagdToggleDelay ~= 0.15 + 0.35 = 0.50 s — matching the 0.478-0.497
+  latDelay in the triage logs) RESERVES a preview window but nothing ever
+  SPENT it: modeld's LAT_SMOOTH_SECONDS EMA — whose lag is pre-paid by
+  adding LAT_SMOOTH_SECONDS to both modeld's action horizon and controlsd's
+  lat_delay, so total reaction time is unchanged — arrived set to 0.0 via a
+  sunnypilot base sync. The window sat idle as pure dead time.
+* feat: LAT_SMOOTH_SECONDS 0.0 -> 0.2. The 20 Hz desired-curvature knots
+  are now themselves smooth (EMA tau 0.2 s + the existing 2.5 m/s^3 jerk
+  clamp), so the deltas that LatSmoother spreads per-frame get smaller and
+  more consistent — many small wheel movements instead of a few bites —
+  with zero added reaction time (paid from preview, not response).
+* RECOMMENDED PAIRING: reduce the models-page software delay 0.35 -> ~0.15
+  so TOTAL preview stays ~0.5 s (0.15 hardware + 0.15 software + 0.2
+  smoothing); this re-allocates idle dead time into active smoothing.
+  If steering feels EARLY (turning in before the curve), reduce it more.
+* feat: triage ctx gains latDelayEst (liveDelay.lateralDelayEstimate) next
+  to latDelay (the value in use). If est << used, we are steering
+  systematically early — evidence for trimming the artificial delay
+  further (the suspected contributor to "bite then loosen").
+* chore: FUNNYPILOT_VERSION -> 3.2.11; EXPECTED_VERSION -> 3.2.11; new
+  code_smoothsec self-check. Lateral interpolation (LatSmoother), torque
+  features, override gate, triage recorder all unchanged from 3.2.10.
+
 FunnyPilot v3.2.10 (2026-07-10)
 ========================
 Restores the VALIDATED lateral interpolation feel. The 3.2.9e PlanRider

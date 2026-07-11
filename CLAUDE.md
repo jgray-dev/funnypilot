@@ -67,6 +67,29 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.2.11 Changes (based on funnypilot-3.2.10)
+
+Preview-budget smoothing enabled — the user's "use the artificial delay to
+interpolate" concept via upstream's own plumbing. KEY FINDING: the
+models-page software delay (Params `LagdToggleDelay` ~0.35 s; with
+`LagdToggle` off the used delay = CP.steerActuatorDelay + LagdToggleDelay
+~= 0.50 s, matching triage latDelay) reserved preview that nothing spent —
+`LAT_SMOOTH_SECONDS` was zeroed by a sunnypilot base sync (commit 6275006).
+Its lag is PRE-PAID: modeld adds it to the action horizon and controlsd
+adds it to lat_delay, so enabling it costs no reaction time.
+
+- `selfdrive/modeld/modeld.py` — LAT_SMOOTH_SECONDS 0.0 -> 0.2 (EMA on
+  action.desiredCurvature; existing 2.5 m/s^3 jerk clamp unchanged).
+  Smooths the KNOTS that LatSmoother then spreads per-frame.
+- `selfdrive/controls/controlsd.py` — triage ctx gains `latDelayEst`
+  (liveDelay.lateralDelayEstimate) beside `latDelay` (in use). est <<
+  used => steering early => trim the models-page delay (tell user).
+- `FUNNYPILOT_VERSION` -> 3.2.11; nav_webserver EXPECTED_VERSION ->
+  3.2.11 + `code_smoothsec` check (`LAT_SMOOTH_SECONDS = 0.2`).
+- USER GUIDANCE recorded: pair with models-page software delay 0.35 ->
+  ~0.15 so total preview stays ~0.5 s; trim further if turn-in feels
+  early. 3.2.10 vs 3.2.11 is a clean A/B of exactly this change.
+
 ### v3.2.10 Changes (based on funnypilot-3.2.9e)
 
 Restores the validated delta/5 lateral feel; deletes the failed 3.2.9e

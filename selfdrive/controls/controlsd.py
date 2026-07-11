@@ -196,6 +196,10 @@ class Controls(ControlsExt):
                          "aOff": round(float(lp.angleOffsetDeg), 3),
                          "stiff": round(float(lp.stiffnessFactor), 3),
                          "latDelay": round(float(self.sm['liveDelay'].lateralDelay), 3),
+                         # measured EPS+chassis delay estimate vs. the (possibly
+                         # artificially inflated) delay actually in use — if
+                         # est << used, we are steering systematically early
+                         "latDelayEst": round(float(self.sm['liveDelay'].lateralDelayEstimate), 3),
                        })
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
