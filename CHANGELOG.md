@@ -1,3 +1,45 @@
+FunnyPilot v3.3.1 (2026-07-11)
+========================
+Radar-tracks ENABLE is now evidenced and verified (lateral confirmed good
+on 3.3.0e, carried unchanged). The 3.3.0e log showed the radar's OUTPUT but
+nothing about the enable handshake itself — and the upstream enable had a
+real honesty bug: it fetched the write response with timeout=0, never
+checked it, and never read the config back, so "successfully enabled" (and
+radarUnavailable=False) could be reported when the radar had NACKed the
+write. That produces exactly a log full of lead distances with zero real
+track points.
+
+* fix(opendbc enable_radar_tracks): success is now claimed ONLY when the
+  post-write read-back shows the tracks bit set. Write ack is checked with
+  a real timeout; a NACKed/silent write returns False so radarUnavailable
+  correctly stays True (clean stock fallback instead of a dead parser).
+* feat: the full handshake is appended to radar_enable.jsonl (web UI ->
+  Logs; Verify -> triage_radaren shows the last boot inline): per attempt
+  {session answered?, current config hex, write ack?, post-write verify
+  hex, enabled}, plus the radar's DEVICE FINGERPRINT read in-session
+  (UDS DIDs: application software id 0xF181, part number 0xF187, HKG
+  version blob 0xF100) — what's needed to match this DL3 radar against
+  known-good tracks configs and pick an alternate payload if 0142 is
+  rejected. Exceptions land in the log too. Logging is best-effort and
+  can never break the enable itself.
+* feat: radard writes a radar_identity record at startup into
+  radar_tracks.jsonl: carFingerprint, radarUnavailable (the enable's
+  claimed outcome), and ALL ECU firmware versions from openpilot's
+  ignition-time FW query (incl. the fwdRadar ECU) — the car-side half of
+  the fingerprint.
+* chore: FUNNYPILOT_VERSION -> 3.3.1; EXPECTED_VERSION -> 3.3.1; new
+  code_radaren + triage_radaren Verify rows.
+* tests: NEW opendbc test_enable_radar_tracks.py (5 cases with a scripted
+  fake UDS query: verified success; NACKed write MUST fail — the exact
+  upstream bug; silent radar; already-enabled short-circuit; unwritable
+  log dir never breaks the enable) + 2 identity-record cases. Full suite
+  green.
+* READING THE LOG: radar_enable.jsonl "session":false => radar never
+  answered 0x7D0 (wiring/bus); "write_ack":false or verify unchanged =>
+  firmware rejected config 0142 (send the ident block + we try the
+  alternate payload next); "enabled":true + radar_tracks.jsonl n>0 =>
+  done, tracks are real.
+
 FunnyPilot v3.3.0e (2026-07-10)
 ========================
 EXPERIMENTAL — enables RADAR TRACKS on the 2021+ Kia K5 (DL3) and logs them

@@ -206,6 +206,29 @@ class RadarTracksMonitor:
     self._n_max = 0
     self._cerr = 0
 
+  def log_identity(self, cp) -> None:
+    """One record at radard startup: the car + radar 'device fingerprint'.
+    carFw comes from openpilot's ignition-time UDS firmware query, so the
+    radar ECU's exact firmware version lands in the accessible log — what's
+    needed to match this DL3 radar against known-good tracks configs. Plus
+    radarUnavailable: False here means the 0x7D0 enable claimed success."""
+    try:
+      fw = []
+      for f in getattr(cp, 'carFw', None) or []:
+        try:
+          fw.append({"ecu": str(f.ecu), "addr": int(f.address),
+                     "fw": bytes(f.fwVersion).decode('utf-8', 'replace').replace('\x00', '').strip()})
+        except Exception:
+          continue
+      self.recorder.write({
+        "kind": "radar_identity",
+        "car": str(getattr(cp, 'carFingerprint', '?')),
+        "radarUnavailable": bool(getattr(cp, 'radarUnavailable', True)),
+        "fw": fw,
+      })
+    except Exception:
+      pass
+
   @staticmethod
   def _lead(lead) -> list | None:
     try:

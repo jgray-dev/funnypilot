@@ -308,7 +308,10 @@ def main() -> None:
 
   # FunnyPilot v3.3.0e: radar-tracks evidence log (web UI -> Logs ->
   # radar_tracks.jsonl). 1 Hz; every operation best-effort.
+  # v3.3.1: startup identity record — car, radar fw versions (the device
+  # fingerprint), and whether the 0x7D0 enable claimed success.
   triage = RadarTracksMonitor(TriageRecorder("radar_tracks"))
+  triage.log_identity(CP)
 
   while 1:
     sm.update()

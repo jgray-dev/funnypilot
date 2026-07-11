@@ -37,7 +37,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.0e"
+EXPECTED_VERSION = "3.3.1"
 
 # Read-only checks that verify the on-device code matches what we shipped and
 # capture state for diagnosing the "interp feels deactivated" issue. All commands
@@ -66,6 +66,8 @@ DIAG_CHECKS = [
   {"id": "code_triage",    "name": "v3.2.7 triage recorder present",       "cmd": "grep -c 'class TriageRecorder' /data/openpilot/selfdrive/controls/lib/triage_recorder.py 2>&1"},
   {"id": "code_ovrgate",   "name": "v3.2.8 override gate present",         "cmd": "grep -c 'class OverrideGate' /data/openpilot/selfdrive/controls/lib/override_gate.py 2>&1"},
   {"id": "code_radartrk",  "name": "v3.3.0e K5 radar tracks flag present", "cmd": "grep -c 'HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.MANDO_RADAR' /data/openpilot/opendbc_repo/opendbc/car/hyundai/values.py 2>&1"},
+  {"id": "code_radaren",   "name": "v3.3.1 verified radar enable present", "cmd": "grep -c 'radar_enable.jsonl' /data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/enable_radar_tracks.py 2>&1"},
+  {"id": "triage_radaren", "name": "Radar enable handshake (last boot)",   "cmd": "tail -4 /data/funnypilot_triage/radar_enable.jsonl 2>/dev/null || echo '(no enable log yet — reboot with ignition on)'"},
   {"id": "triage_radar",   "name": "Last radar-tracks records",            "cmd": "tail -3 /data/funnypilot_triage/radar_tracks.jsonl 2>/dev/null || echo '(no radar log yet — take a drive)'"},
   {"id": "triage_boot",    "name": "Last code-identity records",           "cmd": "tail -3 /data/funnypilot_triage/code_identity.jsonl 2>/dev/null || echo '(no triage log yet)'"},
   {"id": "triage_lat",     "name": "Last onroad interp records",           "cmd": "tail -3 /data/funnypilot_triage/lat_interp.jsonl 2>/dev/null || echo '(no triage log yet)'"},

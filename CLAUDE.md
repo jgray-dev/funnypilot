@@ -90,6 +90,38 @@ adds it to lat_delay, so enabling it costs no reaction time.
   ~0.15 so total preview stays ~0.5 s; trim further if turn-in feels
   early. 3.2.10 vs 3.2.11 is a clean A/B of exactly this change.
 
+### v3.3.1 Changes (based on funnypilot-3.3.0e)
+
+Verified + evidenced radar-tracks enable. ROOT CAUSE found in upstream
+enable_radar_tracks: write response fetched with timeout=0 and never
+checked, no read-back — "success" (radarUnavailable=False) reported even
+on a NACKed write => 3.3.0e logs full of lead distances with n==0.
+Lateral (3.2.12 adaptive smoothing + LatSmoother) user-confirmed good;
+carried unchanged.
+
+- `opendbc_repo/opendbc/sunnypilot/car/hyundai/enable_radar_tracks.py` —
+  REWRITTEN: write ack checked (real timeout), post-write read-back is
+  the ONLY success criterion (verify == TRACKS_ENABLED_CONFIG or tracks
+  bit set); radar identity DIDs read in-session (0xF181/0xF187/0xF100);
+  every step JSONL-appended to /data/funnypilot_triage/radar_enable.jsonl
+  via best-effort `_fp_log` (512K rotate). NOTE: upstream compared
+  current_config (6 bytes, data[3:]) against a 5-byte constant — the
+  "already enabled" check could never fire; fixed by comparing both forms.
+- `selfdrive/controls/lib/triage_recorder.py` — RadarTracksMonitor gains
+  `log_identity(CP)`: one radar_identity record at radard startup
+  {car, radarUnavailable, fw: all carFw ECUs incl. fwdRadar}.
+- `selfdrive/controls/radard.py` — calls triage.log_identity(CP).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> 3.3.1; new
+  `code_radaren` grep + `triage_radaren` (enable handshake inline).
+- `FUNNYPILOT_VERSION` -> 3.3.1.
+- `opendbc_repo/opendbc/sunnypilot/car/hyundai/tests/test_enable_radar_tracks.py`
+  — NEW (5 cases, scripted FakeQuery): the NACKed-write-must-fail case is
+  the regression test for the upstream bug.
+- TRIAGE ORDER for the user's logs: radar_enable.jsonl session:false =>
+  bus/wiring; write_ack:false or verify unchanged => payload 0142
+  rejected, use ident block to pick alternate; enabled:true + tracks
+  n>0 => working.
+
 ### v3.3.0e Changes (based on funnypilot-3.2.12)
 
 Radar tracks enabled + logged for the K5 (DL3). KEY WIRING FACTS: the

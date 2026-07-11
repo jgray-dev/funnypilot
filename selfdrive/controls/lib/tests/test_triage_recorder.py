@@ -160,6 +160,28 @@ class TestRadarTracksMonitor:
     recs = read_jsonl(tmp_path / "radar.jsonl")
     assert recs[0]["n"] == 0
 
+  def test_identity_record(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    cp = SimpleNamespace(
+      carFingerprint="KIA_K5_2021",
+      radarUnavailable=False,
+      carFw=[SimpleNamespace(ecu="fwdRadar", address=0x7d0, fwVersion=b"DL3_ SCC F-CUP      1.00 1.02\x00\x00")],
+    )
+    mon.log_identity(cp)
+    rec = read_jsonl(tmp_path / "radar.jsonl")[0]
+    assert rec["kind"] == "radar_identity"
+    assert rec["car"] == "KIA_K5_2021"
+    assert rec["radarUnavailable"] is False
+    assert rec["fw"][0]["ecu"] == "fwdRadar"
+    assert "DL3_ SCC" in rec["fw"][0]["fw"]
+
+  def test_identity_garbage_cp_never_raises(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    mon.log_identity(None)
+    mon.log_identity(SimpleNamespace(carFw=[object()]))
+    recs = read_jsonl(tmp_path / "radar.jsonl")
+    assert all(r["kind"] == "radar_identity" for r in recs)
+
 
 class TestWebserverHelpers:
   def test_log_name_whitelist(self):
