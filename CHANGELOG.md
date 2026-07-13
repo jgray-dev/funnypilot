@@ -9,14 +9,15 @@ untouched (3.3.2 feel carries over byte-identical).
   while SLA is off — the sign pulses and shows an up/down arrow for 6
   seconds: up if your set speed is below the limit, down if above.
   Pressing the cruise button IN THE ARROW'S DIRECTION during the window
-  activates SLA; the press is swallowed (it doesn't also step the set
-  speed) and the set speed snaps to the limit. If the set speed already
-  equals the limit, SLA activates by itself. The window simply times out
-  otherwise and re-offers at the next zone. Tap-to-adopt is REMOVED.
-  Everything AFTER activation is the new stack, unchanged: the cluster set
-  speed is the target, manual adjustments re-derive the carried %-offset
-  (60 in a 50 -> +20% -> 36 in a 30 zone), zone snaps are idempotent,
-  deactivation only on disengage/mode off.
+  activates SLA; the press is swallowed and your CURRENT SET SPEED IS
+  ADOPTED UNCHANGED — no jump, no jerk. The %-offset is derived from where
+  you already are (confirm at 50 set in a 45 zone = active at +11%, still
+  doing 50). If the set speed already equals the limit, SLA activates by
+  itself at 0%. The window simply times out otherwise and re-offers at the
+  next zone. Everything AFTER activation is the new stack, unchanged: the
+  cluster set speed is the target, manual adjustments re-derive the
+  carried %-offset (60 in a 50 -> +20% -> 36 in a 30 zone), zone snaps are
+  idempotent, deactivation only on disengage/mode off.
 * feat(SLA pre-zone gas gating): approaching a LOWER zone while active,
   once inside the coast envelope ((v^2 - v_target^2) / (2 * 0.35) plus a
   1.5 s early-arrival buffer, target including your %-offset), the planner
@@ -42,11 +43,12 @@ untouched (3.3.2 feel carries over byte-identical).
   driving record carries the skipped count. radar_tracks.jsonl likewise
   collapses zero-track seconds to a 30 s heartbeat — "n stuck at 0 while
   driving" is still fully visible, without 86k identical lines a day.
-* tests: SLA suite rewritten for the arrow flow (29 cases: directional
-  confirm both ways, wrong-direction ignored, stale press expiry, window
-  timeout + re-prompt, ratio carryover incl. both user examples, gas gate
-  envelope on/off/ratio-aware/clears-at-boundary); triage idle-collapse
-  cases added (101 total import-light tests green).
+* tests: SLA suite rewritten for the arrow flow (30 cases: directional
+  confirm both ways adopts the set speed, wrong-direction ignored, stale
+  press expiry, window timeout + re-prompt, adopted ratio carries to the
+  next zone, ratio carryover incl. both user examples, gas gate envelope
+  on/off/ratio-aware/clears-at-boundary); triage idle-collapse cases
+  added (112 total import-light tests green).
 
 FunnyPilot v3.3.2 (2026-07-11)
 ========================

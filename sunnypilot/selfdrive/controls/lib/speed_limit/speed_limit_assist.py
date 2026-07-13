@@ -21,11 +21,12 @@ Activation (the original arrow flow):
     up if the set speed is below the limit, down if above.
   * Confirm: pressing the cruise button IN THE ARROW'S DIRECTION during the
     window activates SLA. The confirming tap is swallowed upstream
-    (cruise_ext.py) so it doesn't also step the set speed; on activation the
-    set speed snaps to the limit and the dynamic ratio starts at 0.
+    (cruise_ext.py) so it doesn't step the set speed — activation ADOPTS the
+    current set speed unchanged (no jump, no jerk) and derives the dynamic
+    ratio from it: 50 set in a 45 zone activates at +11%, still doing 50.
   * If the set speed already equals the limit, SLA activates immediately
-    (nothing to confirm). The window simply times out back to inactive
-    otherwise, and re-arms on the next zone change.
+    (nothing to confirm, ratio 0). The window simply times out back to
+    inactive otherwise, and re-arms on the next zone change.
 
 While active (the v3.2.6e stack, unchanged):
   * The cluster set speed IS the SLA target. Manual cruise adjustments
@@ -247,9 +248,12 @@ class SpeedLimitAssist:
     self._clear_releases()
 
   def _activate(self) -> None:
-    # Original-flow activation: the set speed becomes the limit (cruise_ext
-    # snaps it on the became-active edge), so the ratio starts at 0.
+    # Activation ADOPTS the current set speed: the confirming press is
+    # swallowed upstream and nothing is written to the cruise speed, so
+    # there is no jump. The dynamic ratio is derived from where the set
+    # speed already is — 50 set in a 45 zone activates at +11%.
     self._ratio = 0.0
+    self._set_ratio_from_cluster()
     self.state = self._active_or_adapting()
     self._clear_releases()
 

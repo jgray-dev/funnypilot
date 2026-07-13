@@ -126,8 +126,9 @@ class VCruiseHelperSP:
     """FunnyPilot v3.3.3: swallow the SLA preActive confirm press.
 
     While the activation arrow is showing, a cruise press IN THE ARROW'S
-    DIRECTION confirms SLA — it must not also step the set speed (the
-    activation snap moves the set speed to the limit instead). Presses in
+    DIRECTION confirms SLA — it must not also step the set speed, because
+    activation ADOPTS the current set speed exactly as it is (SLA derives
+    its ratio from it; nothing is written, so there is no jump). Presses in
     the other direction, and long presses, stay ordinary adjustments.
     """
     if long_press:
@@ -143,13 +144,13 @@ class VCruiseHelperSP:
 
   def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
     # FunnyPilot: while SLA is active the cluster set speed IS the SLA target.
-    # On ACTIVATION (v3.3.3, original arrow flow) the set speed snaps to the
-    # limit — the confirming press was swallowed, so this is the only write.
-    # On a zone change while active, carry the dynamic offset ratio into the
-    # new zone: set speed := new_limit * (1 + ratio). The SLA state machine
-    # re-derives the ratio from this exact value, so the snap is idempotent.
-    if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
-                                                self.update_speed_limit_final_last_changed):
+    # On ACTIVATION nothing is written — the arrow confirm adopts the set
+    # speed exactly as it is (no jump). Only on a zone change while ALREADY
+    # active does the ratio carry into the new zone: set speed :=
+    # new_limit * (1 + ratio). The SLA state machine re-derives the ratio
+    # from this exact value, so the snap is idempotent.
+    if (self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES and
+            self.update_speed_limit_final_last_changed):
       target_kph = self.speed_limit_final_last_kph * (1.0 + self.sla_ratio)
       self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 

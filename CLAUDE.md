@@ -82,7 +82,9 @@ brake, and lead braking passes through unchanged.
   active on a cruise press in the arrow's direction (`_confirm_pressed`
   consumes 0.5 s-valid button RELEASES recorded by update_car_state;
   set==limit auto-activates, incl. from inactive at any time). Activation
-  sets ratio=0 (cruise_ext snaps set speed to the limit). ACTIVE behavior
+  ADOPTS the current set speed unchanged — `_activate` derives the ratio
+  from the cluster (`_set_ratio_from_cluster`), NOTHING is written to the
+  cruise speed (no jump; the confirm press is swallowed). ACTIVE behavior
   = the v3.2.6e stack unchanged (cluster-is-target, ratio re-derive,
   idempotent snap, deactivate only on disengage/mode off). NEW
   `gas_gate_active`: active + upcoming lower zone + within coast envelope
@@ -100,9 +102,9 @@ brake, and lead braking passes through unchanged.
   swallow: `update_speed_limit_assist` computes req_plus/req_minus
   (helpers.compare_cluster_target); `..._pre_active_confirmed` swallows
   accel-press when req_plus / decel-press when req_minus during
-  preActive (long presses pass through). Snap now ALSO fires on the
-  became-active edge (ratio=0 -> writes the limit), plus the existing
-  zone-change snap. `selfdrive/car/cruise.py` call site unchanged.
+  preActive (long presses pass through). NO write on activation (adopt);
+  the snap fires ONLY on zone change while already active
+  (limit*(1+ratio)). `selfdrive/car/cruise.py` call site unchanged.
 - `selfdrive/controls/lib/longitudinal_planner.py` — after update_targets:
   `if self.sla.gas_gate_active: accel_clip[1] = min(accel_clip[1],
   max(accel_coast, accel_clip[0]))` (v3.3.3 marker). Rides the existing
@@ -122,7 +124,8 @@ brake, and lead braking passes through unchanged.
   `updater` (target+staged one row)/model_bundle/`logs` (dir listing).
   All old code_*/triage_* row ids are GONE — _eval_diag rewritten to
   match.
-- Tests: test_speed_limit_assist.py rewritten (29 cases incl. TestGasGate);
+- Tests: test_speed_limit_assist.py rewritten (30 cases incl. TestGasGate
+  + adopt-on-confirm/no-jump assertions);
   test_triage_recorder.py updated + idle-collapse cases (22). Full
   import-light suite 101 green. test_cruise_mode/test_speed_limit_resolver
   need device (ipc_pyx/params) — resolver tests use speedLimitAhead=0 so

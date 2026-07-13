@@ -87,15 +87,13 @@ def engage(sla, events, **kw):
 
 
 def activate(sla, events, cluster_mph, limit_mph):
-  """Engage + confirm in the arrow's direction, then deliver the snap."""
+  """Engage + confirm in the arrow's direction; the set speed is ADOPTED unchanged."""
   engage(sla, events, cluster_mph=cluster_mph, limit_mph=limit_mph)
   if not sla.is_active:  # set == limit auto-activates during engage
     assert sla.state == SpeedLimitAssistState.preActive
     release(sla, ButtonType.accelCruise if cluster_mph < limit_mph else ButtonType.decelCruise)
     step(sla, events, cluster_mph=cluster_mph, limit_mph=limit_mph)
   assert sla.is_active
-  # cruise helper snaps the set speed to the limit on the became-active edge
-  step(sla, events, cluster_mph=limit_mph, limit_mph=limit_mph)
   events.clear()
 
 
@@ -133,27 +131,42 @@ class TestArming:
 
 
 class TestPreActiveConfirm:
-  def test_up_confirm_activates(self):
-    # 40 set in a 45 zone: up arrow; pressing UP within the window activates
+  def test_up_confirm_activates_and_adopts_set_speed(self):
+    # 40 set in a 45 zone: up arrow; pressing UP within the window activates.
+    # The set speed is ADOPTED unchanged: target stays 40, ratio -11%.
     sla = make_sla()
     events = FakeEvents()
     engage(sla, events, cluster_mph=40., limit_mph=45.)
     release(sla, ButtonType.accelCruise)
     step(sla, events, cluster_mph=40., limit_mph=45.)
     assert sla.is_active
-    assert sla.dynamic_offset_ratio == 0.0
-    assert abs(sla.output_v_target - 45. * MPH) < 1e-6
+    assert abs(sla.dynamic_offset_ratio - (40. - 45.) / 45.) < 1e-6
+    assert abs(sla.output_v_target - 40. * MPH) < 1e-6  # no jump on activation
     assert EventNameSP.speedLimitActive in events.names
 
-  def test_down_confirm_activates(self):
-    # 45 set in a 40 zone: down arrow; pressing DOWN activates
+  def test_down_confirm_activates_and_adopts_set_speed(self):
+    # 45 set in a 40 zone: down arrow; pressing DOWN activates at +12.5%,
+    # still doing 45 — no jerk
     sla = make_sla()
     events = FakeEvents()
     engage(sla, events, cluster_mph=45., limit_mph=40.)
     release(sla, ButtonType.decelCruise)
     step(sla, events, cluster_mph=45., limit_mph=40.)
     assert sla.is_active
-    assert abs(sla.output_v_target - 40. * MPH) < 1e-6
+    assert abs(sla.dynamic_offset_ratio - (45. - 40.) / 40.) < 1e-6
+    assert abs(sla.output_v_target - 45. * MPH) < 1e-6  # no jump on activation
+
+  def test_adopted_ratio_carries_to_next_zone(self):
+    # activate at 50 in a 45 (+11%) via the arrow; a 35 zone -> 35 * 1.111 = 38.9
+    sla = make_sla()
+    events = FakeEvents()
+    engage(sla, events, cluster_mph=50., limit_mph=45.)
+    release(sla, ButtonType.decelCruise)
+    step(sla, events, cluster_mph=50., limit_mph=45.)
+    assert sla.is_active
+    ratio = (50. - 45.) / 45.
+    step(sla, events, cluster_mph=50., limit_mph=35.)
+    assert abs(sla.output_v_target - 35. * (1. + ratio) * MPH) < 1e-6
 
   def test_wrong_direction_does_not_activate(self):
     sla = make_sla()
