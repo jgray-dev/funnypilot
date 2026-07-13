@@ -11,6 +11,7 @@ from opendbc.car import structs
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import ACTIVE_STATES as SLA_ACTIVE_STATES
 
 ButtonType = car.CarState.ButtonEvent.Type
@@ -60,7 +61,9 @@ class VCruiseHelperSP:
     self.speed_limit_final_last = 0.
     self.speed_limit_final_last_kph = 0.
     self.prev_speed_limit_final_last_kph = 0.
-    self.sla_ratio = 0.  # FunnyPilot v3.2.6e: dynamic offset ratio carried between zones
+    self.sla_ratio = 0.  # FunnyPilot: dynamic offset ratio carried between zones
+    self.sla_req_plus = False   # FunnyPilot v3.3.3: preActive arrow direction
+    self.sla_req_minus = False
 
   def read_custom_set_speed_params(self) -> None:
     self.custom_acc_enabled = self.params.get_bool("CustomAccIncrementsEnabled")
@@ -112,31 +115,41 @@ class VCruiseHelperSP:
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
     self.sla_ratio = LP_SP.speedLimit.assist.slaDynamicOffset
+    self.sla_req_plus, self.sla_req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
+                                                                   self.speed_limit_final_last, is_metric)
 
   @property
   def update_speed_limit_final_last_changed(self) -> bool:
     return self.has_speed_limit and bool(self.speed_limit_final_last_kph != self.prev_speed_limit_final_last_kph)
 
   def update_speed_limit_assist_pre_active_confirmed(self, button_type: car.CarState.ButtonEvent.Type, long_press: bool = False) -> bool:
-    """FunnyPilot v3.2.6e: swallow the SLA activation tap.
+    """FunnyPilot v3.3.3: swallow the SLA preActive confirm press.
 
-    While SLA is armed (silently waiting), a SHORT cruise-down tap activates
-    SLA and adopts the current set speed — so the tap must NOT also decrement
-    the set speed. Long presses stay ordinary speed adjustments.
+    While the activation arrow is showing, a cruise press IN THE ARROW'S
+    DIRECTION confirms SLA — it must not also step the set speed (the
+    activation snap moves the set speed to the limit instead). Presses in
+    the other direction, and long presses, stay ordinary adjustments.
     """
-    if long_press or button_type != ButtonType.decelCruise:
+    if long_press:
       return False
 
-    armed = self.sla_state in (SpeedLimitAssistState.inactive, SpeedLimitAssistState.preActive)
-    return armed and self.has_speed_limit
+    if self.sla_state == SpeedLimitAssistState.preActive or self.prev_sla_state == SpeedLimitAssistState.preActive:
+      if button_type == ButtonType.accelCruise and self.sla_req_plus:
+        return True
+      if button_type == ButtonType.decelCruise and self.sla_req_minus:
+        return True
+
+    return False
 
   def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
-    # FunnyPilot v3.2.6e: while SLA is active the cluster set speed IS the SLA
-    # target. On a zone change, carry the dynamic offset ratio into the new
-    # zone: set speed := new_limit * (1 + ratio). On ACTIVATION nothing is
-    # written — tap-to-adopt keeps the set speed exactly as it was.
-    if (self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES and
-            self.update_speed_limit_final_last_changed):
+    # FunnyPilot: while SLA is active the cluster set speed IS the SLA target.
+    # On ACTIVATION (v3.3.3, original arrow flow) the set speed snaps to the
+    # limit — the confirming press was swallowed, so this is the only write.
+    # On a zone change while active, carry the dynamic offset ratio into the
+    # new zone: set speed := new_limit * (1 + ratio). The SLA state machine
+    # re-derives the ratio from this exact value, so the snap is idempotent.
+    if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
+                                                self.update_speed_limit_final_last_changed):
       target_kph = self.speed_limit_final_last_kph * (1.0 + self.sla_ratio)
       self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 

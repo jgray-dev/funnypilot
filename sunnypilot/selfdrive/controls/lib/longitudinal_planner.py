@@ -68,10 +68,12 @@ class LongitudinalPlannerSP:
     # Speed Limit Resolver
     self.resolver.update(v_ego, sm)
 
-    # Speed Limit Assist
+    # Speed Limit Assist (v3.3.3: resolver ahead info feeds the pre-zone gas gate)
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
-                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
+                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp,
+                    next_speed_limit_final=self.resolver.next_speed_limit_final,
+                    next_distance=self.resolver.distance_to_next_limit)
 
     # LongV2: SCC-Vision v2
     self._scc_vision_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)

@@ -109,9 +109,9 @@ class VCruiseHelper(VCruiseHelperSP):
       return
 
     # Speed Limit Assist for Non PCM long cars.
-    # FunnyPilot v3.2.6e: a short cruise-down tap while SLA is armed is the
-    # SLA activation gesture — it adopts the current set speed, so the set
-    # speed must not change here.
+    # FunnyPilot v3.3.3: while the SLA activation arrow is showing, a cruise
+    # press in the arrow's direction confirms SLA — the activation snap moves
+    # the set speed to the limit, so the press must not also step it here.
     if self.update_speed_limit_assist_pre_active_confirmed(button_type, long_press):
       return
 

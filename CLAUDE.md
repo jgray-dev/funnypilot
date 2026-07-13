@@ -67,6 +67,67 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.3 Changes (based on funnypilot-3.3.2)
+
+Original SLA arrow activation restored + pre-zone gas gating + logging
+declutter. Lateral untouched. ARCHITECTURE RULE upheld: SLA stays
+speed-domain; the one new accel-adjacent output is a THROTTLE-ONLY clamp
+(accel_clip[1] -> coast accel, floor untouched) — it can coast, never
+brake, and lead braking passes through unchanged.
+
+- `sunnypilot/.../speed_limit/speed_limit_assist.py` — REWRITTEN activation
+  (v3.3.3 marker = code grep target): tap-to-adopt REMOVED; states
+  disabled -> preActive (6 s `PRE_ACTIVE_WINDOW`, entered on engage-with-
+  limit, on zone change while inactive, or limit first appearing) ->
+  active on a cruise press in the arrow's direction (`_confirm_pressed`
+  consumes 0.5 s-valid button RELEASES recorded by update_car_state;
+  set==limit auto-activates, incl. from inactive at any time). Activation
+  sets ratio=0 (cruise_ext snaps set speed to the limit). ACTIVE behavior
+  = the v3.2.6e stack unchanged (cluster-is-target, ratio re-derive,
+  idempotent snap, deactivate only on disengage/mode off). NEW
+  `gas_gate_active`: active + upcoming lower zone + within coast envelope
+  ((v²-target²)/(2*GATE_COAST_ACCEL 0.35) + target*1.5 s buffer), target =
+  next_limit_final*(1+ratio). update() gained kwargs
+  next_speed_limit_final/next_distance (default 0 — old calls safe).
+- `sunnypilot/.../speed_limit/speed_limit_resolver.py` — upstream early
+  limit-switch (LIMIT_ADAPT_ACC block, FIXME'd upstream) REMOVED: it
+  changed the resolved limit pre-boundary, which would fire the SLA snap
+  early = braking before the zone. Now exposes `next_speed_limit`,
+  `next_speed_limit_final` (static offset via new `_offset_for_limit`),
+  `distance_to_next_limit` continuously; resolved limit flips exactly at
+  the boundary.
+- `sunnypilot/selfdrive/car/cruise_ext.py` — restored old directional
+  swallow: `update_speed_limit_assist` computes req_plus/req_minus
+  (helpers.compare_cluster_target); `..._pre_active_confirmed` swallows
+  accel-press when req_plus / decel-press when req_minus during
+  preActive (long presses pass through). Snap now ALSO fires on the
+  became-active edge (ratio=0 -> writes the limit), plus the existing
+  zone-change snap. `selfdrive/car/cruise.py` call site unchanged.
+- `selfdrive/controls/lib/longitudinal_planner.py` — after update_targets:
+  `if self.sla.gas_gate_active: accel_clip[1] = min(accel_clip[1],
+  max(accel_coast, accel_clip[0]))` (v3.3.3 marker). Rides the existing
+  0.05/frame clip rate limit, so the gate engages/releases smoothly.
+- `selfdrive/ui/sunnypilot/onroad/speed_limit.py` — UNCHANGED: the
+  preActive pulse + `_draw_pre_active_arrow` (up/down vs set speed) were
+  still in the tree keying off assist.state; the state machine simply
+  produces preActive again.
+- `selfdrive/controls/lib/triage_recorder.py` — idle collapse:
+  LatInterpMonitor skips parked seconds (nothing active, sp==0, v<0.5) —
+  one {"idle":N} heartbeat/60 s, first driving record carries "idl":N.
+  RadarTracksMonitor collapses zero-track seconds the same way (30 s
+  heartbeat, cerr accumulated).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION 3.3.3;
+  DIAG_CHECKS consolidated ~31 -> 7 rows: version/branch/clean/`code`
+  (single _CODE_MARKERS sweep, 16 greps, fail names the missing marker)/
+  `updater` (target+staged one row)/model_bundle/`logs` (dir listing).
+  All old code_*/triage_* row ids are GONE — _eval_diag rewritten to
+  match.
+- Tests: test_speed_limit_assist.py rewritten (29 cases incl. TestGasGate);
+  test_triage_recorder.py updated + idle-collapse cases (22). Full
+  import-light suite 101 green. test_cruise_mode/test_speed_limit_resolver
+  need device (ipc_pyx/params) — resolver tests use speedLimitAhead=0 so
+  the early-switch removal doesn't affect them.
+
 ### v3.2.11 Changes (based on funnypilot-3.2.10)
 
 Preview-budget smoothing enabled — the user's "use the artificial delay to

@@ -1,3 +1,53 @@
+FunnyPilot v3.3.3 (2026-07-13)
+========================
+SLA gets its original arrow activation back, learns to gas-gate BEFORE a
+lower speed limit zone, and the logging/web UI is decluttered. Lateral is
+untouched (3.3.2 feel carries over byte-identical).
+
+* feat(SLA activation, the original controls + UI): when long control is
+  engaged and a speed limit is known — on engage or on entering a new zone
+  while SLA is off — the sign pulses and shows an up/down arrow for 6
+  seconds: up if your set speed is below the limit, down if above.
+  Pressing the cruise button IN THE ARROW'S DIRECTION during the window
+  activates SLA; the press is swallowed (it doesn't also step the set
+  speed) and the set speed snaps to the limit. If the set speed already
+  equals the limit, SLA activates by itself. The window simply times out
+  otherwise and re-offers at the next zone. Tap-to-adopt is REMOVED.
+  Everything AFTER activation is the new stack, unchanged: the cluster set
+  speed is the target, manual adjustments re-derive the carried %-offset
+  (60 in a 50 -> +20% -> 36 in a 30 zone), zone snaps are idempotent,
+  deactivation only on disengage/mode off.
+* feat(SLA pre-zone gas gating): approaching a LOWER zone while active,
+  once inside the coast envelope ((v^2 - v_target^2) / (2 * 0.35) plus a
+  1.5 s early-arrival buffer, target including your %-offset), the planner
+  clamps max accel to the measured coast accel — the same mechanism the
+  model's allow_throttle uses. No throttle, NO brakes: the braking floor
+  is untouched (lead braking unaffected), and the cruise target does not
+  drop until the boundary, so nothing can command brakes for the new zone
+  early. Enter the zone near target; any residual overspeed is shed by
+  the MPC as normal LIGHT braking after the boundary.
+* fix(resolver): the upstream "adapt to the upcoming limit early" switch
+  (marked FIXME/not-working upstream) is removed — it flipped the resolved
+  limit ~80 m early, which would have made the SLA set-speed snap fire
+  before the zone, i.e. braking before the sign. The resolver now changes
+  exactly at the boundary and instead exposes the upcoming limit +
+  distance (speedLimitAhead) continuously for the gas gate.
+* chore(logging cleanup): web UI Verify consolidated from ~31 rows to 7 —
+  version / branch / working-tree-clean / ONE "shipped code markers" check
+  (16 load-bearing greps, fails naming whatever is missing) / updater
+  target+staged / active model bundle / triage log sizes. The inline
+  log-tail rows are gone (that's what the Logs viewer is for).
+  lat_interp.jsonl no longer writes a record every parked second: idle
+  time collapses to one {"idle": N} heartbeat per minute, and the first
+  driving record carries the skipped count. radar_tracks.jsonl likewise
+  collapses zero-track seconds to a 30 s heartbeat — "n stuck at 0 while
+  driving" is still fully visible, without 86k identical lines a day.
+* tests: SLA suite rewritten for the arrow flow (29 cases: directional
+  confirm both ways, wrong-direction ignored, stale press expiry, window
+  timeout + re-prompt, ratio carryover incl. both user examples, gas gate
+  envelope on/off/ratio-aware/clears-at-boundary); triage idle-collapse
+  cases added (101 total import-light tests green).
+
 FunnyPilot v3.3.2 (2026-07-11)
 ========================
 REVERTS the v3.2.12 adaptive EMA smoothing after on-road falsification —

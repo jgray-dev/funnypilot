@@ -110,6 +110,39 @@ class TestLatInterpMonitor:
     recs = read_jsonl(tmp_path / "lat.jsonl")
     assert recs[0]["ctx"] is None  # captured, not raised
 
+  def test_parked_seconds_collapse_to_heartbeat(self, tmp_path):
+    # v3.3.3: parked + disengaged (v ~ 0, nothing active) writes one
+    # heartbeat per IDLE_HEARTBEAT_S instead of a record per second
+    mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
+    frames = int((LatInterpMonitor.IDLE_HEARTBEAT_S + 2.0) * 100)
+    for i in range(frames):
+      self._sample(mon, i * 0.01, lat_active=False, long_active=False, v_ego=0.0)
+    recs = read_jsonl(tmp_path / "lat.jsonl")
+    assert len(recs) == 1
+    assert recs[0]["idle"] >= 55
+
+  def test_idle_stretch_attached_to_first_driving_record(self, tmp_path):
+    mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
+    for i in range(500):  # 5 s parked (below heartbeat period: nothing written)
+      self._sample(mon, i * 0.01, lat_active=False, long_active=False, v_ego=0.0)
+    assert not os.path.exists(tmp_path / "lat.jsonl")
+    for i in range(500, 750):  # drive off
+      self._sample(mon, i * 0.01)
+    recs = read_jsonl(tmp_path / "lat.jsonl")
+    assert recs[0]["idl"] >= 4    # the parked stretch is accounted for
+    assert recs[0]["la"] > 0      # first (boundary) record has activity
+    assert recs[1]["la"] == 1.0   # fully-driving records follow normally
+
+  def test_steering_press_while_parked_still_records(self, tmp_path):
+    # sitting still but touching the wheel is signal, not idle
+    mon = LatInterpMonitor(TriageRecorder("lat", directory=str(tmp_path)))
+    for i in range(105):
+      self._sample(mon, i * 0.01, lat_active=False, long_active=False, v_ego=0.0,
+                   steering_pressed=True)
+    recs = read_jsonl(tmp_path / "lat.jsonl")
+    assert len(recs) == 1
+    assert recs[0]["sp"] == 1.0
+
 
 def make_tracks(dists, can_error=False):
   pts = [SimpleNamespace(dRel=float(d), yRel=0.5, vRel=-1.0) for d in dists]
@@ -138,13 +171,33 @@ class TestRadarTracksMonitor:
     assert r["l2"] is None
     assert r["cerr"] == 0
 
-  def test_no_tracks_shows_zero(self, tmp_path):
-    # the enable-failed signature: n stays 0
+  def test_no_tracks_collapses_to_heartbeat(self, tmp_path):
+    # v3.3.3: zero-track seconds don't write per-second records — they
+    # collapse into one heartbeat per IDLE_HEARTBEAT_S. The enable-failed
+    # signature ("n stuck at 0 while driving") survives as the idle count.
     mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
-    for i in range(25):
-      mon.sample(i * 0.05, make_tracks([]), make_radar_state())
+    t, dt = 0.0, 0.05
+    while t < RadarTracksMonitor.IDLE_HEARTBEAT_S + 2.0:
+      mon.sample(t, make_tracks([]), make_radar_state())
+      t += dt
+    recs = read_jsonl(tmp_path / "radar.jsonl")
+    assert len(recs) == 1  # ~32 s of nothing -> one line
+    assert recs[0]["n"] == 0
+    assert recs[0]["idle"] >= 25
+
+  def test_idle_seconds_attached_to_next_real_record(self, tmp_path):
+    mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
+    t, dt = 0.0, 0.05
+    while t < 5.0:  # 5 s with no tracks (below heartbeat period: nothing written)
+      mon.sample(t, make_tracks([]), make_radar_state())
+      t += dt
+    assert not os.path.exists(tmp_path / "radar.jsonl")
+    while t < 6.5:  # tracks appear
+      mon.sample(t, make_tracks([20, 40]), make_radar_state())
+      t += dt
     r = read_jsonl(tmp_path / "radar.jsonl")[0]
-    assert r["n"] == 0 and r["nmax"] == 0 and r["pts"] == []
+    assert r["n"] == 2
+    assert r["idl"] >= 4  # the quiet stretch is accounted for
 
   def test_can_errors_counted(self, tmp_path):
     mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
@@ -155,9 +208,11 @@ class TestRadarTracksMonitor:
 
   def test_garbage_inputs_never_raise(self, tmp_path):
     mon = RadarTracksMonitor(TriageRecorder("radar", directory=str(tmp_path)))
-    for i in range(25):
-      mon.sample(i * 0.05, None, None)  # radard must never die from telemetry
-    recs = read_jsonl(tmp_path / "radar.jsonl")
+    t, dt = 0.0, 0.05
+    while t < RadarTracksMonitor.IDLE_HEARTBEAT_S + 2.0:
+      mon.sample(t, None, None)  # radard must never die from telemetry
+      t += dt
+    recs = read_jsonl(tmp_path / "radar.jsonl")  # garbage -> 0 tracks -> heartbeat
     assert recs[0]["n"] == 0
 
   def test_identity_record(self, tmp_path):

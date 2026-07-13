@@ -176,6 +176,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Get new v_cruise from Smart Cruise Control, Speed Limit Assist and the speed governor
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
 
+    # FunnyPilot v3.3.3: SLA pre-zone gas gate — approaching a lower speed
+    # limit zone, clamp max accel to the measured coast accel (same mechanism
+    # as allow_throttle). THROTTLE-ONLY by construction: the braking floor is
+    # untouched, so lead-follow braking is unaffected and the gate itself can
+    # coast the car but never brake it. The cruise target does not drop until
+    # the boundary (resolver no longer early-switches), so the MPC cannot
+    # brake for the new zone before entering it.
+    if self.sla.gas_gate_active:
+      accel_clip[1] = min(accel_clip[1], max(accel_coast, accel_clip[0]))
+
     if force_slow_decel:
       # Maintain 20% margin under current speed for a smooth safety decel toward a stop
       v_cruise = min(v_cruise, max(0.0, v_ego * 0.8))

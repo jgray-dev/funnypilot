@@ -13,7 +13,7 @@ from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_ADAPT_ACC
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
@@ -74,6 +74,12 @@ class SpeedLimitResolver:
     self.speed_limit_final_last = 0.
     self.speed_limit_offset = 0.
 
+    # FunnyPilot v3.3.3: upcoming zone info (map source), exposed for SLA
+    # pre-zone gas gating. next_speed_limit_final includes the static offset.
+    self.next_speed_limit = 0.
+    self.next_speed_limit_final = 0.
+    self.distance_to_next_limit = 0.
+
   def update_speed_limit_states(self) -> None:
     self.speed_limit_final = self.speed_limit + self.speed_limit_offset
 
@@ -97,12 +103,17 @@ class SpeedLimitResolver:
       self.offset_value = self.params.get("SpeedLimitValueOffset", return_default=True)
 
   def _get_speed_limit_offset(self) -> float:
+    return self._offset_for_limit(self.speed_limit)
+
+  def _offset_for_limit(self, limit: float) -> float:
+    # FunnyPilot v3.3.3: offset computation parameterized on the limit so the
+    # UPCOMING zone's final target can be computed the same way as the current one.
     if self.offset_type == OffsetType.off:
       return 0
     elif self.offset_type == OffsetType.fixed:
       return float(self.offset_value * (CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS))
     elif self.offset_type == OffsetType.percentage:
-      return float(self.offset_value * 0.01 * self.speed_limit)
+      return float(self.offset_value * 0.01 * limit)
     else:
       raise NotImplementedError("Offset not supported")
 
@@ -117,6 +128,9 @@ class SpeedLimitResolver:
 
   def _get_from_map_data(self, sm: messaging.SubMaster) -> None:
     self._reset_limit_sources(SpeedLimitSource.map)
+    self.next_speed_limit = 0.
+    self.next_speed_limit_final = 0.
+    self.distance_to_next_limit = 0.
     self._process_map_data(sm)
 
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
@@ -142,14 +156,17 @@ class SpeedLimitResolver:
     self.limit_solutions[SpeedLimitSource.map] = speed_limit
     self.distance_solutions[SpeedLimitSource.map] = 0.
 
-    # FIXME-SP: this is not working as expected
-    if 0. < next_speed_limit < self.v_ego:
-      adapt_time = (next_speed_limit - self.v_ego) / LIMIT_ADAPT_ACC
-      adapt_distance = self.v_ego * adapt_time + 0.5 * LIMIT_ADAPT_ACC * adapt_time ** 2
-
-      if distance_to_speed_limit_ahead <= adapt_distance:
-        self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
-        self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
+    # FunnyPilot v3.3.3: the upstream early-switch (adopt the upcoming limit
+    # within an adapt distance, marked FIXME "not working as expected") is
+    # REMOVED: switching speed_limit before the boundary made the cruise
+    # set-speed snap fire early, i.e. BRAKING before the zone. The resolved
+    # limit now changes exactly at the boundary; slowing down beforehand is
+    # SLA's pre-zone gas gate (throttle-only, speed_limit_assist.py) using
+    # the ahead info exposed below.
+    if next_speed_limit > 0.:
+      self.next_speed_limit = next_speed_limit
+      self.next_speed_limit_final = next_speed_limit + self._offset_for_limit(next_speed_limit)
+      self.distance_to_next_limit = distance_to_speed_limit_ahead
 
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[self.policy]

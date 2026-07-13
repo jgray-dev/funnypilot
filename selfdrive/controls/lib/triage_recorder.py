@@ -88,16 +88,26 @@ class LatInterpMonitor:
     sat      fraction of frames with the lat controller output saturated
     slb      fraction of frames with steer_limited_by_safety
     tqx      max |commanded steer torque| this second (normalized 0..1)
+
+  v3.3.3 idle collapse: parked seconds (nothing active, v ~ 0) are not
+  written per-second — they collapse into one {"idle": N} heartbeat per
+  IDLE_HEARTBEAT_S, and the first driving record after an idle stretch
+  carries "idl": N so no time is unaccounted for. A day parked is a
+  handful of lines instead of tens of thousands.
   """
 
   PERIOD = 1.0
   CONTEXT_EVERY = 10
+  IDLE_HEARTBEAT_S = 60.0
+  IDLE_V_THRESHOLD = 0.5  # m/s
 
   def __init__(self, recorder: TriageRecorder):
     self.recorder = recorder
     self._emits = 0
     self._t0 = None
     self._sp_prev = False  # persists across records so edges spanning seconds count once
+    self._idle_skipped = 0
+    self._idle_last_write = None
     self._reset_acc()
 
   def _reset_acc(self):
@@ -148,6 +158,21 @@ class LatInterpMonitor:
       if mono_t - self._t0 < self.PERIOD:
         return
 
+      # v3.3.3 idle collapse: parked + disengaged seconds are noise
+      idle = (self._lat_active == 0 and self._long_active == 0 and
+              self._sp == 0 and (self._v_sum / self._n) < self.IDLE_V_THRESHOLD)
+      if idle:
+        self._idle_skipped += 1
+        if self._idle_last_write is None:
+          self._idle_last_write = mono_t
+        if mono_t - self._idle_last_write >= self.IDLE_HEARTBEAT_S:
+          self.recorder.write({"idle": self._idle_skipped})
+          self._idle_skipped = 0
+          self._idle_last_write = mono_t
+        self._t0 = mono_t
+        self._reset_acc()
+        return
+
       rec = {
         "n": self._n,
         "la": round(self._lat_active / self._n, 2),
@@ -166,6 +191,10 @@ class LatInterpMonitor:
         "slb": round(self._slb / self._n, 2),
         "tqx": round(self._tq_max, 3),
       }
+      if self._idle_skipped:
+        rec["idl"] = self._idle_skipped  # idle seconds preceding this record
+        self._idle_skipped = 0
+      self._idle_last_write = None
       if context_fn is not None and self._emits % self.CONTEXT_EVERY == 0:
         try:
           rec["ctx"] = context_fn()
@@ -194,10 +223,16 @@ class RadarTracksMonitor:
 
   Duck-typed access + full try/except: works with capnp readers and test
   stubs alike, and can never take radard down.
+
+  v3.3.3 idle collapse: seconds with ZERO tracks all second collapse into
+  one {"n":0,"idle":N,"cerr":total} heartbeat per IDLE_HEARTBEAT_S — the
+  "n stuck at 0 while driving" evidence survives (N counts the seconds),
+  without a parked car writing 86k identical lines a day.
   """
 
   PERIOD = 1.0
   MAX_PTS = 3
+  IDLE_HEARTBEAT_S = 30.0
 
   def __init__(self, recorder: TriageRecorder):
     self.recorder = recorder
@@ -205,6 +240,9 @@ class RadarTracksMonitor:
     self._n_min = None
     self._n_max = 0
     self._cerr = 0
+    self._idle_skipped = 0
+    self._idle_cerr = 0
+    self._idle_last_write = None
 
   def log_identity(self, cp) -> None:
     """One record at radard startup: the car + radar 'device fingerprint'.
@@ -255,6 +293,23 @@ class RadarTracksMonitor:
       if mono_t - self._t0 < self.PERIOD:
         return
 
+      # v3.3.3 idle collapse: no tracks all second -> heartbeat, not a record
+      if self._n_max == 0:
+        self._idle_skipped += 1
+        self._idle_cerr += self._cerr
+        if self._idle_last_write is None:
+          self._idle_last_write = mono_t
+        if mono_t - self._idle_last_write >= self.IDLE_HEARTBEAT_S:
+          self.recorder.write({"n": 0, "idle": self._idle_skipped, "cerr": self._idle_cerr})
+          self._idle_skipped = 0
+          self._idle_cerr = 0
+          self._idle_last_write = mono_t
+        self._t0 = mono_t
+        self._n_min = None
+        self._n_max = 0
+        self._cerr = 0
+        return
+
       pts = []
       try:
         for pt in sorted(points, key=lambda p: float(p.dRel))[:self.MAX_PTS]:
@@ -263,6 +318,11 @@ class RadarTracksMonitor:
         pts = []
 
       rec = {"n": n, "nmin": self._n_min, "nmax": self._n_max, "pts": pts, "cerr": self._cerr}
+      if self._idle_skipped:
+        rec["idl"] = self._idle_skipped  # zero-track seconds preceding this record
+        self._idle_skipped = 0
+        self._idle_cerr = 0
+      self._idle_last_write = None
       try:
         rec["l1"] = self._lead(getattr(radar_state, 'leadOne', None))
         rec["l2"] = self._lead(getattr(radar_state, 'leadTwo', None))

@@ -37,47 +37,57 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.2"
+EXPECTED_VERSION = "3.3.3"
 
-# Read-only checks that verify the on-device code matches what we shipped and
-# capture state for diagnosing the "interp feels deactivated" issue. All commands
-# are non-mutating. `-c safe.directory=*` avoids git "dubious ownership" failures
-# when the webserver uid differs from the checkout owner.
+# FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
+# the user actually asks ("is my code intact / will it stay that way"),
+# instead of one row per historical grep. All commands are non-mutating.
+# `-c safe.directory=*` avoids git "dubious ownership" failures when the
+# webserver uid differs from the checkout owner.
 _GIT = "git -c safe.directory='*' -C /data/openpilot"
+
+# Every load-bearing FunnyPilot marker, verified in ONE check. Each entry:
+# (grep pattern, file, short label). A missing marker means the on-disk code
+# is not the shipped branch — the single "code" row fails and names it.
+_CODE_MARKERS = [
+  ("class LatSmoother", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "lat delta/5 smoother"),
+  ("v3.2.10", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
+  ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
+  ("_OVERRIDE_MIN_SCALE", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "override softening"),
+  ("class OverrideGate", "/data/openpilot/selfdrive/controls/lib/override_gate.py", "override gate"),
+  ("v3.2.3st", "/data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py", "brake chime fix"),
+  ("UNWIND_SETTLE_TIME", "/data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py", "blinker unwind"),
+  ("class AccelJerkShaper", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "long output shaper"),
+  ("v3.3.3", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "long planner + SLA gas gate"),
+  ("class CurveSpeedCap", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py", "SCC v2 curve cap"),
+  ("v3.3.3", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA arrow activation"),
+  ("v3.3.0e", "/data/openpilot/opendbc_repo/opendbc/car/hyundai/values.py", "K5 radar tracks flag"),
+  ("radar_enable.jsonl", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/enable_radar_tracks.py", "verified radar enable"),
+  ("FINALIZED_BRANCH", "/data/openpilot/launch_chffrplus.sh", "boot branch guard"),
+  ("adopting flashed branch", "/data/openpilot/system/updated/updated.py", "updater self-heal"),
+  ("class TriageRecorder", "/data/openpilot/selfdrive/controls/lib/triage_recorder.py", "triage recorder"),
+]
+_CODE_CMD = "; ".join(
+  f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
+  for pat, path, label in _CODE_MARKERS
+)
+
+# Updater state in one row: the target branch (what a background fetch would
+# stage) and any already-staged update. Mismatches here are the root cause of
+# the historical "reverts after sitting parked" issue.
+_UPDATER_CMD = (
+  "echo \"target: $(cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)')\"; " +
+  "echo \"staged: $(git -c safe.directory='*' -C /data/safe_staging/finalized rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(none)')\""
+)
+
 DIAG_CHECKS = [
-  {"id": "version",        "name": "FunnyPilot version",                 "cmd": "cat /data/openpilot/FUNNYPILOT_VERSION 2>&1"},
-  {"id": "branch",         "name": "Git branch",                         "cmd": f"{_GIT} rev-parse --abbrev-ref HEAD 2>&1"},
-  {"id": "head",           "name": "Git HEAD commit",                    "cmd": f"{_GIT} log -1 --format='%h %s' 2>&1"},
-  {"id": "clean",          "name": "Working tree unmodified",            "cmd": f"{_GIT} status --porcelain 2>&1"},
-  {"id": "diff",           "name": "Tracked-file changes (diff stat)",   "cmd": f"{_GIT} diff --stat 2>&1"},
-  {"id": "code_controlsd", "name": "controlsd LatSmoother wiring present", "cmd": "grep -c 'v3.2.10' /data/openpilot/selfdrive/controls/controlsd.py 2>&1"},
-  {"id": "code_latsmooth", "name": "LatSmoother module present",           "cmd": "grep -c 'class LatSmoother' /data/openpilot/selfdrive/controls/lib/lat_smooth.py 2>&1"},
-  {"id": "code_smoothrev", "name": "v3.3.2 EMA smoothing reverted",        "cmd": "grep -c 'v3.3.2' /data/openpilot/sunnypilot/modeld_v2/modeld.py 2>&1"},
-  {"id": "code_override",  "name": "driver-override softening present",   "cmd": "grep -c '_OVERRIDE_MIN_SCALE' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
-  {"id": "code_chime",     "name": "brake-with-lead chime fix present",   "cmd": "grep -c 'v3.2.3st' /data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py 2>&1"},
-  {"id": "code_latctrl",   "name": "latcontrol re-engage ramp present",  "cmd": "grep -c '_REENGAGE_RAMP_DUR' /data/openpilot/selfdrive/controls/lib/latcontrol_torque.py 2>&1"},
-  {"id": "code_blinker",   "name": "blinker settle-time present",        "cmd": "grep -c 'UNWIND_SETTLE_TIME' /data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py 2>&1"},
-  {"id": "code_bootguard", "name": "boot-time branch guard present",     "cmd": "grep -c 'FINALIZED_BRANCH' /data/openpilot/launch_chffrplus.sh 2>&1"},
-  {"id": "code_updtarget", "name": "updater target self-heal present",   "cmd": "grep -c 'adopting flashed branch' /data/openpilot/system/updated/updated.py 2>&1"},
-  {"id": "code_longshape", "name": "long output shaper present",         "cmd": "grep -c 'class AccelJerkShaper' /data/openpilot/selfdrive/controls/lib/long_shaping.py 2>&1"},
-  {"id": "code_longplan",  "name": "v3.2.6e longitudinal planner present", "cmd": "grep -c 'v3.2.6e' /data/openpilot/selfdrive/controls/lib/longitudinal_planner.py 2>&1"},
-  {"id": "code_sla",       "name": "v3.2.6e SLA tap-to-adopt present",     "cmd": "grep -ci 'tap-to-adopt' /data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py 2>&1"},
-  {"id": "code_sccv2",     "name": "v3.2.6e SCC curve cap present",        "cmd": "grep -c 'class CurveSpeedCap' /data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py 2>&1"},
-  {"id": "code_triage",    "name": "v3.2.7 triage recorder present",       "cmd": "grep -c 'class TriageRecorder' /data/openpilot/selfdrive/controls/lib/triage_recorder.py 2>&1"},
-  {"id": "code_ovrgate",   "name": "v3.2.8 override gate present",         "cmd": "grep -c 'class OverrideGate' /data/openpilot/selfdrive/controls/lib/override_gate.py 2>&1"},
-  {"id": "code_radartrk",  "name": "v3.3.0e K5 radar tracks flag present", "cmd": "grep -c 'HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.MANDO_RADAR' /data/openpilot/opendbc_repo/opendbc/car/hyundai/values.py 2>&1"},
-  {"id": "code_radaren",   "name": "v3.3.1 verified radar enable present", "cmd": "grep -c 'radar_enable.jsonl' /data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/enable_radar_tracks.py 2>&1"},
-  {"id": "triage_radaren", "name": "Radar enable handshake (last boot)",   "cmd": "tail -4 /data/funnypilot_triage/radar_enable.jsonl 2>/dev/null || echo '(no enable log yet — reboot with ignition on)'"},
-  {"id": "triage_radar",   "name": "Last radar-tracks records",            "cmd": "tail -3 /data/funnypilot_triage/radar_tracks.jsonl 2>/dev/null || echo '(no radar log yet — take a drive)'"},
-  {"id": "triage_boot",    "name": "Last code-identity records",           "cmd": "tail -3 /data/funnypilot_triage/code_identity.jsonl 2>/dev/null || echo '(no triage log yet)'"},
-  {"id": "triage_lat",     "name": "Last onroad interp records",           "cmd": "tail -3 /data/funnypilot_triage/lat_interp.jsonl 2>/dev/null || echo '(no triage log yet)'"},
-  {"id": "interp_shm",     "name": "INTERP heartbeat (/dev/shm)",        "cmd": "cat /dev/shm/lat_interp 2>/dev/null || echo '(absent — not driving)'"},
-  {"id": "model_bundle",   "name": "Active model bundle",                "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
-  {"id": "updater_target", "name": "Updater target branch",              "cmd": "cat /data/params/d/UpdaterTargetBranch 2>/dev/null || echo '(unset)'"},
-  {"id": "updater_off",    "name": "DisableUpdates param",               "cmd": "cat /data/params/d/DisableUpdates 2>/dev/null || echo '(unset)'"},
-  {"id": "staged_branch",  "name": "Staged (finalized) update branch",   "cmd": f"{_GIT.replace('/data/openpilot', '/data/safe_staging/finalized')} rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(none staged)'"},
-  {"id": "staging",        "name": "Updater staging dir",               "cmd": "ls -la /data/safe_staging/ 2>&1 || echo '(none)'"},
-  {"id": "overlay",        "name": "Overlay mounts (updater)",           "cmd": "mount 2>/dev/null | grep -i overlay || echo '(none)'"},
+  {"id": "version", "name": "FunnyPilot version",       "cmd": "cat /data/openpilot/FUNNYPILOT_VERSION 2>&1"},
+  {"id": "branch",  "name": "Git branch",               "cmd": f"{_GIT} rev-parse --abbrev-ref HEAD 2>&1"},
+  {"id": "clean",   "name": "Working tree unmodified",  "cmd": f"{_GIT} status --porcelain 2>&1"},
+  {"id": "code",    "name": "Shipped code markers",     "cmd": _CODE_CMD},
+  {"id": "updater", "name": "Updater target / staged",  "cmd": _UPDATER_CMD},
+  {"id": "model_bundle", "name": "Active model bundle", "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
+  {"id": "logs",    "name": "Triage logs on disk",      "cmd": "ls -sh1 /data/funnypilot_triage/ 2>/dev/null || echo '(no logs yet)'"},
 ]
 
 
@@ -88,26 +98,27 @@ def _eval_diag(check_id: str, out: str):
     return ("pass", s) if s == EXPECTED_VERSION else ("warn", f"{s or '(empty)'} (expected {EXPECTED_VERSION})")
   if check_id == "branch":
     return ("pass" if EXPECTED_VERSION in s else "warn", s or "(unknown)")
-  if check_id == "updater_target":
-    # A target that differs from the flashed branch is exactly what caused the
-    # "reverts after sitting offroad" issue — the updater stages that branch.
-    ok = s == "(unset)" or EXPECTED_VERSION in s
-    return ("pass", s) if ok else ("fail", f"{s} (updater targets a DIFFERENT branch)")
-  if check_id == "staged_branch":
-    ok = s == "(none staged)" or EXPECTED_VERSION in s
-    return ("pass", s) if ok else ("warn", f"{s} (boot guard will discard this staged update)")
-  if check_id == "updater_off":
-    return ("info", "updates disabled" if s == "1" else "updates enabled")
   if check_id == "clean":
     return ("pass", "clean") if s == "" else ("fail", "MODIFIED")
-  if check_id == "diff":
-    return ("pass", "no changes") if s == "" else ("fail", "files differ")
-  if check_id.startswith("code_"):
-    try:
-      n = int(s.splitlines()[0])
-    except Exception:
-      n = 0
-    return ("pass", "present") if n >= 1 else ("fail", "MISSING")
+  if check_id == "code":
+    missing = [ln.split(None, 1)[1] for ln in s.splitlines() if ln.startswith("MISSING")]
+    if missing:
+      return ("fail", f"MISSING: {', '.join(missing)}")
+    return ("pass", f"all {len(_CODE_MARKERS)} markers present")
+  if check_id == "updater":
+    # A target that differs from the flashed branch is exactly what caused the
+    # "reverts after sitting offroad" issue — the updater stages that branch.
+    target = staged = ""
+    for ln in s.splitlines():
+      if ln.startswith("target:"):
+        target = ln[len("target:"):].strip()
+      elif ln.startswith("staged:"):
+        staged = ln[len("staged:"):].strip()
+    if target not in ("", "(unset)") and EXPECTED_VERSION not in target:
+      return ("fail", f"updater targets a DIFFERENT branch: {target}")
+    if staged not in ("", "(none)") and EXPECTED_VERSION not in staged:
+      return ("warn", f"staged: {staged} (boot guard will discard it)")
+    return ("pass", f"target {target or '(unset)'}, staged {staged or '(none)'}")
   return ("info", "")
 
 
