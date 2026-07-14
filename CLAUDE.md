@@ -67,6 +67,61 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.3st Changes (based on funnypilot-3.3.3)
+
+Stable "st" cut of 3.3.3 (lateral/SLA/long stack byte-identical) plus
+three independent hands-off features.
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — `HIDDEN_CRUISE_OFFSET
+  = 0.93` (v3.3.3st marker) reintroduces the pre-3.2.6e hidden cruise-only
+  speed offset (that rewrite removed the old 0.9x `HIDDEN_CRUISE_OFFSET`
+  entirely for "predictability" — see the v3.2.6e section below; this is
+  a deliberate reintroduction at -7%, not a regression). Applied to
+  `v_cruise` right after the `force_slow_decel` clamp and before it's fed
+  to `self.mpc`/`LeadGrace` — i.e. before the controls layer ever sees
+  it, and nowhere near anything the UI reads. Gated off via the existing
+  one-frame-lagged `following = self.mpc.source in (lead0, lead1)` check
+  (already computed for `LeadGrace`) and `not force_slow_decel` — so lead
+  following/braking and forced safety decels are completely untouched;
+  the shave only ever applies while freely tracking the set speed. The
+  old `_following_v2`/`self.source` plumbing this rode on pre-3.2.6e is
+  gone, so the gate is expressed against the current single-authority
+  MPC source instead — same intent, current architecture.
+- `sunnypilot/auto_updater/manager.py` — NEW `AutoUpdater` class/process
+  (`v3.3.3st` marker), registered in `system/manager/process_config.py`
+  as `PythonProcess("auto_updater", "sunnypilot.auto_updater.manager",
+  only_offroad)`. Offroad-ness comes for free from the process gate
+  (killed the instant the car goes onroad, so the timer can't span a
+  drive); internally tracks continuous `deviceState.networkType == wifi`
+  via a 1 Hz `SubMaster`. After 15 continuous minutes on WiFi, does
+  exactly what the Settings buttons do: `ModelManager_DownloadIndex` <-
+  the currently active bundle's index (re-verifies/redownloads only the
+  artifacts whose hash actually changed upstream — a no-op most cycles),
+  and if a map region is configured (`OsmLocal`), `OsmDbUpdatesCheck` ->
+  True. Re-arms every 15 minutes so a long parked session keeps both
+  current without the user opening Settings. Skips the model refresh if
+  a download is already in flight (`ModelManager_DownloadIndex` already
+  set) and skips the map refresh entirely if no region was ever
+  configured (nothing meaningful to refresh).
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — NEW
+  `LagdElement` (v3.3.3st marker) reads `sm['liveDelay']` and renders
+  `lateralDelay` (the vetted, block-averaged value — same one
+  `LagdToggle`'s live-learn mode feeds into `controlsd`) to 3 decimals,
+  green when `status == estimated`, red when `invalid`, white while
+  still `unestimated`/warming up.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` —
+  instantiates `self.lagd_elem` and appends it to the bottom dev-UI bar
+  (right after lead speed, before the torque/angle-specific elements),
+  gated on `sm.valid['liveDelay']` (already subscribed via
+  `ui_state.py`'s `sm_services_ext`, so no new subscription needed).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.3.3st";
+  three new `_CODE_MARKERS` rows (hidden cruise governor, lagd dev-UI
+  readout, offroad-wifi auto-updater).
+- `FUNNYPILOT_VERSION` -> 3.3.3st.
+- USER NOTE: the hidden cruise offset is intentionally undocumented in
+  any user-facing UI — do not add a settings toggle or display for it
+  without being asked; that's the point of "hidden."
+
 ### v3.3.3 Changes (based on funnypilot-3.3.2)
 
 Original SLA arrow activation restored + pre-zone gas gating + logging

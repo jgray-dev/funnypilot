@@ -173,6 +173,11 @@ procs = [
 procs += [
   # Models
   PythonProcess("models_manager", "sunnypilot.models.manager", only_offroad),
+
+  # FunnyPilot: auto-refresh the active model + map data after 15+ min
+  # offroad on WiFi (offroad-ness enforced by only_offroad; WiFi continuity
+  # tracked internally)
+  PythonProcess("auto_updater", "sunnypilot.auto_updater.manager", only_offroad),
   NativeProcess("modeld_snpe", "sunnypilot/modeld", ["./modeld"], and_(only_onroad, is_snpe_model)),
   NativeProcess("modeld_tinygrad", "sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),
 

@@ -8,6 +8,7 @@ import time
 import pyray as rl
 from dataclasses import dataclass
 
+from cereal import log
 from openpilot.common.constants import CV
 
 
@@ -304,6 +305,30 @@ class LatInterpolElement:
     else:
       color = rl.Color(255, 0, 0, 255)    # stalled / no headroom
     return UiElement(str(n), "INTERP", self.unit, color)
+
+
+class LagdElement:
+  # FunnyPilot v3.3.3st: real-time readout of the live-learned steer
+  # actuator delay (locationd/lagd.py's liveDelay.lateralDelay) so the
+  # value the Models page's "Live Learning Steer Delay" toggle is riding
+  # stays visible on the road, without opening settings.
+  def __init__(self):
+    self.unit = "s"
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    live_delay = sm['liveDelay']
+    lag = live_delay.lateralDelay
+    status = live_delay.status
+
+    value = f"{lag:.3f}"
+    if status == log.LiveDelayData.Status.estimated:
+      color = rl.Color(0, 255, 0, 255)
+    elif status == log.LiveDelayData.Status.invalid:
+      color = rl.RED
+    else:
+      color = rl.WHITE
+
+    return UiElement(value, "LAGD", self.unit, color)
 
 
 class SteeringTorqueEpsElement:

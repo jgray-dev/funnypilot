@@ -1,3 +1,36 @@
+FunnyPilot v3.3.3st (2026-07-14)
+========================
+Stable snapshot of 3.3.3 plus three hands-off quality-of-life features:
+a hidden cruise-only speed governor, unattended model/map refresh while
+parked on WiFi, and a live-learned steer-delay readout on the dev UI.
+
+* feat(hidden cruise governor): restores the pre-3.2.6e "hidden speed
+  offset" concept (previously 0.9x, removed in the single-authority
+  longitudinal rewrite for predictability). `HIDDEN_CRUISE_OFFSET = 0.93`
+  in `longitudinal_planner.py` shaves 7% off the cruise-only target speed
+  before it ever reaches the MPC/controls layer — nothing in the UI or
+  car state shows it. It only applies while simply tracking the set
+  speed: gated off the instant a lead is being followed (lead0/lead1) or
+  a forced decel is in progress, so lead braking and safety stops are
+  completely unaffected.
+* feat(auto-updater): new `sunnypilot/auto_updater/manager.py` daemon
+  (`only_offroad`-gated, mirrors `models_manager`/`mapd_manager`). Tracks
+  continuous WiFi (`deviceState.networkType == wifi`) while parked; once
+  held for 15 minutes it re-triggers the same actions the Settings
+  "CHECK"/"Database Update" buttons do — nudges `ModelManager_DownloadIndex`
+  to the currently active bundle (hash-verified per-file, so it's a
+  no-op unless the bundle's remote content changed) and, if a map region
+  is configured (`OsmLocal`), sets `OsmDbUpdatesCheck` to refresh the OSM
+  data. Re-arms every 15 minutes so a long parked/charging session keeps
+  refreshing both.
+* feat(dev UI lagd readout): bottom developer-UI bar gains a "LAGD" tile
+  (`LagdElement` in `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py`)
+  showing `liveDelay.lateralDelay` live (green when the live-learner's
+  estimate is vetted/`estimated`, red if `invalid`, white while still
+  `unestimated`) — the same value the Models page's "Live Learning Steer
+  Delay" toggle feeds from, now visible on the road without opening
+  Settings.
+
 FunnyPilot v3.3.3 (2026-07-13)
 ========================
 SLA gets its original arrow activation back, learns to gas-gate BEFORE a

@@ -37,7 +37,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.3"
+EXPECTED_VERSION = "3.3.3st"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -66,6 +66,9 @@ _CODE_MARKERS = [
   ("FINALIZED_BRANCH", "/data/openpilot/launch_chffrplus.sh", "boot branch guard"),
   ("adopting flashed branch", "/data/openpilot/system/updated/updated.py", "updater self-heal"),
   ("class TriageRecorder", "/data/openpilot/selfdrive/controls/lib/triage_recorder.py", "triage recorder"),
+  ("HIDDEN_CRUISE_OFFSET", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "hidden cruise governor"),
+  ("class LagdElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "lagd dev UI readout"),
+  ("class AutoUpdater", "/data/openpilot/sunnypilot/auto_updater/manager.py", "offroad wifi auto-updater"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

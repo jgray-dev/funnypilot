@@ -50,6 +50,13 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 
+# FunnyPilot v3.3.3st: hidden cruise-only speed governor. Not shown
+# anywhere in the UI or driver-facing state - it shaves the MPC's target
+# speed before the controls layer ever sees it, only while simply
+# tracking the set speed (never while braking for a lead or during a
+# forced decel).
+HIDDEN_CRUISE_OFFSET = 0.93
+
 # Up-jerk (throttle application) by personality, m/s^3
 JERK_UP_AGGRESSIVE = 2.5
 JERK_UP_STANDARD = 1.8
@@ -190,9 +197,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # Maintain 20% margin under current speed for a smooth safety decel toward a stop
       v_cruise = min(v_cruise, max(0.0, v_ego * 0.8))
 
+    following = self.mpc.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
+
+    # FunnyPilot: apply the hidden cruise-only governor before the target
+    # reaches the MPC/controls layer. Gated off whenever a lead is being
+    # tracked or a forced decel is in progress, so it only ever shaves the
+    # freely-cruising target speed.
+    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0 and not following:
+      v_cruise *= HIDDEN_CRUISE_OFFSET
+
     # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
     lead_one = sm['radarState'].leadOne
-    following = self.mpc.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
     v_cruise = self.lead_grace.update(bool(lead_one.status), following, lead_one.vLead, v_ego, v_cruise)
 
     personality = sm['selfdriveState'].personality

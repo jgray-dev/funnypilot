@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  LatInterpolElement,
+  LatInterpolElement, LagdElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -43,6 +43,7 @@ class DeveloperUiRenderer(Widget):
     self.friction_elem = FrictionCoefficientElement()
     self.lat_accel_factor_elem = LatAccelFactorElement()
     self.lat_interp_elem = LatInterpolElement()
+    self.lagd_elem = LagdElement()
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
     self.altitude_elem = AltitudeElement()
@@ -141,6 +142,9 @@ class DeveloperUiRenderer(Widget):
       elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
 
     elements.append(self.lead_speed_elem.update(sm, ui_state.is_metric))
+
+    if sm.valid['liveDelay']:
+      elements.append(self.lagd_elem.update(sm, ui_state.is_metric))
 
     if is_torque:
       if sm.valid['liveTorqueParameters']:
