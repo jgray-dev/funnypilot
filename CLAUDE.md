@@ -67,6 +67,28 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.4 Changes (based on funnypilot-3.3.3st)
+
+Single fix: the hidden cruise governor no longer lifts on lead detection.
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — removed the
+  `not following` term from the `HIDDEN_CRUISE_OFFSET` gate. In 3.3.3st,
+  detecting a lead (MPC source `lead0`/`lead1`) restored the ungoverned
+  set speed, so the car would run up to ~7% (~6 mph at highway speeds)
+  over the governed max to stay with a lead, and the one-frame-lagged
+  `following` flag + LeadGrace's v_ego floor made the overspeed sticky
+  through lead flicker/handoff. The governor now shaves `v_cruise`
+  whenever it's initialized and no forced decel is active, lead or not.
+  This is speed-domain only (the ARCHITECTURE RULE holds): it lowers the
+  MPC's cruise-obstacle ceiling and can never weaken lead braking, which
+  the MPC's lead constraint owns.
+- The governor itself is UNCHANGED and stays hidden: `HIDDEN_CRUISE_OFFSET
+  = 0.93`, no UI/car-state exposure, no settings toggle (per the 3.3.3st
+  USER NOTE below — that remains the point of "hidden").
+- `FUNNYPILOT_VERSION` -> 3.3.4; `sunnypilot/navd/nav_webserver.py`
+  `EXPECTED_VERSION` -> "3.3.4" (`_CODE_MARKERS` untouched — the
+  `HIDDEN_CRUISE_OFFSET` marker still matches).
+
 ### v3.3.3st Changes (based on funnypilot-3.3.3)
 
 Stable "st" cut of 3.3.3 (lateral/SLA/long stack byte-identical) plus

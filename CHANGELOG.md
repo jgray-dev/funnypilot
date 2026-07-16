@@ -1,3 +1,28 @@
+FunnyPilot v3.3.4 (2026-07-16)
+========================
+Fix: the hidden cruise governor no longer lifts while following a lead —
+a detected lead can no longer pull the car above the governed max speed.
+
+* fix(hidden cruise governor): v3.3.3st gated the governor off whenever
+  the MPC's active constraint was a lead (`lead0`/`lead1`), so the moment
+  a lead was detected the speed ceiling snapped from 93% of the set speed
+  back to 100% — observed on the road as up to ~6 mph over the governed
+  max while sticking with a lead, and as "sticky" overspeed during lead
+  handoffs (the one-frame-lagged `following` flag plus LeadGrace's
+  v_ego-floored cap held the higher speed through flicker). The
+  `not following` term is removed: `HIDDEN_CRUISE_OFFSET` now applies to
+  the cruise ceiling unconditionally (still skipped before `vCruise`
+  initializes and during a forced decel, where the 20% under-`v_ego`
+  clamp already owns the target). Safety is unaffected by construction —
+  the governed `v_cruise` is only the MPC's cruise-obstacle ceiling;
+  braking for a slower lead is owned by the MPC's lead constraint, which
+  sits below the ceiling whenever it matters. The governor itself
+  (`HIDDEN_CRUISE_OFFSET = 0.93`, hidden from all driver-facing UI/state)
+  is intentionally unchanged.
+* chore: `FUNNYPILOT_VERSION` -> 3.3.4, nav_webserver `EXPECTED_VERSION`
+  -> "3.3.4". `_CODE_MARKERS` unchanged (the `HIDDEN_CRUISE_OFFSET`
+  marker still matches).
+
 FunnyPilot v3.3.3st (2026-07-14)
 ========================
 Stable snapshot of 3.3.3 plus three hands-off quality-of-life features:

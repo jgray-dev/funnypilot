@@ -50,11 +50,12 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 
-# FunnyPilot v3.3.3st: hidden cruise-only speed governor. Not shown
-# anywhere in the UI or driver-facing state - it shaves the MPC's target
-# speed before the controls layer ever sees it, only while simply
-# tracking the set speed (never while braking for a lead or during a
-# forced decel).
+# FunnyPilot v3.3.3st: hidden speed governor. Not shown anywhere in the
+# UI or driver-facing state - it shaves the MPC's target speed before the
+# controls layer ever sees it. Since v3.3.4 it applies to the cruise
+# ceiling at all times, lead or no lead: braking for a slower lead is
+# unaffected (the MPC's lead constraint sits below the ceiling), but a
+# lead can no longer pull the car above the governed speed.
 HIDDEN_CRUISE_OFFSET = 0.93
 
 # Up-jerk (throttle application) by personality, m/s^3
@@ -199,11 +200,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     following = self.mpc.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
 
-    # FunnyPilot: apply the hidden cruise-only governor before the target
-    # reaches the MPC/controls layer. Gated off whenever a lead is being
-    # tracked or a forced decel is in progress, so it only ever shaves the
-    # freely-cruising target speed.
-    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0 and not following:
+    # FunnyPilot v3.3.4: apply the hidden governor before the target reaches
+    # the MPC/controls layer, unconditionally. v3.3.3st gated it off while
+    # following a lead, which let the car chase a lead back up to the full
+    # displayed set speed (~7% / up to ~6 mph above the governed ceiling).
+    # The governed v_cruise is a ceiling, not a command: lead braking is
+    # still owned entirely by the MPC's lead constraint.
+    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
       v_cruise *= HIDDEN_CRUISE_OFFSET
 
     # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
