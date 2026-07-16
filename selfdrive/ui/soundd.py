@@ -159,25 +159,37 @@ class Soundd(QuietMode):
     import sounddevice as sd
 
     sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
+    rk = Ratekeeper(20)
 
-    with self.get_stream(sd) as stream:
-      rk = Ratekeeper(20)
+    # FunnyPilot v3.3.5: the output stream can go inactive at runtime (audio
+    # device hiccup) — stock asserted on it, crashing the whole process and
+    # raising the "Communication Issue between Processes" takeover alert.
+    # Recreate the stream instead. A truly dead audio device still crashes the
+    # process (and surfaces the alert): get_stream's @retry(attempts=10,
+    # delay=3) raises if the stream can't be reopened, and repeated
+    # short-lived streams trip the guard below rather than looping silently.
+    short_lived_streams = 0
+    while True:
+      with self.get_stream(sd) as stream:
+        stream_start_t = time.monotonic()
+        cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
+        while stream.active:
+          sm.update(0)
 
-      cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
-      while True:
-        sm.update(0)
+          self.load_param()
 
-        self.load_param()
+          if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
+            self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
+            self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
 
-        if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
-          self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
-          self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
+          self.get_audible_alert(sm)
 
-        self.get_audible_alert(sm)
+          rk.keep_time()
 
-        rk.keep_time()
-
-        assert stream.active
+      short_lived_streams = short_lived_streams + 1 if (time.monotonic() - stream_start_t) < 10. else 0
+      if short_lived_streams >= 5:
+        raise RuntimeError("soundd stream keeps dying right after start, audio device is unusable")
+      cloudlog.error("soundd stream went inactive, reinitializing")
 
 
 def main():

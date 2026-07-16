@@ -67,6 +67,28 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.5 Changes (based on funnypilot-3.3.4)
+
+Single fix: soundd survives a runtime audio-stream death instead of
+crashing into the "Communication Issue between Processes" takeover alert.
+
+- `selfdrive/ui/soundd.py` — `soundd_thread` restructured from stock's
+  `assert stream.active` (which crashed the process on any PortAudio
+  stream death; the `@retry` on `get_stream` only covered the initial
+  open) to an outer reinit loop: poll `while stream.active`, and on
+  inactivity exit the `with` (closing the stream) and reopen via the
+  existing `get_stream` (re-terminates/re-initializes portaudio,
+  `@retry(attempts=10, delay=3)`). `Ratekeeper` moved out of the stream
+  scope so reinit doesn't reset pacing.
+- Failure visibility preserved BY DESIGN — do not "improve" this into an
+  unbounded loop: a stream that can't reopen exhausts get_stream's retry
+  and the raise kills the process (watchdog alert fires as before), and
+  5 consecutive streams living < 10 s raise RuntimeError for the same
+  reason. The fix only rides out transient hiccups; a dead speaker must
+  still be loud (via the alert), since audible alerts are safety.
+- `FUNNYPILOT_VERSION` -> 3.3.5; `sunnypilot/navd/nav_webserver.py`
+  `EXPECTED_VERSION` -> "3.3.5" (`_CODE_MARKERS` untouched).
+
 ### v3.3.4 Changes (based on funnypilot-3.3.3st)
 
 Single fix: the hidden cruise governor no longer lifts on lead detection.

@@ -1,3 +1,28 @@
+FunnyPilot v3.3.5 (2026-07-16)
+========================
+Fix: soundd no longer crashes (and no longer triggers the "Communication
+Issue between Processes" takeover alert) when the audio output stream
+goes inactive at runtime.
+
+* fix(soundd): stock openpilot ends every soundd loop iteration with
+  `assert stream.active` — if the PortAudio output stream dies at runtime
+  (audio device hiccup; the `@retry` on `get_stream` only protects the
+  initial open), the AssertionError kills the whole process, and
+  selfdrived's process watchdog raises the driver-facing takeover alert.
+  Seen in the wild on-device 2026-07-14 (`soundd.py line 180 ...
+  AssertionError`). soundd_thread now runs the poll loop `while
+  stream.active` and, when the stream goes inactive, closes it and
+  recreates it via the existing `get_stream` (which re-terminates and
+  re-initializes portaudio, with `@retry(attempts=10, delay=3)`).
+* A genuinely dead audio device still surfaces as before, by
+  construction: if the stream can't be reopened, `get_stream`'s retry
+  raises and the process dies (-> process alert); if streams open but
+  keep dying young, a guard counts consecutive streams that lived < 10 s
+  and raises after 5, so the process can't silently spin with no audible
+  alerts.
+* chore: `FUNNYPILOT_VERSION` -> 3.3.5, nav_webserver `EXPECTED_VERSION`
+  -> "3.3.5".
+
 FunnyPilot v3.3.4 (2026-07-16)
 ========================
 Fix: the hidden cruise governor no longer lifts while following a lead —
