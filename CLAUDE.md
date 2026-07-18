@@ -67,6 +67,65 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.6 Changes (based on funnypilot-3.3.5)
+
+Lateral: the "spend the delay window on smoothing" feel returns WITHOUT
+violating the v3.3.2 post-mortem. The EMA failed because it filtered the
+KNOTS (redistributing maneuver onset); v3.3.6 instead smooths only the
+100 Hz path BETWEEN unchanged knots — every model knot value is still
+reached exactly on the validated delta/5 schedule, so onset cannot move.
+
+- `selfdrive/controls/lib/lat_smooth.py` — LatSmoother gains method
+  SPLINE (default; LINEAR = the bit-exact validated ramp, kept for A/B).
+  Per 50 ms segment, g(alpha) is a monotone cubic Hermite: entry slope =
+  the output's realized slope carried across the knot (C1 through
+  sustained maneuvers — the linear scheme's 20 Hz slope staircase was
+  the residual harshness); exit slope aimed at a plan lookahead
+  (next_curv_est), central-difference (next - prev)/(2T). Both slopes
+  clamped to the Fritsch–Carlson monotone box [0, 3]*secant =>
+  provably monotone, in-bracket, knot-exact at alpha=1 (bracket also
+  hard-clamped — LOAD-BEARING). delta ~= 0 => exactly flat (a flat
+  desire NEVER creeps — the exact v3.2.12 failure, unit-tested).
+  Reversal/flat entry restarts from zero slope. KEY compat invariant:
+  on a constant-rate maneuver the carried slope equals the secant and
+  the spline collapses to alpha — bit-identical to delta/5. Slope carry:
+  one alpha-saturated frame keeps the aimed exit slope (dg(1) == c1);
+  2+ saturated frames (real model stall, output holding cur) decay it to
+  0 — do NOT "simplify" this to zeroing at alpha >= 1, that reintroduces
+  a mid-corner ease-in restart (regression-tested; float luck can hide
+  it because alpha may land epsilon under 1.0). The v3.3.2
+  DO-NOT-REINTRODUCE note stands, amended to state why the spline is not
+  causal filtering (touches no knot values/times, uses the plan's
+  future, never past outputs).
+- `selfdrive/controls/controlsd.py` — `_model_lookahead_curv` revived
+  from v3.2.2 (deleted in 3.2.9e): get_curvature_from_plan at
+  lat_delay + 2*DT_MDL, i.e. one model step past the action horizon —
+  a pure read of the already-published plan inside the lagd delay
+  window. Returns None on any doubt (short plan, non-finite,
+  |c| > MAX_CURVATURE) => spline falls back to the plain secant. Fed to
+  lat_smooth.update only on model frames. Marker comment `v3.3.6`
+  (code_controlsd grep target updated to match).
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.3.6";
+  controlsd marker "v3.2.10" -> "v3.3.6"; new ("SPLINE", lat_smooth.py)
+  marker row.
+- `FUNNYPILOT_VERSION` -> 3.3.6.
+- `selfdrive/controls/lib/tests/test_lat_smooth.py` — 19 cases: LINEAR
+  keeps the exact validated-schedule tests; SPLINE adds constant-ramp
+  bit-compat, knot-exact-on-time (arbitrary knot sequences),
+  flat-never-creeps (even with a lookahead announcing a turn),
+  monotone/in-bracket under adversarial lookaheads (±10, NaN, None),
+  C1 no-rate-step at knots (vs LINEAR's measured 3x kink), apex settle,
+  bounded deviation from the linear path (<= 0.25*delta sub-period),
+  direction-reversal bracket, saturated-frame slope-carry regression.
+- Verified in sim (perfect / t-invariant / absent lookahead): corner
+  profile peak jerk 8.0 -> 2.4 (perfect la), 6.3 (t-invariant), 4.5
+  (absent), knot timing bit-exact in all cases; on noisy steady-state
+  knots the spline is ~equal-or-better with a lookahead present. NOTE:
+  with lookahead absent AND zigzag noise the spline's peak jerk is
+  slightly worse than LINEAR (45 vs 40 on synthetic worst case) —
+  acceptable: controlsd supplies the lookahead whenever the plan
+  parses, and clip_curvature remains the hard downstream limit.
+
 ### v3.3.5 Changes (based on funnypilot-3.3.4)
 
 Single fix: soundd survives a runtime audio-stream death instead of

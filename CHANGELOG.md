@@ -1,3 +1,45 @@
+FunnyPilot v3.3.6 (2026-07-18)
+========================
+Lateral: the delay-window smoothing feel returns — without the onset
+distortion that got the v3.2.11/3.2.12 EMA reverted in v3.3.2.
+
+* feat(lat): LatSmoother gains a SPLINE method (default). The validated
+  delta/5 TIMING contract is untouched — every 20 Hz model knot value is
+  still reached exactly on the validated schedule, and a flat desire can
+  never creep — but the 100 Hz path between knots is now a C1
+  shape-preserving monotone cubic instead of a piecewise-linear ramp.
+  The linear ramp's steering rate jumped at every model frame (a 20 Hz
+  slope staircase — the residual harshness the old EMA used to mask);
+  the spline carries the realized output slope across each knot, so the
+  rate is continuous through sustained maneuvers. On a constant-rate
+  maneuver the spline is bit-identical to the validated delta/5
+  schedule; it only differs where the linear scheme kinked. Simulated
+  corner profile: peak jerk (second difference of the command) drops
+  ~70% with identical knot timing, identical peak curvature.
+* feat(lat): the exit slope of each 50 ms segment is aimed using a
+  one-model-step lookahead read from the model's own published plan
+  (`get_curvature_from_plan` at lat_delay + 2*DT_MDL) — the "free
+  compute inside the lagd delay window" idea, reintroduced as a pure
+  read: it shapes only the sub-period path, never filters a knot, so it
+  cannot shift maneuver onset (the v3.3.2 post-mortem stays honored; the
+  do-not-reintroduce note in lat_smooth.py now spells out the
+  distinction). When the plan says the desire flattens (apex), the wheel
+  eases off and settles instead of arriving at full rate — the well-liked
+  v3.2.2 SETTLE feel, emerging from the clamped slope. Lookahead
+  unavailable/insane -> plain secant (the validated ramp shape).
+* safety: both end slopes are clamped to the Fritsch-Carlson monotone
+  box, so the output provably stays inside the model's [prev, cur]
+  desire bracket (hard-clamped as well), lands on cur exactly when the
+  linear ramp would, and restarts monotone from zero slope on direction
+  reversals. A single late knot carries the aimed slope (no mid-corner
+  ease-in restart); a genuine model stall decays it to zero. LINEAR
+  remains one constructor argument away for an A/B flash.
+* chore: `FUNNYPILOT_VERSION` -> 3.3.6, nav_webserver `EXPECTED_VERSION`
+  -> "3.3.6", controlsd marker grep v3.2.10 -> v3.3.6, new SPLINE code
+  marker; test_lat_smooth.py extended to 19 cases (constant-ramp
+  bit-compat, flat-never-creeps, knot-exact timing, C1 carry, apex
+  settle, adversarial lookaheads, saturated-frame regression).
+
 FunnyPilot v3.3.5 (2026-07-16)
 ========================
 Fix: soundd no longer crashes (and no longer triggers the "Communication

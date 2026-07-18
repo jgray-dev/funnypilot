@@ -37,7 +37,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.5"
+EXPECTED_VERSION = "3.3.6"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -50,8 +50,9 @@ _GIT = "git -c safe.directory='*' -C /data/openpilot"
 # (grep pattern, file, short label). A missing marker means the on-disk code
 # is not the shipped branch — the single "code" row fails and names it.
 _CODE_MARKERS = [
-  ("class LatSmoother", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "lat delta/5 smoother"),
-  ("v3.2.10", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
+  ("class LatSmoother", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "lat knot smoother"),
+  ("SPLINE", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "C1 spline shaping"),
+  ("v3.3.6", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
   ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
   ("_OVERRIDE_MIN_SCALE", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "override softening"),
   ("class OverrideGate", "/data/openpilot/selfdrive/controls/lib/override_gate.py", "override gate"),

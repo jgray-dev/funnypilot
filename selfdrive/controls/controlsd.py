@@ -7,13 +7,14 @@ from cereal import car, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, DT_MDL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_curvature_from_plan, MAX_CURVATURE
 from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -51,10 +52,10 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
-    # FunnyPilot v3.2.10: the validated knot interpolation (3.1.0e delta/5
-    # feel), minimal and time-anchored — the 3.2.9e plan-riding experiment is
-    # deleted (post-mortem in lat_smooth.py). Guarantees per-frame wheel motion
-    # of delta/5 between 20 Hz model actions; continuity at any cadence.
+    # FunnyPilot v3.3.6: the validated knot interpolation (3.1.0e delta/5
+    # timing), minimal and time-anchored, now shaped as a C1 monotone spline
+    # between knots (SPLINE default in lat_smooth.py; the knot values/times and
+    # every safety invariant are unchanged from the validated v3.2.10 scheme).
     self.lat_smooth = LatSmoother()
 
     # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
@@ -154,17 +155,25 @@ class Controls(ControlsExt):
     # per-bundle override when modeld_v2 was the active daemon).
     lat_delay = self.sm["liveDelay"].lateralDelay
 
-    # FunnyPilot v3.2.10: interpolate the model's 20 Hz desired curvature across
-    # the control frames — the validated delta/5 feel (see lat_smooth.py for the
-    # 3.2.9e post-mortem). prev is always the last OUTPUT so the command is
-    # continuous at any cadence; time-anchoring to the fixed model period means
-    # nothing counts frames and nothing can silently stall.
+    # FunnyPilot v3.3.6: interpolate the model's 20 Hz desired curvature across
+    # the control frames on the validated delta/5 TIMING (see lat_smooth.py for
+    # the 3.2.9e and 3.3.2 post-mortems — both still binding), with the
+    # in-period SHAPE upgraded to a C1 monotone spline. The exit slope of each
+    # 50 ms segment is aimed at where the model's own published plan says the
+    # desire goes one model step past the action horizon — a pure read of the
+    # plan inside the lagd delay window, not a filter: every knot value is
+    # still reached exactly on the validated schedule, so maneuver onset
+    # cannot creep early (the v3.2.12 EMA failure) or arrive late. prev is
+    # always the last OUTPUT so the command is continuous at any cadence;
+    # time-anchoring to the fixed model period means nothing counts frames and
+    # nothing can silently stall.
     if not CC.latActive:
       self.lat_smooth.reset(self.curvature)
       new_desired_curvature = self.curvature
     else:
+      next_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo) if self.sm.updated['modelV2'] else None
       new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
-                                                     self.sm.updated['modelV2'], time.monotonic())
+                                                     self.sm.updated['modelV2'], time.monotonic(), next_est)
     # Dev-UI INTERP indicator: realized control-frames-per-model-frame (5 =
     # healthy cadence), or 0 when paused. Written at the 20 Hz model rate.
     if self.sm.updated['modelV2']:
@@ -217,6 +226,25 @@ class Controls(ControlsExt):
         setattr(actuators, p, 0.0)
 
     return CC, lac_log
+
+  def _model_lookahead_curv(self, model_v2, lat_delay, vego):
+    # FunnyPilot v3.3.6: estimate where the model's desired curvature is heading
+    # one model step past the action horizon, used ONLY to aim the exit slope of
+    # the in-period spline (lat_smooth.py). The model's action.desiredCurvature
+    # is its plan curvature at ~(lat_delay + DT_MDL); we sample the same
+    # published plan one step further. Pure read of an already-computed
+    # trajectory — free compute inside the lagd delay window. Returns None on
+    # any doubt (the spline then falls back to the plain validated secant), so
+    # this can never inject an out-of-range curvature or shift a knot.
+    try:
+      yaws = model_v2.orientation.z
+      yaw_rates = model_v2.orientationRate.z
+      if len(yaws) < len(ModelConstants.T_IDXS) or len(yaw_rates) < 1:
+        return None
+      c = float(get_curvature_from_plan(yaws, yaw_rates, ModelConstants.T_IDXS, vego, lat_delay + 2 * DT_MDL))
+      return c if math.isfinite(c) and abs(c) <= MAX_CURVATURE else None
+    except Exception:
+      return None
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
