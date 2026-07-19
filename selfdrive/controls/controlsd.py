@@ -31,6 +31,13 @@ LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
+# FunnyPilot v3.3.7: lateral-accel budget for the innovation-absorb deficit
+# (lat_smooth.py). Caps how much of a model-plan surprise may be deferred into
+# the lagd delay window: |deficit| * v^2 <= this, so an emergency-scale swerve
+# request executes immediately except the capped remainder — which itself
+# converges within lateralDelay, inside the vehicle's physical dead-time.
+ABSORB_LATACC_MAX = 1.0  # m/s^2
+
 class Controls(ControlsExt):
   def __init__(self) -> None:
     self.params = Params()
@@ -167,13 +174,27 @@ class Controls(ControlsExt):
     # always the last OUTPUT so the command is continuous at any cadence;
     # time-anchoring to the fixed model period means nothing counts frames and
     # nothing can silently stall.
+    #
+    # FunnyPilot v3.3.7: innovation absorb (see lat_smooth.py docstring). Each
+    # new model action is split against the model's own previous-plan
+    # prediction of it (the same lookahead sample below): the predicted part
+    # executes exactly on the validated schedule; the gated surprise — a plan
+    # revision, the "complete 180" between model updates — is released
+    # linearly across the lagd lateralDelay window instead of hitting the
+    # wheel in one model period. The deficit is capped by a lateral-accel
+    # budget (~ABSORB_LATACC_MAX at current speed) so anything larger executes
+    # immediately, and the command provably converges to the raw model request
+    # within lateralDelay — inside the vehicle's own dead-time, so the model
+    # never sees a persistent tracking error to over-correct against.
     if not CC.latActive:
       self.lat_smooth.reset(self.curvature)
       new_desired_curvature = self.curvature
     else:
       next_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo) if self.sm.updated['modelV2'] else None
+      max_absorb = ABSORB_LATACC_MAX / max(CS.vEgo, 5.0) ** 2
       new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
-                                                     self.sm.updated['modelV2'], time.monotonic(), next_est)
+                                                     self.sm.updated['modelV2'], time.monotonic(), next_est,
+                                                     lat_delay, max_absorb)
     # Dev-UI INTERP indicator: realized control-frames-per-model-frame (5 =
     # healthy cadence), or 0 when paused. Written at the 20 Hz model rate.
     if self.sm.updated['modelV2']:
@@ -214,6 +235,9 @@ class Controls(ControlsExt):
                          # artificially inflated) delay actually in use — if
                          # est << used, we are steering systematically early
                          "latDelayEst": round(float(self.sm['liveDelay'].lateralDelayEstimate), 3),
+                         # v3.3.7: current innovation-absorb deficit (1/m); should
+                         # be 0 in steady driving and spike-then-drain on revisions
+                         "absorb": round(float(self.lat_smooth.absorb), 6),
                        })
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:

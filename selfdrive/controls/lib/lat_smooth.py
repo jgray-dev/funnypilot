@@ -62,8 +62,62 @@ reached at its validated time and flats stay flat; only the sub-period path
 between unchanged knots is shaped, using future information (the plan), never
 past outputs.
 
-The ONLY smoothing in the lateral path. clip_curvature (ISO jerk/accel) still
-runs downstream as the hard limit. Import-light (stdlib only).
+v3.3.7 — INNOVATION ABSORB (on top of the spline; knot-level, method-agnostic):
+
+The spline made the sub-period path smooth but still executes EVERY 20 Hz knot
+exactly — so a model plan REVISION (the "complete 180" between consecutive
+model updates) reaches the wheel at full amplitude in one model period. No
+in-period interpolation can fix that; the harshness lives in the knot sequence
+itself. The fix must not be knot filtering either (the v3.2.12 EMA post-mortem
+above is still binding).
+
+The split that threads the needle: every new model action is decomposed
+against what the model's OWN previously-published plan predicted for this
+exact instant (the same lookahead sample the spline already reads —
+get_curvature_from_plan at lat_delay + 2*DT_MDL predicts the next action's
+horizon point):
+
+    innovation = new_action - previous_plan_prediction
+
+  * The PREDICTED component executes EXACTLY on the validated schedule.
+    Genuine maneuvers (curve entry, lane change) appear in the plan seconds
+    before their action — plan-consistent motion is untouched, so onset stays
+    decisive, with zero added delay and zero pre-onset creep. This is not a
+    filter: nothing is averaged, no horizon is shifted.
+  * The SURPRISE component (the gated innovation excess — precisely the
+    revision/noise the wheel should not chase) is carried as a deficit and
+    released linearly across the lagd delay window (lateralDelay). During
+    that window the vehicle has not yet physically responded to the previous
+    command, so revising over it instead of instantly is free — and the
+    command provably converges to the raw model request within lateralDelay
+    of the last surprise, so the model never sees a persistent tracking
+    error (no over-correct/ping-pong spiral: we stay on the course the model
+    itself published, and blend to its revision inside the dead-time).
+  * A flip-flop CANCELS: model flips (+X surprise absorbed), next frame flips
+    back (-X surprise absorbed) — the deficits annihilate and the wheel
+    barely moves through the whole oscillation. This is the felt fix for
+    "the next model update is a complete 180."
+
+  Gating: innovation within (INNOV_GATE_REL * |predicted step| +
+  INNOV_GATE_ABS) passes through exactly — small prediction noise and any
+  systematic plan-vs-action bias (which scales with maneuver intensity) never
+  accumulates a deficit, so steady cornering is bit-compatible with the
+  validated schedule. Only the excess beyond the gate is absorbed.
+
+  Safety invariants (all hard-clamped, not just constructed):
+    * the effective target always lies BETWEEN the course we are on and the
+      raw model request — the command only ever moves toward the model's
+      current desire, never past it, never away from it;
+    * |deficit| <= max_absorb (a lateral-acceleration budget from controlsd,
+      ABSORB_LATACC_MAX / v^2): anything larger — an emergency swerve —
+      executes immediately except the capped remainder;
+    * the deficit fully releases within max(lateralDelay, ABSORB_WINDOW_MIN)
+      of its last growth (linear release, rate fixed at absorption — no
+      geometric tail, no residual bias);
+    * max_absorb = 0 (the default) disables the layer bit-exactly.
+  clip_curvature (ISO jerk/accel) still runs downstream as the hard limit.
+
+The ONLY smoothing in the lateral path. Import-light (stdlib only).
 """
 import math
 
@@ -75,6 +129,14 @@ HEALTH_FULL = 5   # dev-UI scale: realized control frames per model frame
 # cubic Hermite monotone on [0, 1] (g' is bilinear in (c0, c1) at fixed alpha,
 # so its minimum over the box is at a corner; all four corners give g' >= 0).
 FC_MAX = 3.0
+
+# Innovation-absorb gate (v3.3.7): innovation within REL*|predicted step| + ABS
+# executes exactly (validated feel, no deficit from plan-vs-action bias); only
+# the excess beyond it is absorbed. ABS sits at the old INTERP "curvy" delta
+# threshold — sub-perceptual revisions pass untouched.
+INNOV_GATE_REL = 1.0
+INNOV_GATE_ABS = 5e-5     # 1/m
+ABSORB_WINDOW_MIN = 0.10  # s, release-window floor if lagd reports a tiny delay
 
 LINEAR = "linear"
 SPLINE = "spline"
@@ -97,27 +159,69 @@ class LatSmoother:
     self._sat = 0      # consecutive frames with alpha saturated at 1 (model stall)
     self._c0 = 1.0     # normalized entry slope of the current segment
     self._c1 = 1.0     # normalized exit slope of the current segment
+    self._raw_cur = c        # the model's raw (undeficited) current request
+    self._pred_next = None   # previous plan's prediction of the incoming knot
+    self._absorb = 0.0       # surprise deficit: raw request minus effective target
+    self._release = 0.0      # deficit release rate, 1/m per s (fixed at absorption)
 
   @property
   def health_frames(self) -> float:
     """Realized control-frames-per-model-frame (5 healthy), for dev UI/triage."""
     return float(self._realized_frames)
 
+  @property
+  def absorb(self) -> float:
+    """Current surprise deficit (1/m): raw model request minus effective target."""
+    return float(self._absorb)
+
   def update(self, model_curv: float, new_knot: bool, mono_t: float,
-             next_curv_est: float | None = None) -> float:
+             next_curv_est: float | None = None,
+             lat_delay: float = 0.2, max_absorb: float = 0.0) -> float:
     if new_knot and math.isfinite(model_curv):
+      raw = float(model_curv)
       self.prev = self.out  # continuity: never step, whatever the cadence did
-      self.cur = float(model_curv)
+
+      # ---- innovation absorb (v3.3.7; see module docstring) ----
+      # release first, then absorb the new surprise: a flip-back's innovation
+      # lands on the still-held deficit of the flip and cancels it.
+      if self._absorb != 0.0:
+        self._absorb -= math.copysign(min(abs(self._absorb), self._release * T_MODEL), self._absorb)
+      if self._pred_next is not None:
+        innov = raw - self._pred_next
+        gate = INNOV_GATE_REL * abs(self._pred_next - self._raw_cur) + INNOV_GATE_ABS
+        if abs(innov) > gate:
+          self._absorb += math.copysign(abs(innov) - gate, innov)
+      cap = max(float(max_absorb), 0.0) if math.isfinite(max_absorb) else 0.0
+      self._absorb = min(max(self._absorb, -cap), cap)
+      # effective target: raw minus deficit, hard-clamped BETWEEN the course we
+      # are on and the raw request — only ever toward the model's desire.
+      lo, hi = (self.prev, raw) if raw >= self.prev else (raw, self.prev)
+      cur_eff = min(max(raw - self._absorb, lo), hi)
+      self._absorb = raw - cur_eff  # bookkeeping matches the clamp
+      # release rate: current deficit fully gone within the lagd delay window
+      # of this (its most recent) growth. Linear — no geometric tail.
+      self._release = max(self._release, abs(self._absorb) / max(float(lat_delay), ABSORB_WINDOW_MIN))
+      if self._absorb == 0.0:
+        self._release = 0.0
+      self._raw_cur = raw
+      # store the plan's RAW prediction of the next action for the next split
+      self._pred_next = float(next_curv_est) if (next_curv_est is not None and math.isfinite(next_curv_est)) else None
+      # ---- end innovation absorb ----
+
+      self.cur = cur_eff
       self._knot_t = mono_t
       self._realized_frames = min(self._frames_since_knot, HEALTH_FULL)
       self._frames_since_knot = 0
-      self._set_segment_shape(next_curv_est)
+      # aim the spline's exit slope along the EFFECTIVE course (deficit-adjusted
+      # lookahead), so the in-period shape and the absorb layer agree.
+      est = self._pred_next - self._absorb if self._pred_next is not None else None
+      self._set_segment_shape(est)
     self._frames_since_knot += 1
 
     if self._knot_t is None:
       # no knot yet (first frames after engage): pass the model action through
       if math.isfinite(model_curv):
-        self.prev = self.cur = self.out = float(model_curv)
+        self.prev = self.cur = self.out = self._raw_cur = float(model_curv)
       return self.out
 
     alpha = min(max((mono_t - self._knot_t) / T_MODEL + PHASE_LEAD, 0.0), 1.0)

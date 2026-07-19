@@ -67,6 +67,60 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.7 Changes (based on funnypilot-3.3.6)
+
+Lateral: INNOVATION ABSORB. The v3.3.6 spline made the sub-period path
+smooth but still executed every 20 Hz knot exactly, so a model plan
+REVISION (the "complete 180" between consecutive model updates) reached
+the wheel at full amplitude — the felt harshness lives in the knot
+sequence, and no in-period interpolation can fix it. Knot filtering
+stays forbidden (v3.3.2 EMA post-mortem). The split that threads the
+needle: decompose each new model action against the model's OWN
+previous-plan prediction of it; execute the predicted part exactly on
+the validated schedule (genuine maneuvers are in the plan seconds ahead
+— onset stays decisive, zero delay, zero creep); carry only the gated
+surprise as a deficit released linearly across the lagd `lateralDelay`
+window (the vehicle's physical dead-time — free revision time). A
+flip-flop's second surprise lands on the held deficit and cancels it:
+a simulated one-frame 180 moves the wheel 13% of raw. Convergence to
+the raw request within `lateralDelay` is guaranteed, so the model never
+sees a persistent tracking error to over-correct against (no ping-pong
+spiral); the model also feeds back its own raw action as
+`prev_desired_curv`, so its action head always believes its course.
+
+- `selfdrive/controls/lib/lat_smooth.py` — `update()` gains
+  `lat_delay` / `max_absorb` args (defaults disable the layer
+  bit-exactly). New state: `_pred_next` (previous plan's raw prediction
+  of the incoming knot, from the same lookahead the spline exit slope
+  uses), `_absorb` (deficit), `_release` (linear rate fixed at
+  absorption; window floor `ABSORB_WINDOW_MIN` = 0.1 s). Gate
+  `INNOV_GATE_REL` (1.0) * |predicted step| + `INNOV_GATE_ABS` (5e-5):
+  sub-gate innovation (prediction noise, plan-vs-action bias — which
+  scales with maneuver intensity) passes exactly, so steady cornering
+  is bit-compatible with the validated schedule; only the excess is
+  absorbed. Hard clamps: effective target always BETWEEN the current
+  course and the raw request (deficit re-synced after the clamp);
+  |deficit| <= max_absorb. Release happens at knot boundaries and the
+  released chunk rides the existing spline across the period, so the
+  drain itself is 100 Hz smooth. Spline exit slope now aims at the
+  deficit-adjusted lookahead so both layers agree. New `absorb`
+  property for triage.
+- `selfdrive/controls/controlsd.py` — passes `lat_delay` and
+  `max_absorb = ABSORB_LATACC_MAX (1.0 m/s^2) / max(vEgo, 5)^2` into
+  the smoother (deficit capped as lateral accel: swerve-scale requests
+  execute immediately except the capped remainder). Triage context
+  logs the live `absorb` deficit (should be 0 steady, spike-then-drain
+  on revisions — the on-road falsification signal).
+- `selfdrive/controls/lib/tests/test_lat_smooth.py` — 27 cases; new
+  `TestLatSmootherAbsorb`: predicted-course bit-exact, sub-gate
+  passthrough, flip-flop cancellation (peak <= 25% of raw), sustained
+  surprise converges exactly at the window edge (monotone, no tail),
+  emergency cap passthrough, course-to-raw bracket under adversarial
+  predictions (SPLINE), default-off bit-compat, reset clears deficit.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` 3.3.7; new
+  code markers `INNOV_GATE_ABS` (lat_smooth) and `ABSORB_LATACC_MAX`
+  (controlsd).
+
 ### v3.3.6 Changes (based on funnypilot-3.3.5)
 
 Lateral: the "spend the delay window on smoothing" feel returns WITHOUT

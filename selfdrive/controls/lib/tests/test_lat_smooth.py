@@ -238,6 +238,17 @@ class TestLatSmootherSpline:
     outs = run_knot(s, 0.2, 0.105, next_est=0.3)
     assert outs[0] - 0.1 > 0.015  # still ~the validated 0.2*delta first step
 
+  def test_absorb_disabled_by_default(self):
+    # v3.3.7 layer must be bit-inert unless controlsd passes a budget: with the
+    # default max_absorb=0, even a wild plan-vs-action disagreement lands every
+    # knot exactly (the 3.3.6 contract, unchanged).
+    s = LatSmoother()
+    s.reset(0.0)
+    run_knot(s, 0.0, 0.0, next_est=0.0)
+    outs = run_knot(s, 4e-4, 0.05, next_est=0.0)  # innovation 4e-4, no budget
+    assert abs(outs[-1] - 4e-4) < 1e-15
+    assert s.absorb == 0.0
+
   def test_direction_reversal_restarts_from_zero_slope_in_bracket(self):
     # cur reverses while the wheel is mid-motion: the new segment must restart
     # monotone into the new bracket (no overshoot past the old position)
@@ -250,3 +261,112 @@ class TestLatSmootherSpline:
     for out in outs:
       assert -0.1 - 1e-12 <= out <= start + 1e-12
     assert abs(outs[-1] - (-0.1)) < 1e-12
+
+
+def run_knot_a(s, knot, t0, next_est=None, lat_delay=0.3, max_absorb=1e-3):
+  """run_knot with the v3.3.7 innovation-absorb budget enabled."""
+  outs = [s.update(knot, True, t0, next_est, lat_delay, max_absorb)]
+  for i in range(1, 5):
+    outs.append(s.update(knot, False, t0 + i * DT, None, lat_delay, max_absorb))
+  return outs
+
+
+class TestLatSmootherAbsorb:
+  """v3.3.7 innovation absorb: plan-predicted motion executes exactly; only the
+  gated surprise (a model revision) is deferred, and it provably drains within
+  the lagd delay window. LINEAR method where arithmetic-exact values matter —
+  the layer is method-agnostic (it adjusts knots, not the in-period shape)."""
+
+  def test_predicted_course_is_bit_exact(self):
+    # every knot arrives exactly where the previous plan said it would:
+    # innovation 0, deficit 0, knots landed exactly — validated feel untouched.
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=1e-4)
+    for k, knot in enumerate([1e-4, 2e-4, 3e-4], start=1):
+      outs = run_knot_a(s, knot, k * 0.05, next_est=knot + 1e-4)
+      assert abs(outs[-1] - knot) < 1e-15
+      assert s.absorb == 0.0
+
+  def test_small_innovation_passes_exactly(self):
+    # prediction noise / plan-vs-action bias below the gate must never build a
+    # deficit — steady cornering stays on the validated schedule.
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=0.0)
+    outs = run_knot_a(s, 4e-5, 0.05, next_est=4e-5)  # innovation 4e-5 < gate
+    assert abs(outs[-1] - 4e-5) < 1e-15
+    assert s.absorb == 0.0
+
+  def test_flip_flop_mostly_cancels(self):
+    # the "complete 180": model flips to +4e-4 for one frame (its plan claiming
+    # the flip persists), then flips back. The two surprises annihilate in the
+    # deficit — peak wheel excursion stays a small fraction of the raw flip.
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=0.0)
+    peak = 0.0
+    for k, (knot, est) in enumerate([(4e-4, 4e-4), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], start=1):
+      for out in run_knot_a(s, knot, k * 0.05, next_est=est):
+        peak = max(peak, abs(out))
+    assert peak <= 1e-4          # >= 75% of the flip never reached the wheel
+    assert abs(s.out) < 1e-9     # ...and the command returned to the course
+    # control: without the budget the full flip hits the wheel
+    s2 = LatSmoother(method=LINEAR)
+    s2.reset(0.0)
+    run_knot(s2, 0.0, 0.0, next_est=0.0)
+    outs = run_knot(s2, 4e-4, 0.05, next_est=4e-4)
+    assert abs(outs[-1] - 4e-4) < 1e-15
+
+  def test_sustained_surprise_converges_within_delay_window(self):
+    # a genuine unpredicted step (the plan then agrees onward): the command
+    # must reach the raw request within lat_delay of the surprise — monotone,
+    # no geometric tail, no residual bias for the model to fight.
+    lat_delay = 0.3
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=0.0, lat_delay=lat_delay)
+    landings = []
+    for k in range(1, 9):
+      outs = run_knot_a(s, 4e-4, k * 0.05, next_est=4e-4, lat_delay=lat_delay)
+      landings.append(outs[-1])
+    n_window = round(lat_delay / T_MODEL)  # knots inside the release window
+    assert abs(landings[n_window] - 4e-4) < 1e-12  # converged on schedule
+    assert s.absorb == 0.0
+    for a, b in zip(landings, landings[1:], strict=False):
+      assert b >= a - 1e-15  # monotone toward the raw request, never past it
+    assert all(l <= 4e-4 + 1e-15 for l in landings)
+
+  def test_emergency_surprise_executes_past_the_cap(self):
+    # a swerve-scale revision: only the lat-accel-budgeted remainder is
+    # deferred; the bulk of the request executes in the same model period.
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=0.0)
+    outs = run_knot_a(s, 0.05, 0.05, next_est=0.05, max_absorb=1e-3)
+    assert outs[-1] >= 0.05 - 1e-3 - 1e-12
+    assert abs(s.absorb) <= 1e-3 + 1e-12
+
+  def test_output_never_outside_course_to_raw_bracket(self):
+    # SAFETY: with the layer active and adversarial predictions, every output
+    # stays between the course we were on and the raw model request — the
+    # command only ever moves toward the model's current desire.
+    s = LatSmoother()  # SPLINE: the layer must hold the invariant either way
+    s.reset(0.0)
+    seq = [(0.0, 3e-4), (5e-4, -2e-4), (-3e-4, float("nan")), (2e-4, None),
+           (2e-4, 9e-4), (-1e-4, -1e-4)]
+    for k, (knot, est) in enumerate(seq):
+      start = s.out
+      outs = run_knot_a(s, knot, k * 0.05, next_est=est)
+      lo, hi = min(start, knot), max(start, knot)
+      for out in outs:
+        assert lo - 1e-12 <= out <= hi + 1e-12
+
+  def test_reset_clears_deficit(self):
+    s = LatSmoother(method=LINEAR)
+    s.reset(0.0)
+    run_knot_a(s, 0.0, 0.0, next_est=0.0)
+    run_knot_a(s, 4e-4, 0.05, next_est=4e-4)
+    assert s.absorb != 0.0
+    s.reset(0.0)
+    assert s.absorb == 0.0

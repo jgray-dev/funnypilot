@@ -1,3 +1,60 @@
+FunnyPilot v3.3.7 (2026-07-19)
+========================
+Lateral: innovation absorb — the model's plan-consistent motion executes
+exactly on the validated schedule; only its plan REVISIONS (the "complete
+180 between model updates") are spread across the lagd delay window.
+
+* feat(lat): every new 20 Hz model action is split against what the
+  model's OWN previously-published plan predicted for that instant (the
+  same `get_curvature_from_plan` lookahead the spline already reads —
+  free compute inside the lagd delay window). The predicted component is
+  executed exactly on the validated delta/5-timed schedule: genuine
+  maneuvers live in the plan seconds ahead of their action, so curve
+  entries and lane changes keep their decisive onset with zero added
+  delay and zero pre-onset creep. The surprise component — the
+  innovation, which is precisely the frame-to-frame plan revision the
+  wheel should not chase — is carried as a deficit and released
+  LINEARLY across the lagd `lateralDelay` window. During that window
+  the vehicle has not yet physically responded to the previous command,
+  so revising over it instead of instantly is free.
+* feat(lat): a flip-flop cancels instead of executing twice: the model
+  flips (+X absorbed), then flips back (-X lands on the held deficit
+  and annihilates it). Simulated one-model-frame 180 (4e-4 1/m): peak
+  wheel excursion drops to 13% of the raw flip, and the command returns
+  to the course — the ping-pong loop never reaches the tires. This is
+  the fix the in-period spline could not provide: v3.3.6 still executed
+  every knot exactly, so revisions passed through at full amplitude.
+* why this is not the reverted EMA (v3.3.2 post-mortem still honored):
+  nothing is filtered and no horizon is shifted — plan-consistent knots
+  are reached exactly at their validated times (bit-compatible: gate =
+  |predicted step| + 5e-5, so prediction noise and plan-vs-action bias
+  in steady cornering never build a deficit), and a deficit only ever
+  places the command BETWEEN the course the model itself published and
+  its new request. Where the EMA redistributed onset ("a 2.5 before the
+  5"), the absorb layer cannot: an onset the plan predicted passes
+  untouched, and an unpredicted one starts immediately, merely reaching
+  full amplitude within the physical dead-time.
+* safety: hard invariants, all clamped not just constructed — (1) the
+  effective target always lies between the current course and the raw
+  model request: the command only ever moves toward the model's desire,
+  never past or away from it; (2) the deficit is capped by a
+  lateral-accel budget (`ABSORB_LATACC_MAX` = 1.0 m/s^2 at current
+  speed), so a swerve-scale request executes immediately except the
+  capped remainder; (3) linear release guarantees convergence to the
+  raw request within max(lateralDelay, 0.1 s) of the last surprise —
+  no geometric tail, no residual bias for the model to over-correct
+  against, and the model already feeds back its own raw action as
+  `prev_desired_curv`, so its action head believes its course
+  regardless; (4) `max_absorb` = 0 disables the layer bit-exactly;
+  clip_curvature (ISO jerk/accel) still runs downstream unchanged.
+* chore: `FUNNYPILOT_VERSION` -> 3.3.7, nav_webserver
+  `EXPECTED_VERSION` -> "3.3.7", new INNOV_GATE_ABS / ABSORB_LATACC_MAX
+  code markers, triage context gains the live `absorb` deficit;
+  test_lat_smooth.py extended to 27 cases (predicted-course bit-exact,
+  sub-gate passthrough, flip-flop cancellation, convergence-on-schedule,
+  emergency cap passthrough, course-to-raw bracket under adversarial
+  predictions, default-off bit-compat, reset).
+
 FunnyPilot v3.3.6 (2026-07-18)
 ========================
 Lateral: the delay-window smoothing feel returns — without the onset
