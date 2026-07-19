@@ -127,11 +127,13 @@ class LatInterpMonitor:
     self._sat = 0
     self._slb = 0
     self._tq_max = 0.0
+    self._eps_min = 1.0
 
   def sample(self, mono_t: float, lat_active: bool, long_active: bool, v_ego: float, health_frames: float,
              lane_change: bool, curvature_limited: bool, a_target: float, accel: float,
              steering_pressed: bool = False, override_scale: float = 1.0, saturated: bool = False,
-             steer_limited: bool = False, torque: float = 0.0, context_fn=None) -> None:
+             steer_limited: bool = False, torque: float = 0.0, eps_authority: float = 1.0,
+             context_fn=None) -> None:
     try:
       if self._t0 is None:
         self._t0 = mono_t
@@ -154,6 +156,9 @@ class LatInterpMonitor:
       self._sat += int(saturated)
       self._slb += int(steer_limited)
       self._tq_max = max(self._tq_max, abs(float(torque)))
+      # v3.3.8: per-second MIN of the EPS governor authority bound (1.0 = the
+      # driver-torque clamp never engaged; < 1.0 = the hardware limit was live)
+      self._eps_min = min(self._eps_min, float(eps_authority))
 
       if mono_t - self._t0 < self.PERIOD:
         return
@@ -190,6 +195,7 @@ class LatInterpMonitor:
         "sat": round(self._sat / self._n, 2),
         "slb": round(self._slb / self._n, 2),
         "tqx": round(self._tq_max, 3),
+        "eps": round(self._eps_min, 2),
       }
       if self._idle_skipped:
         rec["idl"] = self._idle_skipped  # idle seconds preceding this record

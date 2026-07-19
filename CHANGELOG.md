@@ -1,3 +1,52 @@
+FunnyPilot v3.3.8 (2026-07-19)
+========================
+Two fixes: the turn-in "grab torque, immediately loosen, hard steer again"
+oscillation, and E2E experimental longitudinal restored to a first-class,
+DEC-compatible mode. (3.3.7 skipped; numbered per request.)
+
+* fix(lat): EPS torque governor (`eps_limit.py`, wired last in
+  latcontrol_torque). ROOT CAUSE of the grab/loosen cycle: the
+  carcontroller AND panda clamp commanded torque by the driver-torque
+  limit — for the K5, allowed = 384 + (50 − |sensor|)·2, slewed +3/−7
+  per 10 ms — and the torsion-bar sensor reads wheel-INERTIA reaction
+  during hard self-steer bites (v3.2.8 measured 150+ ⇒ authority
+  halves from a threshold of just 50). Bite → sensor spike → hardware
+  sheds torque at −7/frame → wheel decelerates → sensor relaxes →
+  controller (blind to the clamp) re-bites at +3/frame — re-excited by
+  every model knot on turn-in. The governor mirrors the exact hardware
+  bounds + slew inside the controller so the request is always
+  realizable, collapses with the bound instantly, but RECOVERS at
+  0.35/s — under half the hardware rate — which is the damping that
+  breaks the limit cycle. Also fixes a real windup bug: the clamp
+  engages at sensor 50–150 where steeringPressed (threshold 150) never
+  fires, so the PID integrator wound up against an invisible limit and
+  slammed on release; the governor's clamp state now freezes the
+  integrator and feeds the saturation alert (sustained authority loss
+  in a corner stays driver-visible). Only ever reduces torque; panda
+  enforcement untouched. Triage lat_interp.jsonl gains "eps" (per-sec
+  min authority) — 1.0 means the clamp never engaged that second.
+* feat(long): MPC 'blended' mode restored (deleted in the v3.2.6e
+  single-authority rewrite). Pure E2E experimental could not accelerate
+  because e2e was reduced to min(action.desiredAcceleration, ACC-MPC) —
+  for non-mlsim bundles (generation < 11) that action accel isn't
+  meaningful, freezing acceleration. Now, exactly like upstream: for
+  non-mlsim bundles the MPC itself tracks the model's x/v/a trajectory
+  in blended mode; for mlsim bundles the min-blend applies only when
+  the mode is blended. Dynamic Experimental Control arbitrates
+  acc/blended when enabled — and ALL fork longitudinal features keep
+  working in both DEC modes by construction: SCC-V/M, SLA and the
+  hidden governor shape v_cruise upstream of the MPC, which binds as
+  the cruise obstacle in acc mode and as the blended position cap in
+  blended mode; the SLA gas gate, AccelJerkShaper, LeadGrace, and the
+  fork 70% accel clip apply to the output in every mode. ACC-mode MPC
+  behavior is byte-identical to 3.3.6.
+* chore: FUNNYPILOT_VERSION -> 3.3.8; nav_webserver EXPECTED_VERSION ->
+  "3.3.8", new markers (EpsTorqueGovernor, MPC blended restore),
+  eps_limit.py added to the feel-file hashes. test_eps_limit.py NEW
+  (10 cases incl. request-always-realizable vs the real opendbc clamp
+  function). Full import-light suite 127 green. NOTE: blended-mode MPC
+  behavior needs the aarch64 acados solver — validate on-device.
+
 FunnyPilot v3.3.6 (2026-07-18)
 ========================
 Lateral: the delay-window smoothing feel returns — without the onset

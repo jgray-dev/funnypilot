@@ -31,13 +31,14 @@ _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
 _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
+  "/data/openpilot/selfdrive/controls/lib/eps_limit.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.6"
+EXPECTED_VERSION = "3.3.8"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -52,6 +53,8 @@ _GIT = "git -c safe.directory='*' -C /data/openpilot"
 _CODE_MARKERS = [
   ("class LatSmoother", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "lat knot smoother"),
   ("SPLINE", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "C1 spline shaping"),
+  ("class EpsTorqueGovernor", "/data/openpilot/selfdrive/controls/lib/eps_limit.py", "EPS torque governor"),
+  ("v3.3.8", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC blended mode restore"),
   ("v3.3.6", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
   ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
   ("_OVERRIDE_MIN_SCALE", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "override softening"),

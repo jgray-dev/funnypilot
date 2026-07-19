@@ -9,6 +9,7 @@ from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.override_gate import OverrideGate
+from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
 from openpilot.common.pid import PIDController
 
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
@@ -102,6 +103,14 @@ class LatControlTorque(LatControl):
     self._override_filter     = FirstOrderFilter(1.0, self._OVERRIDE_TAU, self.dt)
     self._override_gate       = OverrideGate(self.dt)
 
+    # FunnyPilot v3.3.8: EPS torque governor — mirror the K5's hardware
+    # driver-torque clamp + slew limits inside the controller (see
+    # eps_limit.py for the grab-then-loosen mechanism). Applied LAST, so the
+    # request that leaves latcontrol is always realizable by the rack; its
+    # damped post-clamp recovery is what breaks the turn-in torque
+    # oscillation. Only ever reduces torque; panda remains the backstop.
+    self._eps_governor = EpsTorqueGovernor(self.dt)
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
     self.torque_params.latAccelOffset = latAccelOffset
@@ -159,11 +168,16 @@ class LatControlTorque(LatControl):
       # keep the driver-override softening reset so a re-engage starts at full scale
       self._override_gate.reset()
       self._override_scale = self._override_filter.update(1.0)
+      self._eps_governor.reset()
     else:
       # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
 
-      freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
+      # v3.3.8: also freeze while the EPS governor's driver-limit bound is
+      # clamping (previous frame's state) — the hardware won't take more
+      # torque, so integrating the tracking error would only wind up an
+      # overshoot for when authority returns.
+      freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or self._eps_governor.driver_limited
       output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
@@ -228,6 +242,13 @@ class LatControlTorque(LatControl):
       self._override_scale = self._override_filter.update(override_target)
       output_torque *= self._override_scale
 
+      # FunnyPilot v3.3.8: EPS torque governor, LAST in the chain — clamp the
+      # request to what the carcontroller/panda driver-torque limit will
+      # actually pass (with damped recovery) and to the rack's +3/-7 slew.
+      # Runs in the ACTUATOR frame (this function returns -output_torque), the
+      # same frame as CS.steeringTorque.
+      output_torque = -self._eps_governor.update(-output_torque, CS.steeringTorque)
+
       pid_log.active = True
       pid_log.p = float(self.pid.p)
       pid_log.i = float(self.pid.i)
@@ -237,7 +258,11 @@ class LatControlTorque(LatControl):
       pid_log.actualLateralAccel = float(measurement)
       pid_log.desiredLateralAccel = float(setpoint)
       pid_log.desiredLateralJerk = float(desired_lateral_jerk)
-      pid_log.saturated = bool(self._check_saturation(self.steer_max - abs(output_torque) < 1e-3, CS, steer_limited_by_safety, curvature_limited))
+      # v3.3.8: a sustained EPS-governor clamp is real authority loss in a
+      # corner — it must feed the saturation alert exactly like hitting
+      # steer_max (the _check_saturation dwell filters out transients).
+      saturated_now = self.steer_max - abs(output_torque) < 1e-3 or self._eps_governor.driver_limited
+      pid_log.saturated = bool(self._check_saturation(saturated_now, CS, steer_limited_by_safety, curvature_limited))
 
     # TODO left is positive in this convention
     return -output_torque, 0.0, pid_log

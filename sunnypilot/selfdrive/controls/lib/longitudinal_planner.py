@@ -47,12 +47,18 @@ class LongitudinalPlannerSP:
     self._speed_governor = SpeedGovernor()
     self._fric = 0.8
 
-  def is_e2e(self, sm: messaging.SubMaster) -> bool:
-    experimental_mode = sm['selfdriveState'].experimentalMode
-    if not self.dec.active():
-      return experimental_mode
+  @property
+  def mlsim(self) -> bool:
+    # If we don't have a generation set, we assume it's default model. Which as of today are mlsim.
+    return bool(self.generation is None or self.generation >= 11)
 
-    return experimental_mode and self.dec.mode() == "blended"
+  def get_mpc_mode(self) -> str | None:
+    # v3.3.8: DEC owns the acc/blended decision while it is active
+    # (experimental mode on + DynamicExperimentalControl toggle on)
+    if not self.dec.active():
+      return None
+
+    return self.dec.mode()
 
   def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> tuple[float, float]:
     CS = sm['carState']

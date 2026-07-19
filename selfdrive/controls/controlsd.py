@@ -204,6 +204,7 @@ class Controls(ControlsExt):
                        saturated=bool(getattr(lac_log, 'saturated', False)),
                        steer_limited=self.steer_limited_by_safety,
                        torque=actuators.torque,
+                       eps_authority=getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0),
                        context_fn=lambda: {
                          "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
                          "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),

@@ -136,7 +136,23 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     return x, v, a, j, throttle_prob
 
   def update(self, sm):
+    # FunnyPilot v3.3.8: MPC mode selection restored (upstream semantics,
+    # DEC-arbitrated). For non-mlsim model bundles (generation < 11) the MPC
+    # itself runs 'blended' and tracks the model's trajectory — the v3.2.6e
+    # rewrite had dropped this, leaving E2E as a pure min() clamp against the
+    # ACC plan, which is why pure experimental mode would not accelerate.
+    # With Dynamic Experimental Control enabled, DEC owns the acc/blended
+    # decision; the fork's speed governors keep binding in BOTH modes because
+    # they shape v_cruise upstream of the MPC (cruise obstacle in acc,
+    # position cap in blended).
+    mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
+    if not self.mlsim:
+      self.mpc.mode = mode
     LongitudinalPlannerSP.update(self, sm)
+    if dec_mpc_mode := self.get_mpc_mode():
+      mode = dec_mpc_mode
+      if not self.mlsim:
+        self.mpc.mode = dec_mpc_mode
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -172,7 +188,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
-    _, _, _, _, throttle_prob = self.parse_model(sm['modelV2'])
+    x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'])
     # Don't clip at low speeds since throttle_prob doesn't account for creep
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
@@ -216,7 +232,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     personality = sm['selfdriveState'].personality
     self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, personality=personality)
+    self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -238,14 +254,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
 
-    if self.is_e2e(sm):
+    # v3.3.8: upstream blend semantics. mlsim bundles carry e2e long in
+    # action.desiredAcceleration -> min-blend when the (DEC-arbitrated) mode
+    # is blended. Non-mlsim bundles don't produce a meaningful action accel
+    # (the old unconditional min() against it is what froze acceleration) —
+    # their e2e long IS the blended MPC solution, so take the MPC output.
+    if mode == 'acc' or not self.mlsim:
+      output_a_target = output_a_target_mpc
+      self.output_should_stop = output_should_stop_mpc
+    else:
       output_a_target = min(output_a_target_e2e, output_a_target_mpc)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
       if output_a_target < output_a_target_mpc:
         self.mpc.source = LongitudinalPlanSource.e2e
-    else:
-      output_a_target = output_a_target_mpc
-      self.output_should_stop = output_should_stop_mpc
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)

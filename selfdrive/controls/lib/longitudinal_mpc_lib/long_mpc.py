@@ -236,6 +236,16 @@ def gen_long_ocp():
 class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
+    # FunnyPilot v3.3.8: MPC modes restored (deleted in the v3.2.6e rewrite,
+    # which made experimental/E2E long a pure min() clamp that could never
+    # accelerate). 'acc' = the fork's validated cruise-obstacle formulation,
+    # byte-identical to v3.2.6e..v3.3.6. 'blended' = upstream's e2e blend:
+    # the MPC tracks the model's x/v/a trajectory (yref) with the cruise
+    # target as a position cap — this is what makes experimental mode
+    # actually drive the car, and the cap is what keeps the fork's speed
+    # governors (SCC-V/M, SLA, hidden offset) binding in E2E. Runtime-only
+    # (weights/params/yref) — the prebuilt aarch64 solver is unchanged.
+    self.mode = 'acc'
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -289,9 +299,18 @@ class LongitudinalMpc:
 
   def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
     jerk_factor = get_jerk_factor(personality)
-    a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
-    cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
-    constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
+    if self.mode == 'acc':
+      a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
+      cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
+      constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
+    elif self.mode == 'blended':
+      # upstream's e2e-tracking cost set, verbatim (personality jerk factor is
+      # intentionally not applied here — the model's plan owns the shape)
+      a_change_cost = 40.0 if prev_accel_constraint else 0
+      cost_weights = [0., 0.1, 0.2, 5.0, a_change_cost, 1.0]
+      constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
+    else:
+      raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner cost set')
     self.set_cost_weights(cost_weights, constraint_cost_weights)
 
   def set_cur_state(self, v, a):
@@ -333,7 +352,7 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
+  def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
     v_ego = self.x0[1]
     # FunnyPilot: Speed-dependent follow distance
     t_follow = get_T_FOLLOW(personality, v_ego=v_ego)
@@ -348,28 +367,58 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
-    # when the leads are no factor.
-    v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
-    # TODO does this make sense when max_a is negative?
-    v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)
-    v_cruise_clipped = np.clip(v_cruise * np.ones(N+1), v_lower, v_upper)
-    cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
+    self.params[:,0] = ACCEL_MIN
+    self.params[:,1] = ACCEL_MAX
 
-    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
-    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
+    if self.mode == 'acc':
+      # FunnyPilot v3.2.6e..v3.3.6 validated path, unchanged.
+      self.params[:,5] = LEAD_DANGER_FACTOR
 
-    self.yref[:,:] = 0.0
+      # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
+      # when the leads are no factor.
+      v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
+      # TODO does this make sense when max_a is negative?
+      v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)
+      v_cruise_clipped = np.clip(v_cruise * np.ones(N+1), v_lower, v_upper)
+      cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
+
+      x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
+      self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
+
+      # The model trajectory is not tracked in ACC mode
+      x[:], v[:], a[:], j[:] = 0.0, 0.0, 0.0, 0.0
+
+    elif self.mode == 'blended':
+      # FunnyPilot v3.3.8: upstream's e2e-tracking branch, restored. The MPC
+      # follows the model's plan, with the (governed!) v_cruise as a position
+      # cap — SCC-V/M, SLA and the hidden governor keep binding in E2E.
+      self.params[:,5] = 1.0
+
+      x_obstacles = np.column_stack([lead_0_obstacle,
+                                     lead_1_obstacle])
+      cruise_target = T_IDXS * np.clip(v_cruise, v_ego - 2.0, 1e3) + x[0]
+      xforward = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
+      x = np.cumsum(np.insert(xforward, 0, x[0]))
+
+      x_and_cruise = np.column_stack([x, cruise_target])
+      x = np.min(x_and_cruise, axis=1)
+
+      self.source = LongitudinalPlanSource.e2e if x_and_cruise[1,0] < x_and_cruise[1,1] else LongitudinalPlanSource.cruise
+
+    else:
+      raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner update')
+
+    self.yref[:,1] = x
+    self.yref[:,2] = v
+    self.yref[:,3] = a
+    self.yref[:,5] = j
     for i in range(N):
       self.solver.set(i, "yref", self.yref[i])
     self.solver.set(N, "yref", self.yref[N][:COST_E_DIM])
 
-    self.params[:,0] = ACCEL_MIN
-    self.params[:,1] = ACCEL_MAX
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)
     self.params[:,4] = t_follow
-    self.params[:,5] = LEAD_DANGER_FACTOR
 
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
@@ -377,6 +426,15 @@ class LongitudinalMpc:
       self.crash_cnt += 1
     else:
       self.crash_cnt = 0
+
+    # In blended mode, report the lead as the source once the solution is
+    # inside a lead's comfort range, so LeadGrace/UI see real following.
+    if self.mode == 'blended':
+      if np.any((lead_0_obstacle - get_safe_obstacle_distance(self.x_sol[:,1], t_follow)) - self.x_sol[:,0] < 0.0):
+        self.source = LongitudinalPlanSource.lead0
+      if np.any((lead_1_obstacle - get_safe_obstacle_distance(self.x_sol[:,1], t_follow)) - self.x_sol[:,0] < 0.0) and \
+         (lead_1_obstacle[0] - lead_0_obstacle[0]) < 0.0:
+        self.source = LongitudinalPlanSource.lead1
 
   def run(self):
     for i in range(N+1):

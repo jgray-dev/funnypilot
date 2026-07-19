@@ -67,6 +67,93 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.8 Changes (based on funnypilot-3.3.6; 3.3.7 skipped per user request)
+
+Lateral: the turn-in "grab torque / fail to hold it / re-bite" oscillation
+addressed at its mechanism. Longitudinal: E2E experimental restored as a
+real mode, DEC-compatible, with every fork governor working in both modes.
+
+- `selfdrive/controls/lib/eps_limit.py` — NEW, stdlib-only.
+  `EpsTorqueGovernor`: mirrors the K5's carcontroller/panda driver-torque
+  clamp (allowed = 384 + (50 − |CS.steeringTorque|·1)·2, K5 classic-CAN
+  constants duplicated from opendbc hyundai values.py — update together)
+  and the +3/−7-per-10 ms slew, applied LAST in latcontrol_torque so the
+  request that leaves the controller is ALWAYS realizable by the rack
+  (unit-tested as identity against the real opendbc
+  apply_driver_steer_torque_limits). Bounds collapse instantly (hardware
+  clamps this frame regardless) but recover at RECOVERY_RATE = 0.35/s —
+  under half the hardware's 0.78/s — the damping that breaks the
+  bite → sensor-spike → shed → re-bite limit cycle (the sensor reads
+  wheel-inertia reaction, 150+ measured in v3.2.8, vs an allowance of
+  50). KEY FACTS: the clamp engages from sensor 50–150 where NOTHING
+  else fires (steeringPressed threshold 150, slb only when panda blocks)
+  — before v3.3.8 the integrator wound against an invisible limit.
+  `driver_limited` (prev frame) now freezes the PID integrator and ORs
+  into the saturation check (_check_saturation dwell keeps transients
+  out of the alert). Governor can only reduce torque; panda backstop
+  untouched. reset() on inactive => re-engage ramps from 0 at the
+  hardware rate, matching what the carcontroller does anyway.
+- `selfdrive/controls/lib/latcontrol_torque.py` — governor instantiated
+  + applied in the ACTUATOR frame (`-self._eps_governor.update(
+  -output_torque, CS.steeringTorque)` — the sign flip is LOAD-BEARING,
+  CS.steeringTorque and actuators.torque share the actuator frame while
+  latcontrol's internal torque is negated). freeze_integrator gains
+  `or self._eps_governor.driver_limited`.
+- `selfdrive/controls/lib/triage_recorder.py` — lat records gain "eps"
+  (per-second MIN of governor authority; 1.0 = clamp never engaged).
+  controlsd passes it via getattr chain (angle/PID tuning cars => 1.0).
+  TRIAGE: eps < 1.0 pulses during turn-in events confirm the mechanism
+  on-road; eps pinned 1.0 while the oscillation persists = mechanism
+  falsified, look at EPS-internal derate next (consider an
+  ALT_LIMITS-style sustained-torque cap, deliberately NOT added in
+  3.3.8 — speculative).
+- `selfdrive/controls/lib/tests/test_eps_limit.py` — NEW (10 cases):
+  realizability-vs-real-opendbc-clamp over randomized sequences,
+  hardware-exact bound at sensor 150 (= 184/384), recovery strictly
+  slower than hardware, aligned-torque no-op, symmetry, reset, NaN,
+  never-amplifies. A closed-loop plant sim was inconclusive (toy plant
+  can't reproduce the measured sensor regime honestly) — on-road "eps"
+  triage is the verification path.
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` — `mode`
+  ('acc'/'blended') RESTORED (v3.3.8 marker; the v3.2.6e rewrite had
+  deleted it, reducing E2E to min(action.desiredAcceleration, ACC-MPC)
+  — which cannot accelerate when the bundle's action accel is
+  empty/meaningless => the "pure E2E won't accelerate whatsoever"
+  report). 'acc' path byte-identical to 3.3.6 (fork T_FOLLOW etc.);
+  'blended' = upstream verbatim: cost set [0, .1, .2, 5, 40, 1] (no
+  personality jerk factor — the model's plan owns the shape), MPC
+  tracks model x/v/a/j yref, cruise POSITION cap
+  (T_IDXS·clip(v_cruise, v_ego−2, ∞) + x[0]), danger factor 1.0,
+  post-solve lead0/lead1 source detection (lead1 requires nearer than
+  lead0 — deliberate tightening of upstream's truthiness check).
+  update() signature gained x, v, a, j. Runtime-only params/weights —
+  prebuilt aarch64 solver untouched, but blended behavior itself needs
+  on-device validation (acados absent in CI).
+- `selfdrive/controls/lib/longitudinal_planner.py` — upstream mode
+  selection restored, DEC-arbitrated: mode = experimental ? 'blended' :
+  'acc'; DEC (when active) overrides via get_mpc_mode(); mpc.mode only
+  set for non-mlsim bundles (mlsim keeps ACC-MPC + min-blend, exactly
+  upstream). parse_model x/v/a/j now fed to mpc.update. Output blend:
+  `mode == 'acc' or not mlsim` => pure MPC, else min(e2e, mpc).
+  DEC-COMPATIBILITY BY CONSTRUCTION: SCC-V/M, SLA and
+  HIDDEN_CRUISE_OFFSET shape v_cruise BEFORE the MPC (cruise obstacle
+  in acc / position cap in blended), and the SLA gas gate, shaper,
+  LeadGrace and fork accel_clip act on the output path in every mode.
+  DELIBERATE fork divergences from upstream kept: the 70% accel clip +
+  turn limiting apply in blended too (upstream unclips to ACCEL_MAX);
+  gentle is the fork's identity.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` —
+  `is_e2e` replaced by upstream's `mlsim` property (generation None or
+  >= 11) + `get_mpc_mode` (None unless dec.active()). NOTE: DEC's
+  slowness detection compares v_ego to DISPLAYED vCruise, so the hidden
+  0.93 governor makes _has_slowness ~always true while cruising —
+  harmless (slowness is checked after slow_down/standstill and both
+  request 'acc' anyway); left untouched on purpose.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.3.8";
+  new markers ("class EpsTorqueGovernor" in eps_limit.py, "v3.3.8" in
+  long_mpc.py); eps_limit.py added to _FEEL_FILES hashes.
+- `FUNNYPILOT_VERSION` -> 3.3.8. Full import-light suite 127 green.
+
 ### v3.3.6 Changes (based on funnypilot-3.3.5)
 
 Lateral: the "spend the delay window on smoothing" feel returns WITHOUT
