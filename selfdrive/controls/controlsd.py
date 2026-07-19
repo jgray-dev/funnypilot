@@ -174,15 +174,21 @@ class Controls(ControlsExt):
       next_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo) if self.sm.updated['modelV2'] else None
       new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
                                                      self.sm.updated['modelV2'], time.monotonic(), next_est)
-    # Dev-UI INTERP indicator: realized control-frames-per-model-frame (5 =
-    # healthy cadence), or 0 when paused. Written at the 20 Hz model rate.
+    # Dev-UI heartbeat, written at the 20 Hz model rate. v3.3.8: now
+    # "n,authority" — n is the realized control-frames-per-model-frame (kept
+    # for triage compat), authority is the MIN EPS-governor bound since the
+    # last model frame (1.00 = the hardware driver-torque clamp never
+    # engaged; see eps_limit.py). The dev UI's EPS element reads this.
+    eps_auth = getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0)
+    self._eps_auth_min = min(getattr(self, '_eps_auth_min', 1.0), float(eps_auth))
     if self.sm.updated['modelV2']:
       try:
         n = round(self.lat_smooth.health_frames) if CC.latActive else 0
         with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write(str(n))
+          _f.write(f"{n},{self._eps_auth_min:.2f}")
       except Exception:
         pass
+      self._eps_auth_min = 1.0
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
 
     actuators.curvature = self.desired_curvature

@@ -72,6 +72,7 @@ _CODE_MARKERS = [
   ("class TriageRecorder", "/data/openpilot/selfdrive/controls/lib/triage_recorder.py", "triage recorder"),
   ("HIDDEN_CRUISE_OFFSET", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "hidden cruise governor"),
   ("class LagdElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "lagd dev UI readout"),
+  ("class EpsLimitElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "EPS/TBAR dev UI readout"),
   ("class AutoUpdater", "/data/openpilot/sunnypilot/auto_updater/manager.py", "offroad wifi auto-updater"),
 ]
 _CODE_CMD = "; ".join(

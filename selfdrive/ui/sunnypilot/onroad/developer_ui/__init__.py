@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  LatInterpolElement, LagdElement,
+  EpsLimitElement, DriverTorqueElement, LagdElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -42,7 +42,12 @@ class DeveloperUiRenderer(Widget):
     self.lead_speed_elem = LeadSpeedElement()
     self.friction_elem = FrictionCoefficientElement()
     self.lat_accel_factor_elem = LatAccelFactorElement()
-    self.lat_interp_elem = LatInterpolElement()
+    # FunnyPilot v3.3.8: INTERP replaced — the interpolation is knot-exact by
+    # construction now, so it read a static "5". These two show what actually
+    # matters for the turn-in oscillation: hardware torque authority and the
+    # raw torsion-bar reading that drives the clamp.
+    self.eps_limit_elem = EpsLimitElement()
+    self.driver_torque_elem = DriverTorqueElement()
     self.lagd_elem = LagdElement()
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
@@ -137,9 +142,11 @@ class DeveloperUiRenderer(Widget):
     elements = []
     is_torque = sm['controlsState'].lateralControlState.which() == 'torqueState'
 
-    # Leftmost: INTERP (torque only)
+    # Leftmost (torque only): EPS governor authority + torsion-bar reading —
+    # the two values that discriminate the grab/loosen oscillation hypotheses
     if is_torque:
-      elements.append(self.lat_interp_elem.update(sm, ui_state.is_metric))
+      elements.append(self.eps_limit_elem.update(sm, ui_state.is_metric))
+      elements.append(self.driver_torque_elem.update(sm, ui_state.is_metric))
 
     elements.append(self.lead_speed_elem.update(sm, ui_state.is_metric))
 

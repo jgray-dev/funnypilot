@@ -161,9 +161,38 @@ real mode, DEC-compatible, with every fork governor working in both modes.
   0.93 governor makes _has_slowness ~always true while cruising —
   harmless (slowness is checked after slow_down/standstill and both
   request 'acc' anyway); left untouched on purpose.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` — badges
+  scaled by _BADGE_SCALE = 1.08 (font/paddings/min_width/sub-label).
+  Arbitration display: reads longitudinalPlanSP.longitudinalPlanSource
+  (custom capnp enum) — when both SCC-V and SCC-M are constraining
+  (active + vTarget < 888), the source-winner's color lerps toward
+  _COLOR_WIN (blue) + white ring (draw_rectangle_rounded_lines_ex, same
+  API as sidebar.py), the loser toward _COLOR_LOSE (slate), tint
+  strength = |vTarget split| / _DISAGREE_FULL_MS (3 m/s = full). Base
+  state colors (disabled/armed/gas-gate/braking) unchanged and shown
+  whenever they agree. _BadgeState's 6-frame lerp naturally smooths the
+  continuously-moving gradient targets.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` —
+  LatInterpolElement DELETED (static "5"; spline is knot-exact by
+  construction). NEW EpsLimitElement ("EPS", % authority, 1 s min-hold
+  via _RollingExtreme; green >= 0.99 / orange >= 0.60 / red below,
+  "-" when lat inactive) reading the v3.3.8 "n,authority" format of
+  /dev/shm/lat_interp; NEW DriverTorqueElement ("TBAR", 1 s max-hold
+  of |carState.steeringTorque|; green < 50 / orange 50-149 (the clamp
+  band steeringPressed can't see) / red >= 150). GLANCE RULE for the
+  user: all-green = normal; during an oscillation event TBAR orange+
+  with EPS < 100 confirms the clamp mechanism, TBAR green with EPS 100
+  falsifies it (matches the triage dtx/eps matrix).
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` — bottom
+  bar leftmost (torque cars): EPS + TBAR replace INTERP.
+- `selfdrive/controls/controlsd.py` — /dev/shm/lat_interp heartbeat now
+  writes "n,authority" at 20 Hz, authority = MIN governor bound since
+  the last model frame (reset after each write; getattr chain so
+  non-torque tuning writes 1.0).
 - `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.3.8";
   new markers ("class EpsTorqueGovernor" in eps_limit.py, "v3.3.8" in
-  long_mpc.py); eps_limit.py added to _FEEL_FILES hashes.
+  long_mpc.py, "class EpsLimitElement" in dev-UI elements.py);
+  eps_limit.py added to _FEEL_FILES hashes.
 - `FUNNYPILOT_VERSION` -> 3.3.8. Full import-light suite 127 green.
 
 ### v3.3.6 Changes (based on funnypilot-3.3.5)

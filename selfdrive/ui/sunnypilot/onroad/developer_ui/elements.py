@@ -274,37 +274,87 @@ class LatAccelFactorElement:
 
 
 def _read_lat_interp():
-  """Returns the realized control-frames-per-model-frame written by controlsd to
-  /dev/shm/lat_interp (~5 healthy, lower = degraded, 0 = paused), or 0."""
+  """Reads controlsd's /dev/shm/lat_interp heartbeat. v3.3.8 format is
+  "n,authority": n = realized control-frames-per-model-frame, authority = min
+  EPS-governor bound since the last model frame (1.0 = the hardware
+  driver-torque clamp never engaged). Returns (n, authority)."""
   try:
     with open('/dev/shm/lat_interp') as f:
-      return int(f.read().strip())
+      parts = f.read().strip().split(',')
+      n = int(parts[0])
+      auth = float(parts[1]) if len(parts) > 1 else 1.0
+      return n, auth
   except Exception:
-    return 0
+    return 0, 1.0
 
 
-class LatInterpolElement:
-  # FunnyPilot v3.2.2: honest interpolation-health indicator. controlsd now writes
-  # the REALIZED control-frames-per-model-frame (≈5 at a healthy 100:20 Hz), not a
-  # constant "5" heartbeat — so if the interpolation loses sub-frame headroom
-  # (thermal/load) the number drops and the color warns, instead of always reading
-  # green "5" while the steering quietly degrades. Green ≥4, orange 2–3, red 1,
-  # white when paused.
+class _RollingExtreme:
+  """Peak-hold over a short window so 100 Hz/20 Hz transients survive long
+  enough to be read at a glance (same idea as the old v3.0.7 dCRV hold)."""
+
+  def __init__(self, window_s: float, track_min: bool):
+    self.window_s = window_s
+    self.track_min = track_min
+    self._samples: list[tuple[float, float]] = []
+
+  def update(self, value: float) -> float:
+    now = time.monotonic()
+    self._samples.append((now, value))
+    self._samples = [(t, v) for t, v in self._samples if now - t <= self.window_s]
+    vals = [v for _, v in self._samples]
+    return min(vals) if self.track_min else max(vals)
+
+
+class EpsLimitElement:
+  # FunnyPilot v3.3.8: replaces INTERP (which had become a static "5"). Shows
+  # the EPS torque governor's authority bound — the fraction of full steering
+  # torque the hardware driver-torque clamp is currently willing to pass
+  # (eps_limit.py). 100% green = clamp not engaged; anything less means the
+  # carcontroller/panda limit is LIVE and stripping torque: the prime suspect
+  # for the turn-in grab/loosen oscillation. 1 s min-hold so brief dips are
+  # readable. Glance rule: behaving nicely => "100"; during an event, note
+  # what this shows.
   def __init__(self):
-    self.unit = ""
+    self.unit = "%"
+    self._hold = _RollingExtreme(1.0, track_min=True)
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
-    n = _read_lat_interp()
+    _, auth = _read_lat_interp()
+    held = self._hold.update(auth)
     if not lat_active:
-      color = rl.WHITE
-    elif n >= 4:
-      color = rl.Color(0, 255, 0, 255)    # healthy
-    elif n >= 2:
-      color = rl.Color(255, 165, 0, 255)  # degrading
+      return UiElement("-", "EPS", self.unit, rl.WHITE)
+    if held >= 0.99:
+      color = rl.Color(0, 255, 0, 255)    # full authority
+    elif held >= 0.60:
+      color = rl.Color(255, 165, 0, 255)  # clamp engaged, moderate
     else:
-      color = rl.Color(255, 0, 0, 255)    # stalled / no headroom
-    return UiElement(str(n), "INTERP", self.unit, color)
+      color = rl.Color(255, 0, 0, 255)    # deep clamp — the oscillation regime
+    return UiElement(f"{held * 100:.0f}", "EPS", self.unit, color)
+
+
+class DriverTorqueElement:
+  # FunnyPilot v3.3.8: raw torsion-bar reading (CS.steeringTorque), 1 s
+  # max-hold. This is the sensor that drives the hardware driver-torque clamp:
+  # green < 50 (below the clamp threshold — hardware untouched), orange
+  # 50-149 (CLAMP BAND: authority is being stripped, yet steeringPressed
+  # can't see it), red >= 150 (steeringPressed band). Hands off, a green
+  # value during an oscillation event FALSIFIES the clamp hypothesis; orange+
+  # confirms the band was reachable. Pairs with triage "dtx".
+  def __init__(self):
+    self.unit = ""
+    self._hold = _RollingExtreme(1.0, track_min=False)
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    tq = abs(sm['carState'].steeringTorque)
+    held = self._hold.update(tq)
+    if held < 50:
+      color = rl.Color(0, 255, 0, 255)
+    elif held < 150:
+      color = rl.Color(255, 165, 0, 255)
+    else:
+      color = rl.Color(255, 0, 0, 255)
+    return UiElement(f"{held:.0f}", "TBAR", self.unit, color)
 
 
 class LagdElement:

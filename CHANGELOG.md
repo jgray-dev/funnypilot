@@ -46,6 +46,22 @@ DEC-compatible mode. (3.3.7 skipped; numbered per request.)
   blended mode; the SLA gas gate, AccelJerkShaper, LeadGrace, and the
   fork 70% accel clip apply to the output in every mode. ACC-mode MPC
   behavior is byte-identical to 3.3.6.
+* feat(ui): SCC-V/SCC-M badges 8% larger, and they now show the
+  map-vs-vision arbitration: when BOTH controllers are producing a
+  speed cap, the one the governor actually followed tints toward vivid
+  blue and wears a white ring, the out-voted one fades toward slate —
+  with the tint strength scaled by how much the two disagree (agreeing
+  controllers keep the normal disabled/armed/gas-gate/braking colors).
+* feat(ui): dev-UI INTERP readout retired (it was a static "5" — the
+  spline interpolation is knot-exact by construction) and replaced by
+  the two values that discriminate the turn-in oscillation: "EPS %"
+  (torque authority the hardware driver-torque clamp is passing, 1 s
+  min-hold; 100 green / <100 orange / <60 red) and "TBAR" (raw
+  torsion-bar reading, 1 s max-hold; green <50 = below clamp
+  threshold, orange 50-149 = clamp band that steeringPressed can't
+  see, red >=150). Glance rule: note what these show during an event
+  vs. the all-green normal. controlsd's /dev/shm/lat_interp heartbeat
+  now carries "n,authority".
 * chore: FUNNYPILOT_VERSION -> 3.3.8; nav_webserver EXPECTED_VERSION ->
   "3.3.8", new markers (EpsTorqueGovernor, MPC blended restore),
   eps_limit.py added to the feel-file hashes. test_eps_limit.py NEW
