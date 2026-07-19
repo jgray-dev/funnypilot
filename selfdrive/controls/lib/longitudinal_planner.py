@@ -28,7 +28,7 @@ import numpy as np
 
 import cereal.messaging as messaging
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
-from cereal import log
+from cereal import log, custom
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
@@ -36,8 +36,9 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import CRUISE_MIN_ACCEL, STOP_DISTANCE
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
-from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace
+from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace, lead_urgency
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -59,6 +60,29 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 HIDDEN_CRUISE_OFFSET = 0.93
 
 # Up-jerk (throttle application) by personality, m/s^3
+# FunnyPilot v3.3.7: cruise-envelope deceleration authority by context. The
+# MPC's fake cruise obstacle assumes CRUISE_MIN_ACCEL (-1.2) — enough for set
+# speed changes, too weak when a governed cap needs real braking. Verified
+# tight corners (SCC-M and SCC-V agreeing) get -2.0; a single curve governor
+# or an e2e model stop gets -1.6. These are BOUNDS on the planning envelope,
+# not commands — the MPC still plans the smoothest trajectory that meets the
+# cap, so ordinary decels are unchanged.
+CRUISE_MIN_ACCEL_CURVE = -1.6
+CRUISE_MIN_ACCEL_CURVE_VERIFIED = -2.0
+CRUISE_MIN_ACCEL_E2E_STOP = -1.6
+
+# FunnyPilot v3.3.7: e2e stop assist. In e2e/blended mode the model's own
+# velocity plan encodes intended stops (signs/lights), but only its late
+# action.desiredAcceleration was consumed — the car arrived at intersections
+# 10-15 mph hot. Convert the plan into an allowed-now speed cap with a
+# constant-decel budget (same math as the curve governors):
+#   v_cap = min_i(v_plan_i + E2E_STOP_DECEL * t_i)
+# A plan that stays at speed gives no constraint; a planned stop caps the
+# cruise target early, so the MPC bleeds speed BEFORE the model's action
+# decel arrives, which then only has to finish the job.
+E2E_STOP_DECEL = 1.2  # m/s^2 budget mapping the model's future speeds to allowed-now
+E2E_STOP_MIN_V = 2.0  # m/s — below this leave creep/stopping to the action path
+
 JERK_UP_AGGRESSIVE = 2.5
 JERK_UP_STANDARD = 1.8
 JERK_UP_RELAXED = 1.4
@@ -172,7 +196,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
-    _, _, _, _, throttle_prob = self.parse_model(sm['modelV2'])
+    _, v_plan_model, _, _, throttle_prob = self.parse_model(sm['modelV2'])
     # Don't clip at low speeds since throttle_prob doesn't account for creep
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
@@ -209,14 +233,40 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
       v_cruise *= HIDDEN_CRUISE_OFFSET
 
+    # FunnyPilot v3.3.7: braking authority for the governed cap, by context.
+    # NOTE: self.source (LongitudinalPlannerSP) is the CUSTOM plan-source enum,
+    # not the stock log one the MPC uses.
+    _sp_source = custom.LongitudinalPlanSP.LongitudinalPlanSource
+    cruise_min_accel = CRUISE_MIN_ACCEL
+    if self.source in (_sp_source.sccMap, _sp_source.sccVision):
+      both_curves = self._scc_map_v2.is_active and self._scc_vision_v2.is_active
+      cruise_min_accel = CRUISE_MIN_ACCEL_CURVE_VERIFIED if both_curves else CRUISE_MIN_ACCEL_CURVE
+
+    # FunnyPilot v3.3.7: e2e stop assist — the model's own velocity plan as a
+    # speed cap (see constants above). Only in e2e/blended mode, where the
+    # plan genuinely encodes stops; the min with v_cruise means it can only
+    # slow us, and the action-decel min-pick below is unchanged.
+    if self.is_e2e(sm) and v_ego > E2E_STOP_MIN_V and len(v_plan_model) == len(T_IDXS_MPC):
+      v_plan_cap = float(np.min(np.maximum(v_plan_model, 0.0) + E2E_STOP_DECEL * np.asarray(T_IDXS_MPC)))
+      if np.isfinite(v_plan_cap) and v_plan_cap < v_cruise:
+        v_cruise = max(v_plan_cap, 0.0)
+        cruise_min_accel = min(cruise_min_accel, CRUISE_MIN_ACCEL_E2E_STOP)
+
     # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
     lead_one = sm['radarState'].leadOne
     v_cruise = self.lead_grace.update(bool(lead_one.status), following, lead_one.vLead, v_ego, v_cruise)
 
+    # FunnyPilot v3.3.7: lead-approach urgency (see long_shaping.lead_urgency).
+    # 0 in all ordinary following/decels; rises only when the deceleration
+    # REQUIRED to stop behind the lead approaches the planning envelope's own
+    # COMFORT_BRAKE — the "closing fast on a stopped car" case that previously
+    # under-braked into a manual takeover.
+    urgency = lead_urgency(lead_one.dRel, v_ego, lead_one.vLead, STOP_DISTANCE) if lead_one.status else 0.0
+
     personality = sm['selfdriveState'].personality
-    self.mpc.set_weights(prev_accel_constraint, personality=personality)
+    self.mpc.set_weights(prev_accel_constraint, personality=personality, urgency=urgency)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, personality=personality)
+    self.mpc.update(sm['radarState'], v_cruise, personality=personality, cruise_min_accel=cruise_min_accel)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

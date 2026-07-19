@@ -66,6 +66,11 @@ class SCCVisionV2:
     self.is_active = False
     self.gas_gating_active = False
     self.raw_v_target = CAP_INACTIVE  # unfiltered, for debug/UI
+    # v3.3.7: max predicted lat accel over the horizon (computed even when no
+    # point exceeds the limit) and the limit used — the "is the road actually
+    # straight" signal consumed by the SCC-M vision veto and published to UI.
+    self.max_pred_lat_accel = 0.0
+    self.a_lat_limit_used = 0.0
     self._cap = CurveSpeedCap(_DT)
 
   def _read_enabled_param(self) -> bool:
@@ -78,6 +83,8 @@ class SCCVisionV2:
 
   def _raw_cap_from_model(self, model_msg, a_lat_max: float) -> float:
     """Minimum allowed-now speed over the plan horizon; CAP_INACTIVE if unconstrained."""
+    # fail toward "not straight": an unreadable plan must never enable the veto
+    self.max_pred_lat_accel = float("inf")
     try:
       rates = np.abs(np.asarray(model_msg.orientationRate.z, dtype=float))
       vels = np.asarray(model_msg.velocity.x, dtype=float)
@@ -93,6 +100,7 @@ class SCCVisionV2:
     vels = np.maximum(vels, 1.0)
     mask = (t_idxs <= _MAX_HORIZON_T) & np.isfinite(rates) & np.isfinite(vels)
     lat_accels = rates * vels
+    self.max_pred_lat_accel = float(np.max(lat_accels[mask])) if np.any(mask) else 0.0
     over = mask & (lat_accels > a_lat_max)
     if not np.any(over):
       return CAP_INACTIVE
@@ -113,6 +121,7 @@ class SCCVisionV2:
       return
 
     a_lat_max = lat_accel_limit(fric)
+    self.a_lat_limit_used = a_lat_max
     self.raw_v_target = self._raw_cap_from_model(sm["modelV2"], a_lat_max)
 
     cap = self._cap.update(self.raw_v_target, v_ego, v_cruise)
@@ -136,4 +145,6 @@ class SCCVisionV2:
     self.is_active = False
     self.gas_gating_active = False
     self.raw_v_target = CAP_INACTIVE
+    self.max_pred_lat_accel = 0.0
+    self.a_lat_limit_used = 0.0
     self._cap.reset()

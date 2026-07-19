@@ -287,12 +287,22 @@ class LongitudinalMpc:
     for i in range(N):
       self.solver.cost_set(i, 'Zl', Zl)
 
-  def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
-    jerk_factor = get_jerk_factor(personality)
+  def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard, urgency=0.0):
+    # FunnyPilot v3.3.7: lead-approach urgency (see long_shaping.lead_urgency).
+    # As the deceleration REQUIRED to stop behind the lead approaches the
+    # planning envelope's COMFORT_BRAKE, distance error must dominate
+    # smoothness: obstacle cost rises up to 3x and the jerk/accel-change
+    # costs shrink to 40%, so the MPC tracks its own braking envelope
+    # instead of smearing the onset. urgency = 0 (every normal decel and
+    # all following) is bit-identical to the previous weights.
+    urgency = float(np.clip(urgency, 0.0, 1.0))
+    jerk_factor = get_jerk_factor(personality) * (1.0 - 0.6 * urgency)
+    obstacle_cost = X_EGO_OBSTACLE_COST * (1.0 + 2.0 * urgency)
     a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
-    cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
+    cost_weights = [obstacle_cost, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
     constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
     self.set_cost_weights(cost_weights, constraint_cost_weights)
+    self._urgency = urgency
 
   def set_cur_state(self, v, a):
     v_prev = self.x0[1]
@@ -333,7 +343,8 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard):
+  def update(self, radarstate, v_cruise, personality=log.LongitudinalPersonality.standard,
+             cruise_min_accel=CRUISE_MIN_ACCEL):
     v_ego = self.x0[1]
     # FunnyPilot: Speed-dependent follow distance
     t_follow = get_T_FOLLOW(personality, v_ego=v_ego)
@@ -350,7 +361,11 @@ class LongitudinalMpc:
 
     # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
     # when the leads are no factor.
-    v_lower = v_ego + (T_IDXS * CRUISE_MIN_ACCEL * 1.05)
+    # FunnyPilot v3.3.7: the assumed cruise decel is caller-supplied — the
+    # planner widens it (up to -2.0) when the governed target is a verified
+    # curve (SCC-M + SCC-V agreeing) or an e2e stop, so speed-domain caps get
+    # real braking authority instead of only the -1.2 cruise envelope.
+    v_lower = v_ego + (T_IDXS * min(cruise_min_accel, CRUISE_MIN_ACCEL) * 1.05)
     # TODO does this make sense when max_a is negative?
     v_upper = v_ego + (T_IDXS * CRUISE_MAX_ACCEL * 1.05)
     v_cruise_clipped = np.clip(v_cruise * np.ones(N+1), v_lower, v_upper)
@@ -369,7 +384,10 @@ class LongitudinalMpc:
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)
     self.params[:,4] = t_follow
-    self.params[:,5] = LEAD_DANGER_FACTOR
+    # FunnyPilot v3.3.7: urgency (set by set_weights this frame) also tightens
+    # the danger-zone constraint — at full urgency the hard constraint engages
+    # at 90% of desired distance instead of 75%, backing up the cost scaling.
+    self.params[:,5] = LEAD_DANGER_FACTOR + 0.15 * getattr(self, '_urgency', 0.0)
 
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and

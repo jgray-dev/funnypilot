@@ -22,6 +22,8 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.vision_veto import SccmVisionVeto
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -45,6 +47,7 @@ class LongitudinalPlannerSP:
     self._scc_vision_v2 = SCCVisionV2()
     self._scc_map_v2 = SCCMapV2()
     self._speed_governor = SpeedGovernor()
+    self._sccm_veto = SccmVisionVeto()  # v3.3.7: vision veto of bogus map slowdowns
     self._fric = 0.8
 
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
@@ -86,6 +89,29 @@ class LongitudinalPlannerSP:
     v_scc_map = self._scc_map_v2.output_v_target
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
+    # FunnyPilot v3.3.7: vision veto of SCC-M (see long_v2/vision_veto.py).
+    # If the map wants to slow for a curve that is inside the model's vision
+    # horizon and the model's plan says the road is straight (and SCC-V is
+    # itself unconstrained), the map data is wrong — ignore SCC-M's cap.
+    vetoed = self._sccm_veto.update(
+      sccm_constraining=self._scc_map_v2.is_active and v_scc_map < v_cruise - 0.5,
+      curve_distance_m=self._scc_map_v2.governing_distance_m,
+      v_ego=v_ego,
+      vision_ok=self._scc_vision_v2.is_enabled,
+      sccv_active=self._scc_vision_v2.is_active,
+      max_pred_lat_accel=self._scc_vision_v2.max_pred_lat_accel,
+      a_lat_limit=self._scc_vision_v2.a_lat_limit_used,
+    )
+    if vetoed:
+      v_scc_map = CAP_INACTIVE
+
+    # FunnyPilot v3.3.7: while SLA ramps toward a HIGHER upcoming zone, the
+    # user's set speed equals the CURRENT zone target and would min-pick the
+    # ramp away — raise the cruise candidate to the ramped target (bounded by
+    # the next zone's ratio-adjusted target; the boundary snap lands there).
+    sla_raise = self.sla.pre_zone_raise
+    v_cruise_candidate = max(v_cruise, sla_raise) if sla_raise > 0.0 else v_cruise
+
     # Speed limit info for road cap logic
     road_type = ""
     speed_limit_posted = self.resolver.speed_limit if self.resolver.speed_limit_valid else 0.0
@@ -95,7 +121,7 @@ class LongitudinalPlannerSP:
       pass
 
     v_governed = self._speed_governor.update(
-      v_cruise, v_scc_map, v_scc_vision, v_sla,
+      v_cruise_candidate, v_scc_map, v_scc_vision, v_sla,
       road_type, speed_limit_posted, self._fric
     )
 
@@ -147,7 +173,9 @@ class LongitudinalPlannerSP:
     sccVision.vTarget = float(self._scc_vision_v2.output_v_target)
     sccVision.aTarget = float(self._scc_vision_v2.output_a_target)
     sccVision.currentLateralAccel = 0.0
-    sccVision.maxPredictedLateralAccel = 0.0
+    # v3.3.7: real value (was a placeholder) — the veto's straightness signal
+    _mpla = self._scc_vision_v2.max_pred_lat_accel
+    sccVision.maxPredictedLateralAccel = float(_mpla) if _mpla != float("inf") else 0.0
     sccVision.enabled = self._scc_vision_v2.is_enabled
     sccVision.active = self._scc_vision_v2.is_active
     sccVision.gasGating = bool(self._scc_vision_v2.gas_gating_active)

@@ -3,6 +3,72 @@ FunnyPilot v3.3.7 (2026-07-19)
 Lateral: innovation absorb — the model's plan-consistent motion executes
 exactly on the validated schedule; only its plan REVISIONS (the "complete
 180 between model updates") are spread across the lagd delay window.
+Longitudinal: lead-approach urgency, SCC-M pre-turn slowdown + vision veto,
+SLA pre-zone speed ramps (both directions), e2e stop assist.
+
+* feat(long/lead): lead-approach urgency. The MPC's soft obstacle cost
+  (3.0 vs jerk/accel-change 5.0/200.0) smears braking onset when closing
+  fast on a slow/stopped lead — the "approaching a stopped car waiting
+  to turn" takeover. `lead_urgency` (long_shaping.py) computes the
+  physics of the moment: the constant decel required to stop
+  STOP_DISTANCE short of the lead's stopped position. Below 1.1 m/s^2
+  required it is 0 — every ordinary decel and all normal following is
+  bit-identical to before, no brake-stomping. It saturates at 2.2 m/s^2
+  (the envelope's own COMFORT_BRAKE), where the MPC's obstacle cost
+  rises up to 3x, jerk/accel-change costs shrink to 40%, and the
+  danger-zone constraint tightens from 75% to 90% of desired distance
+  — the planner tracks its own braking envelope instead of smearing it.
+* feat(long/scc-m): slowdown now completes BEFORE the turn. Approach
+  envelope retuned: assumed decel 1.0 -> 0.85 m/s^2 (ramp starts
+  farther out, calmer slope) and arrival lead 2.0 -> 3.5 s (at the
+  curve speed well before turn-in, so mid-corner the car can already
+  be back on the gas instead of still shedding 20%). Real braking
+  authority behind the cap: the MPC's assumed cruise decel is now
+  context-aware — -2.0 m/s^2 when SCC-M and SCC-V agree the corner is
+  real ("verified"), -1.6 when a single curve governor constrains,
+  -1.2 (unchanged) everywhere else. Bounds, not commands.
+* feat(long/scc-m): vision veto (long_v2/vision_veto.py). Locations
+  with wrong map data slowed the car on dead-straight roads. If SCC-M's
+  governing curve point is INSIDE the model's vision horizon (< 4.5 s
+  ahead), the model's plan predicts near-zero lateral accel (< 40% of
+  the SCC-V comfort limit) for ~1 s sustained, and SCC-V itself is
+  unconstrained, the map cap is ignored — released instantly the moment
+  the model sees real curvature (60%). Fails toward NOT vetoing on any
+  doubt (broken plan reads as "not straight"); beyond the vision
+  horizon the map always wins, since seeing curves vision can't is the
+  point of SCC-M. sccVision.maxPredictedLateralAccel now publishes the
+  real straightness signal (was a placeholder).
+* feat(long/sla): pre-zone speed ramps, both directions (pre_zone.py),
+  both including the SLA dynamic offset ratio in the target. LOWER zone
+  ahead: on top of the v3.3.3 coast gas gate (which engages even
+  earlier), SLA's governed target now ramps down a 0.8 m/s^2
+  constant-decel envelope so the boundary is crossed already AT the new
+  zone's ratio-adjusted target (arrive 1.5 s early) — actual braking
+  through the governor, not just coasting and then a boundary
+  correction. HIGHER zone ahead: the target ramps UP at 0.5 m/s^2
+  starting exactly far enough out to land on the new target at the
+  boundary — no more constant-speed-then-"all hell breaks loose"; the
+  transition accel is 0.5 m/s^2 by construction. The planner raises
+  the governor's cruise candidate during the up-ramp (the set speed
+  equals the current zone target and would otherwise min-pick the ramp
+  away); the boundary set-speed snap lands on the same value, so the
+  handoff is step-free in both directions.
+* feat(long/e2e): stop-sign / traffic-light assist without retraining.
+  In e2e/blended mode only the model's LATE action.desiredAcceleration
+  was consumed, so the car carried 10-15 mph into intersections. The
+  model's own velocity plan encodes intended stops seconds earlier —
+  it is now converted to an allowed-now cap (min over the plan of
+  v_i + 1.2 m/s^2 * t_i, the curve-governor math) and min-picked into
+  the cruise target, with the cruise envelope widened to -1.6 m/s^2
+  while it governs. The MPC bleeds speed early; the model's action
+  decel then only finishes the stop. Plans that hold speed produce no
+  constraint; inactive below 2 m/s (creep/standstill untouched); ACC
+  (non-e2e) mode completely unchanged.
+* chore(long): test_long_v337.py — 16 import-light cases (urgency zero
+  in ordinary following / full on the takeover scenario / midpoint
+  ramp, SCC-M envelope earliness with injected map readers, veto
+  arm/release/fail-safe matrix, pre-zone ramps both directions). New
+  code markers lead_urgency / SccmVisionVeto / pre_zone_decel_target.
 
 * feat(lat): every new 20 Hz model action is split against what the
   model's OWN previously-published plan predicted for that instant (the

@@ -54,6 +54,34 @@ class AccelJerkShaper:
     return self.a
 
 
+# FunnyPilot v3.3.7: lead-approach urgency. The MPC's soft obstacle cost
+# (X_EGO_OBSTACLE_COST 3.0 vs jerk/accel-change costs 5.0/200.0) smears braking
+# onset when closing fast on a slow/stopped lead — comfortable in normal
+# following, but on a stopped car it under-brakes until the danger constraint
+# takes over ("had to take control"). Urgency is the physics of the situation:
+# the constant deceleration required to stop STOP_DISTANCE short of the lead's
+# stopped position. Below URGENCY_MIN_DECEL it is 0 (pure comfort planning —
+# no change to everyday decels); it saturates at URGENCY_MAX_DECEL (the
+# planning envelope's own COMFORT_BRAKE), where distance error must dominate
+# smoothness. The MPC scales its cost weights by this factor — the braking
+# still comes from the same constraint math, just tracked instead of smeared.
+URGENCY_MIN_DECEL = 1.1   # m/s^2 — required decel below this: no urgency
+URGENCY_MAX_DECEL = 2.2   # m/s^2 — required decel at/above this: full urgency
+URGENCY_MIN_GAP = 1.0     # m — floor on the distance term (no div-by-zero)
+
+
+def lead_urgency(d_rel: float, v_ego: float, v_lead: float, stop_distance: float) -> float:
+  """0..1 urgency of the current lead approach (0 when opening or far)."""
+  if not (np.isfinite(d_rel) and np.isfinite(v_ego) and np.isfinite(v_lead)):
+    return 0.0
+  closing = v_ego ** 2 - max(v_lead, 0.0) ** 2
+  if closing <= 0.0:
+    return 0.0
+  gap = max(d_rel - stop_distance, URGENCY_MIN_GAP)
+  req_decel = closing / (2.0 * gap)
+  return float(np.clip((req_decel - URGENCY_MIN_DECEL) / (URGENCY_MAX_DECEL - URGENCY_MIN_DECEL), 0.0, 1.0))
+
+
 # LeadGrace timing. ARM: how long a lead must be tracked (while it is the MPC's
 # active constraint) before its loss triggers a grace hold — a lead seen for
 # only a few frames is likely noise and gets no authority. HOLD: cap cruise at

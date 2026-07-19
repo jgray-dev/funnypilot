@@ -63,6 +63,7 @@ except Exception:
   PARAMS_UPDATE_PERIOD = 5.0
 
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.pre_zone import pre_zone_decel_target, pre_zone_accel_target
 
 ButtonType = car.CarState.ButtonEvent.Type
 EventNameSP = custom.OnroadEventSP.EventName
@@ -349,9 +350,36 @@ class SpeedLimitAssist:
 
   # ---------- outputs ----------
 
+  @property
+  def pre_zone_raise(self) -> float:
+    """v3.3.7: ramped target while approaching a HIGHER zone (0 when n/a).
+
+    The planner must raise the governor's cruise candidate to this value —
+    when SLA is active the set speed equals the current zone target, so the
+    ramp would otherwise be min-picked away. Both targets include the ratio.
+    """
+    nt = self.next_zone_target
+    ct = self.effective_speed_limit_target
+    if self.is_active and ct > 0 and nt > ct and self._next_distance > 0:
+      return min(pre_zone_accel_target(ct, nt, self._next_distance), nt)
+    return 0.0
+
   def get_v_target_from_control(self) -> float:
     if self.is_active and self._base_limit > 0:
-      return self.effective_speed_limit_target
+      target = self.effective_speed_limit_target
+      # v3.3.7 pre-zone ramps (see pre_zone.py). Lower zone ahead: ramp DOWN
+      # along a 0.8 m/s^2 envelope so the boundary is crossed already at the
+      # new (ratio-adjusted) target — real braking authority via the governor,
+      # on top of the earlier v3.3.3 coast gas gate. Higher zone ahead: ramp
+      # UP at 0.5 m/s^2 so the boundary is crossed at the new target with no
+      # step — the post-boundary surge is gone by construction.
+      nt = self.next_zone_target
+      if nt > 0 and self._next_distance > 0:
+        if nt < target:
+          target = min(target, pre_zone_decel_target(nt, self._next_distance))
+        else:
+          target = max(target, self.pre_zone_raise)
+      return target
     return V_CRUISE_UNSET
 
   def get_a_target_from_control(self) -> float:

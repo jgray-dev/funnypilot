@@ -40,8 +40,13 @@ except Exception:
 _DT = 0.05
 _V_MIN_ACTIVE = 5.0
 _MIN_V_TARGET = 3.0
-_A_DECEL_APPROACH = 1.0   # m/s^2 comfortable approach decel budget
-_ARRIVAL_LEAD_T = 2.0     # s — reach curve speed this early
+# FunnyPilot v3.3.7: earlier, calmer approach. The old 1.0/2.0 envelope put
+# most of the slowdown inside the turn entry ("slowing 20% mid-turn"); a
+# gentler assumed decel plus a longer arrival lead moves the whole ramp
+# BEFORE the corner, so by turn-in the speed is already the curve speed and
+# the exit can be an acceleration.
+_A_DECEL_APPROACH = 0.85  # m/s^2 comfortable approach decel budget
+_ARRIVAL_LEAD_T = 3.5     # s — reach curve speed this early
 _MAX_LOOKAHEAD_M = 400.0  # beyond this a curve cannot meaningfully constrain us
 _FRIC_NOMINAL = 0.8
 _FRIC_SCALE_MIN = 0.7
@@ -106,6 +111,7 @@ class SCCMapV2:
     self.gas_gating_active = False
     self.corner_radius_m = 0.0
     self.raw_v_target = CAP_INACTIVE
+    self.governing_distance_m = 0.0  # v3.3.7: distance to the governing curve point (for the vision veto)
     self._cap = CurveSpeedCap(_DT)
 
   def _read_enabled_param(self) -> bool:
@@ -116,19 +122,19 @@ class SCCMapV2:
     except Exception:
       return True
 
-  def _raw_cap_from_map(self, v_cruise: float, trim: float) -> tuple[float, float]:
-    """Returns (raw cap, curve speed of the governing point)."""
+  def _raw_cap_from_map(self, v_cruise: float, trim: float) -> tuple[float, float, float]:
+    """Returns (raw cap, curve speed of the governing point, distance to it)."""
     pos = self._read_position()
     points = self._read_velocities()
     if pos is None or not points:
-      return CAP_INACTIVE, 0.0
+      return CAP_INACTIVE, 0.0, 0.0
 
     try:
       lats = np.array([p["latitude"] for p in points], dtype=float)
       lons = np.array([p["longitude"] for p in points], dtype=float)
       tvs = np.array([p["velocity"] for p in points], dtype=float)
     except (KeyError, TypeError, ValueError):
-      return CAP_INACTIVE, 0.0
+      return CAP_INACTIVE, 0.0, 0.0
 
     dists = _haversine_m(pos[0], pos[1], lats, lons)
 
@@ -142,13 +148,13 @@ class SCCMapV2:
     # below cruise — otherwise trim < 1 would shave straight-road points too
     consider = (tv_fwd > 0) & (tv_fwd < v_cruise - 0.5) & (d_fwd <= _MAX_LOOKAHEAD_M) & np.isfinite(v_curve)
     if not np.any(consider):
-      return CAP_INACTIVE, 0.0
+      return CAP_INACTIVE, 0.0, 0.0
 
     d_eff = np.maximum(0.0, d_fwd[consider] - v_curve[consider] * _ARRIVAL_LEAD_T)
     v_allowed = np.sqrt(v_curve[consider] ** 2 + 2.0 * _A_DECEL_APPROACH * d_eff)
 
     best = int(np.argmin(v_allowed))
-    return float(v_allowed[best]), float(v_curve[consider][best])
+    return float(v_allowed[best]), float(v_curve[consider][best]), float(d_fwd[consider][best])
 
   def update(self, sm, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise: float, fric: float) -> None:
     self.frame += 1
@@ -161,7 +167,7 @@ class SCCMapV2:
       return
 
     trim = speed_trim(fric)
-    self.raw_v_target, v_curve = self._raw_cap_from_map(v_cruise, trim)
+    self.raw_v_target, v_curve, self.governing_distance_m = self._raw_cap_from_map(v_cruise, trim)
 
     cap = self._cap.update(self.raw_v_target, v_ego, v_cruise)
     self.is_active = self._cap.active
@@ -189,4 +195,5 @@ class SCCMapV2:
     self.gas_gating_active = False
     self.corner_radius_m = 0.0
     self.raw_v_target = CAP_INACTIVE
+    self.governing_distance_m = 0.0
     self._cap.reset()

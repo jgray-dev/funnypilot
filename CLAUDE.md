@@ -121,6 +121,50 @@ spiral); the model also feeds back its own raw action as
   code markers `INNOV_GATE_ABS` (lat_smooth) and `ABSORB_LATACC_MAX`
   (controlsd).
 
+Longitudinal (same branch, second pass): four changes.
+
+1. LEAD-APPROACH URGENCY. `selfdrive/controls/lib/long_shaping.py` —
+   `lead_urgency(d_rel, v_ego, v_lead, stop_distance)`: 0..1 from the
+   decel required to stop STOP_DISTANCE behind the lead (0 below
+   1.1 m/s^2 required — everyday decels bit-identical; 1 at 2.2 =
+   COMFORT_BRAKE). `long_mpc.py` — `set_weights(..., urgency=)` scales
+   obstacle cost x(1+2u), jerk/accel-change costs x(1-0.6u); stores
+   `_urgency`, and `update()` tightens LEAD_DANGER_FACTOR 0.75 ->
+   +0.15u. Base planner computes urgency from radarState leadOne each
+   frame. Fixes under-braking onto stopped leads without touching
+   normal following.
+2. SCC-M EARLIER + AUTHORITY + VISION VETO.
+   `long_v2/scc_map_v2.py` — `_A_DECEL_APPROACH` 1.0 -> 0.85,
+   `_ARRIVAL_LEAD_T` 2.0 -> 3.5 (slowdown completes before turn-in);
+   exposes `governing_distance_m`. `long_v2/scc_vision_v2.py` — exposes
+   `max_pred_lat_accel` (inf on unreadable plan = fail-safe) +
+   `a_lat_limit_used`. New `long_v2/vision_veto.py` — `SccmVisionVeto`:
+   ignores SCC-M's cap when its curve is < 4.5 s ahead (inside vision),
+   the model plan is straight (< 40% of the lat-accel limit, 20 frames
+   sustained) and SCC-V is unconstrained; releases at 60%. Wired in
+   `sunnypilot/.../longitudinal_planner.py` before the governor; also
+   publishes real `maxPredictedLateralAccel`. Braking authority: base
+   planner passes `cruise_min_accel` to `mpc.update()` — -2.0 when
+   SCC-M+SCC-V both active ("verified"), -1.6 single curve source,
+   else -1.2 (the MPC v_lower envelope bound).
+3. SLA PRE-ZONE RAMPS. New `speed_limit/pre_zone.py` (pure math):
+   `pre_zone_decel_target` (0.8 m/s^2 envelope, arrive 1.5 s early)
+   and `pre_zone_accel_target` (0.5 m/s^2 ramp landing exactly at the
+   boundary). `speed_limit_assist.py` — `get_v_target_from_control`
+   min/max-picks the ramps around the ratio-adjusted targets; new
+   `pre_zone_raise` property. Sunnypilot planner raises the governor's
+   cruise candidate during an up-ramp (set speed == current zone target
+   would otherwise min-pick the ramp away). The v3.3.3 coast gas gate
+   is unchanged and still engages earlier than the decel ramp.
+4. E2E STOP ASSIST. Base planner: in `is_e2e` mode the model velocity
+   plan (already parsed) becomes a speed cap `min(v_i + 1.2*t_i)`
+   min-picked into v_cruise before the MPC (guarded: only above 2 m/s,
+   only when it actually lowers the target), with cruise_min_accel
+   widened to -1.6 while governing. Model's action.desiredAcceleration
+   min-pick unchanged. ACC mode untouched.
+- `selfdrive/controls/lib/tests/test_long_v337.py` — 16 import-light
+  cases across all four changes.
+
 ### v3.3.6 Changes (based on funnypilot-3.3.5)
 
 Lateral: the "spend the delay window on smoothing" feel returns WITHOUT
