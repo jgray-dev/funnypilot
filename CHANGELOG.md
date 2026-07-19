@@ -8,12 +8,18 @@ DEC-compatible mode. (3.3.7 skipped; numbered per request.)
   latcontrol_torque). ROOT CAUSE of the grab/loosen cycle: the
   carcontroller AND panda clamp commanded torque by the driver-torque
   limit — for the K5, allowed = 384 + (50 − |sensor|)·2, slewed +3/−7
-  per 10 ms — and the torsion-bar sensor reads wheel-INERTIA reaction
-  during hard self-steer bites (v3.2.8 measured 150+ ⇒ authority
-  halves from a threshold of just 50). Bite → sensor spike → hardware
-  sheds torque at −7/frame → wheel decelerates → sensor relaxes →
-  controller (blind to the clamp) re-bites at +3/frame — re-excited by
-  every model knot on turn-in. The governor mirrors the exact hardware
+  per 10 ms — and the torsion-bar sensor can read wheel-INERTIA
+  reaction during hard self-steer bites, not just the driver's hands.
+  HYPOTHESIS, not verified: the v3.2.8-era "sensor hits 150+" figure
+  was inferred, never measured, and that era's fix didn't cure the
+  oscillation. What is certain: the clamp exists, engages from a
+  sensor reading of just 50, and is invisible to the tuning layer. If
+  it engages: bite → sensor spike → hardware sheds at −7/frame →
+  sensor relaxes → controller (blind to the clamp) re-bites at
+  +3/frame — re-excited by every model knot on turn-in. New triage
+  fields make one drive decisive: "dtx" (max |raw sensor|/s), "eps"
+  (min governor authority/s), "tqd" (max requested-vs-applied
+  divergence/s) — see CLAUDE.md for the interpretation matrix. The governor mirrors the exact hardware
   bounds + slew inside the controller so the request is always
   realizable, collapses with the bound instantly, but RECOVERS at
   0.35/s — under half the hardware rate — which is the damping that

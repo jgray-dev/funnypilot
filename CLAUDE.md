@@ -83,11 +83,16 @@ real mode, DEC-compatible, with every fork governor working in both modes.
   apply_driver_steer_torque_limits). Bounds collapse instantly (hardware
   clamps this frame regardless) but recover at RECOVERY_RATE = 0.35/s —
   under half the hardware's 0.78/s — the damping that breaks the
-  bite → sensor-spike → shed → re-bite limit cycle (the sensor reads
-  wheel-inertia reaction, 150+ measured in v3.2.8, vs an allowance of
-  50). KEY FACTS: the clamp engages from sensor 50–150 where NOTHING
-  else fires (steeringPressed threshold 150, slb only when panda blocks)
-  — before v3.3.8 the integrator wound against an invisible limit.
+  bite → sensor-spike → shed → re-bite limit cycle. HYPOTHESIS STATUS
+  (user-corrected 2026-07-19): the "wheel-inertia trips the sensor"
+  story is UNVERIFIED — the v3.2.8-era 150+ figure was inferred from
+  steeringPressed latching, never read from logs, and the 3.2.8 fix
+  built on it did NOT cure the oscillation. Do not cite it as measured.
+  Code facts that hold regardless: the clamp exists, threshold sensor
+  50, and it engages from 50–150 where NOTHING else fires
+  (steeringPressed threshold 150, slb only when panda blocks) — before
+  v3.3.8 the integrator wound against an invisible limit whenever it
+  did engage.
   `driver_limited` (prev frame) now freezes the PID integrator and ORs
   into the saturation check (_check_saturation dwell keeps transients
   out of the alert). Governor can only reduce torque; panda backstop
@@ -99,14 +104,21 @@ real mode, DEC-compatible, with every fork governor working in both modes.
   CS.steeringTorque and actuators.torque share the actuator frame while
   latcontrol's internal torque is negated). freeze_integrator gains
   `or self._eps_governor.driver_limited`.
-- `selfdrive/controls/lib/triage_recorder.py` — lat records gain "eps"
-  (per-second MIN of governor authority; 1.0 = clamp never engaged).
-  controlsd passes it via getattr chain (angle/PID tuning cars => 1.0).
-  TRIAGE: eps < 1.0 pulses during turn-in events confirm the mechanism
-  on-road; eps pinned 1.0 while the oscillation persists = mechanism
-  falsified, look at EPS-internal derate next (consider an
-  ALT_LIMITS-style sustained-torque cap, deliberately NOT added in
-  3.3.8 — speculative).
+- `selfdrive/controls/lib/triage_recorder.py` — lat records gain three
+  hypothesis discriminators: "eps" (per-second MIN governor authority;
+  1.0 = clamp never engaged), "dtx" (per-second MAX |raw
+  CS.steeringTorque| — the direct measurement the 3.2.8 era never
+  took), "tqd" (per-second MAX |requested − applied| torque via
+  carOutput, one-frame lag). TRIAGE MATRIX for a drive with
+  oscillation events, hands off: (A) dtx > 50 + eps < 1.0 pulses at
+  the events => driver-torque clamp loop CONFIRMED, tune governor
+  recovery from data. (B) dtx < 50, eps pinned 1.0, tqd ≈ 0, but
+  oscillation felt => clamp falsified; suspect EPS-internal derate
+  (rack fades sustained torque invisibly — next step ALT_LIMITS-style
+  sustained cap, deliberately NOT added in 3.3.8) or our own request
+  oscillating (check tqx swing + lat_interp hmin). (C) tqd large
+  without eps dips => panda-side stripping we didn't model. controlsd
+  passes all via getattr chain (angle/PID tuning cars => eps 1.0).
 - `selfdrive/controls/lib/tests/test_eps_limit.py` — NEW (10 cases):
   realizability-vs-real-opendbc-clamp over randomized sequences,
   hardware-exact bound at sensor 150 (= 184/384), recovery strictly

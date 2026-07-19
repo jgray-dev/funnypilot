@@ -62,7 +62,7 @@ class TestEpsTorqueGovernor:
       apply_last = applied
 
   def test_driver_limit_mirror_engages(self):
-    # opposing sensor torque of 150 (the v3.2.8 measured inertia spike) must
+    # opposing sensor torque of 150 (the steeringPressed threshold) must
     # cap authority to the hardware's (384 + (50-150)*2)/384 = 184/384
     g = EpsTorqueGovernor(DT)
     for _ in range(300):

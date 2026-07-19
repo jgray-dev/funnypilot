@@ -205,6 +205,8 @@ class Controls(ControlsExt):
                        steer_limited=self.steer_limited_by_safety,
                        torque=actuators.torque,
                        eps_authority=getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0),
+                       driver_torque=CS.steeringTorque,
+                       torque_out=self.sm['carOutput'].actuatorsOutput.torque,
                        context_fn=lambda: {
                          "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
                          "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),

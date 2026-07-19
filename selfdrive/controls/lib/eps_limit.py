@@ -7,15 +7,21 @@ limit (opendbc/car/lateral.py apply_driver_steer_torque_limits):
     allowed = STEER_MAX + (ALLOWANCE - |opposing sensor torque| * FACTOR) * MULT
     (K5: 384 + (50 - |torque|) * 2, slewed at +3/-7 per 10 ms frame)
 
-The torsion-bar sensor doesn't only read the driver's hands: wheel-inertia
-reaction torque during a hard self-steer bite spikes it too (v3.2.8 measured
-150+, which is allowed = 184 of 384 — HALF authority — from a threshold of
-just 50). The resulting hardware loop is the "grab torque, fail to hold it"
-oscillation on turn-in: bite -> sensor spikes -> clamp sheds torque at
--7/frame -> wheel decelerates -> sensor relaxes -> clamp releases -> the
-controller, still demanding full torque, bites again at +3/frame -> repeat,
-re-excited by every model knot. All of it invisible to the tuning layer,
-because the clamp lives downstream of latcontrol.
+HYPOTHESIS STATUS (be honest with the next reader): the torsion-bar sensor
+doesn't only read the driver's hands — wheel-inertia reaction torque during
+a hard self-steer bite can spike it too. The v3.2.8-era analysis INFERRED
+readings of 150+ from steeringPressed latching; that was NEVER verified
+on-road (the 3.2.8 "fix" built on it did not cure the oscillation — user
+confirmed). What IS certain is the clamp itself: it exists, its threshold
+is a sensor reading of just 50 (at 150 the allowance is 184/384 — half
+authority), and it is invisible to the tuning layer. IF the sensor crosses
+50 during self-steer, the loop is: bite -> sensor spikes -> clamp sheds
+torque at -7/frame -> wheel decelerates -> sensor relaxes -> clamp
+releases -> the controller, still demanding full torque, bites again at
++3/frame -> repeat, re-excited by every model knot. The triage "dtx"
+(max |raw sensor|/s), "eps" (min authority/s) and "tqd" (max
+requested-vs-applied divergence/s) fields exist to CONFIRM OR FALSIFY this
+on-road — read them before iterating on this module.
 
 THE FIX — mirror the hardware limits inside the controller, with damping:
 
