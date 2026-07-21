@@ -195,6 +195,81 @@ real mode, DEC-compatible, with every fork governor working in both modes.
   eps_limit.py added to _FEEL_FILES hashes.
 - `FUNNYPILOT_VERSION` -> 3.3.8. Full import-light suite 127 green.
 
+#### v3.3.8 continued (2026-07-21): SCC-M/V arbitration + bump hypothesis
+
+USER CORRECTION, binding: the EPS torque governor above is NOT confirmed
+as the (sole) cause of the turn-in oscillation — user reports it still
+occurs crossing railroad tracks mid-corner with the dev-UI EPS readout
+pinned at 100%, i.e. the driver-torque clamp was NOT engaged during those
+events. The clamp fix stands (correct whenever the clamp does engage) but
+does not explain this case. User's alternate hypothesis — NOT YET
+VERIFIED, do not act on it beyond instrumentation until it correlates on
+a drive: crossing the tracks unloads the front/steering axle (weight
+transfer), which could reduce grip or reduce the self-aligning torque
+needed for a given angle (so a previously-correct torque overshoots the
+angle), and suspension rebound continues disturbing the front axle for a
+beat afterward — a physics explanation for a REPEATING event rather than
+a single snap. Per this project's repeated history (v3.2.8, v3.2.9e,
+v3.2.12, v3.3.2 — every one shipped a fix on inferred causes and had to
+be revised or reverted after real driving data), the discipline here is
+instrument -> drive -> correlate -> THEN fix, not guess again.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py` — NEW
+  `gate_map_target(map_v_target, vision_is_active)`: returns CAP_INACTIVE
+  unless SCC-Vision is also actively constraining. SCC-M can now only
+  narrow SCC-V's cap, never introduce a slowdown vision doesn't share
+  (map data — mistagged/rounded curve speeds, stale OSM — is far more
+  false-positive-prone than the model's own view of the road). Vision
+  keeps full independent authority. Pure function, no cereal deps, so
+  it's testable without the device's compiled msgq/capnp extensions.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` (SP) —
+  `update_targets` calls `gate_map_target(self._scc_map_v2.output_v_target,
+  self._scc_vision_v2.is_active)` before handing v_scc_map to the
+  governor. `self._scc_map_v2.output_v_target` itself is UNCHANGED (still
+  the raw computed cap) — only what reaches the governor is gated, so
+  debug/UI can still see what map "wanted."
+- `sunnypilot/selfdrive/controls/lib/long_v2/tests/test_scc_gating.py` —
+  NEW (3 cases): map-alone ignored, map-confirmed-by-vision passes
+  through unchanged, both-inactive stays inactive.
+- `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` — badges
+  scaled by _BADGE_SCALE = 1.08 (font/paddings/min_width/sub-label).
+  Arbitration display: reads longitudinalPlanSP.longitudinalPlanSource
+  (custom capnp enum) — when both SCC-V and SCC-M are constraining
+  (active + vTarget < 888), the source-winner's color lerps toward
+  _COLOR_WIN (blue) + white ring (draw_rectangle_rounded_lines_ex, same
+  API as sidebar.py), the loser toward _COLOR_LOSE (slate), tint
+  strength = |vTarget split| / _DISAGREE_FULL_MS (3 m/s = full). Base
+  state colors (disabled/armed/gas-gate/braking) unchanged and shown
+  whenever they agree. _BadgeState's 6-frame lerp naturally smooths the
+  continuously-moving gradient targets.
+- `selfdrive/controls/controlsd.py` — /dev/shm/lat_interp heartbeat
+  extended to "n,authority,pitch": pitch = MAX car-frame Y-axis angular
+  rate magnitude (deg/s, ~pitch rate) since the last model frame, read
+  from `self.calibrated_pose.angular_velocity` — ALREADY computed every
+  frame for carControl's orientationNED/angularVelocity, so this is zero
+  new subscription cost. Triage `sample()` gains `pitch_rate_deg`.
+- `selfdrive/controls/lib/triage_recorder.py` — lat records gain "pit"
+  (per-second peak |pitch rate|, deg/s). Explicitly a diagnostic-only
+  field — no threshold/alert logic attached.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — NEW
+  `SuspensionBumpElement` ("BUMP", °/s, 1 s max-hold via the same
+  `_RollingExtreme` helper EPS/TBAR use). DELIBERATELY uncolored (plain
+  white) — no claimed-confident thresholds exist yet for this signal;
+  the point is to read the raw number, not trust a color. `_read_lat_interp`
+  now parses the 3-field heartbeat and returns `(n, authority, pitch)`.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` — bottom bar
+  (torque cars) gains BUMP after EPS/TBAR.
+- `sunnypilot/navd/nav_webserver.py` — new markers (`gate_map_target` in
+  speed_governor.py, `class SuspensionBumpElement` in elements.py).
+- NEXT STEP for the user: next drive, watch BUMP (and later, correlate
+  triage "pit") against felt oscillation events, alongside EPS/TBAR. A
+  pit spike coinciding with an event AND eps staying at 100% supports
+  the weight-transfer theory over the torque-clamp theory for that
+  event; no pit spike falsifies it too, and we look elsewhere (tire/
+  alignment, a genuinely separate mechanism, or the model's own plan
+  reacting to the visual disturbance of the tracks).
+- Full import-light suite 130 green (127 + 3 new gating tests).
+
 ### v3.3.6 Changes (based on funnypilot-3.3.5)
 
 Lateral: the "spend the delay window on smoothing" feel returns WITHOUT

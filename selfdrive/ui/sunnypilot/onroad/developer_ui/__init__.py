@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  EpsLimitElement, DriverTorqueElement, LagdElement,
+  EpsLimitElement, DriverTorqueElement, SuspensionBumpElement, LagdElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -48,6 +48,7 @@ class DeveloperUiRenderer(Widget):
     # raw torsion-bar reading that drives the clamp.
     self.eps_limit_elem = EpsLimitElement()
     self.driver_torque_elem = DriverTorqueElement()
+    self.bump_elem = SuspensionBumpElement()
     self.lagd_elem = LagdElement()
     self.steering_torque_elem = SteeringTorqueEpsElement()
     self.bearing_elem = BearingDegElement()
@@ -147,6 +148,7 @@ class DeveloperUiRenderer(Widget):
     if is_torque:
       elements.append(self.eps_limit_elem.update(sm, ui_state.is_metric))
       elements.append(self.driver_torque_elem.update(sm, ui_state.is_metric))
+      elements.append(self.bump_elem.update(sm, ui_state.is_metric))
 
     elements.append(self.lead_speed_elem.update(sm, ui_state.is_metric))
 

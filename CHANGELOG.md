@@ -1,3 +1,57 @@
+FunnyPilot v3.3.8 (2026-07-21)
+========================
+Continued: SCC-M now requires SCC-V confirmation before it can slow the
+car; dev-UI SCC-V/SCC-M badges gain arbitration coloring; a new,
+UNVERIFIED bump/weight-transfer hypothesis is instrumented (not yet
+acted on) after user feedback falsified the driver-torque clamp as the
+explanation for the railroad-track oscillation specifically.
+
+* fix(long): `SCCMapV2`'s speed cap no longer binds on its own — it now
+  requires `SCCVisionV2` to also be actively constraining
+  (`gate_map_target` in `speed_governor.py`). Previously the governor
+  took the min() of vision and map independently, so a map false
+  positive (mistagged/rounded curve speed, stale OSM data) could brake
+  the car even when the model's own view of the road ahead saw nothing.
+  Vision keeps full independent authority to slow down; map can only
+  ever narrow vision's cap once vision agrees a reduction is warranted,
+  never introduce one on its own. 3 new unit tests.
+* feat(ui): SCC-V/SCC-M badges now 8% larger, and show map-vs-vision
+  arbitration: when BOTH are actively constraining, the one the
+  governor is following tints toward vivid blue with a white ring, the
+  other fades toward slate — tint strength scaled by how far apart
+  their targets are (agreeing controllers keep the plain
+  disabled/armed/gas-gate/braking colors unchanged).
+* IMPORTANT CORRECTION to the v3.3.8 EPS-governor work above: user
+  reports the "torque, back off, torque, back off" oscillation still
+  occurs with the EPS authority readout pinned at 100% — meaning the
+  hardware driver-torque clamp was NOT engaged during those specific
+  events. That doesn't undo the clamp fix (it's still correct
+  whenever the clamp *does* engage), but it means the clamp is NOT the
+  explanation for at least one recurring case: crossing railroad
+  tracks mid-corner. User's alternate hypothesis, physically
+  plausible and NOT yet verified: the bump unloads the front/steering
+  axle (weight transfer), which could reduce grip (outward slip) or
+  reduce the self-aligning torque needed for a given angle (so the
+  same commanded torque now yields a bigger angle than the controller
+  expects), and the car's suspension does not settle instantly —
+  spring/damper rebound continues to disturb the front axle for a
+  beat afterward, which could explain a repeating, not single, event.
+* feat(diag): new UNVERIFIED bump/weight-transfer instrumentation,
+  deliberately NOT paired with any control-loop change yet (same
+  discipline as every other hypothesis in this file: instrument,
+  drive, correlate, THEN fix — guessing wrong here has repeatedly cost
+  a full version in this project's history). Reads car-frame angular
+  rate (approx. pitch — nose dip/rebound) from the IMU pose controlsd
+  already computes every frame for carControl (no new subscription).
+  Dev-UI bottom bar gains "BUMP" (1 s max-hold, deliberately
+  uncolored — no claimed thresholds yet). Triage lat records gain
+  "pit" (per-second peak). NEXT STEP: correlate "pit" spikes against
+  the felt oscillation and against "eps"/"dtx" in the SAME second — a
+  pit spike with eps pinned at 100% would support the physics theory;
+  no pit spike would falsify it too and send us looking elsewhere.
+* chore: nav_webserver gains code markers for gate_map_target and
+  SuspensionBumpElement. Full import-light suite 130 green.
+
 FunnyPilot v3.3.8 (2026-07-19)
 ========================
 Two fixes: the turn-in "grab torque, immediately loosen, hard steer again"

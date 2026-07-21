@@ -130,13 +130,14 @@ class LatInterpMonitor:
     self._eps_min = 1.0
     self._dt_max = 0.0
     self._div_max = 0.0
+    self._pitch_max = 0.0
 
   def sample(self, mono_t: float, lat_active: bool, long_active: bool, v_ego: float, health_frames: float,
              lane_change: bool, curvature_limited: bool, a_target: float, accel: float,
              steering_pressed: bool = False, override_scale: float = 1.0, saturated: bool = False,
              steer_limited: bool = False, torque: float = 0.0, eps_authority: float = 1.0,
              driver_torque: float = 0.0, torque_out: float | None = None,
-             context_fn=None) -> None:
+             pitch_rate_deg: float = 0.0, context_fn=None) -> None:
     try:
       if self._t0 is None:
         self._t0 = mono_t
@@ -171,6 +172,14 @@ class LatInterpMonitor:
       self._dt_max = max(self._dt_max, abs(float(driver_torque)))
       if torque_out is not None:
         self._div_max = max(self._div_max, abs(float(torque) - float(torque_out)))
+      # v3.3.8: UNVERIFIED weight-transfer hypothesis (user's railroad-track
+      # observation, NOT the driver-torque clamp — EPS authority stayed 100%
+      # during those events). Car-frame Y-axis angular rate (approx. pitch
+      # rate) peak/s, from livePose via controlsd's calibrated_pose — a bump
+      # that unloads the front axle should show as a coherent spike here.
+      # Correlate against "eps"/"dtx"/"sp" swings during the SAME second to
+      # test whether it lines up with felt oscillation independent of torque.
+      self._pitch_max = max(self._pitch_max, abs(float(pitch_rate_deg)))
 
       if mono_t - self._t0 < self.PERIOD:
         return
@@ -210,6 +219,7 @@ class LatInterpMonitor:
         "eps": round(self._eps_min, 2),
         "dtx": round(self._dt_max, 1),
         "tqd": round(self._div_max, 3),
+        "pit": round(self._pitch_max, 1),
       }
       if self._idle_skipped:
         rec["idl"] = self._idle_skipped  # idle seconds preceding this record

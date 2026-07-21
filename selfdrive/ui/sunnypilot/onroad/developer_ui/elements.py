@@ -275,17 +275,20 @@ class LatAccelFactorElement:
 
 def _read_lat_interp():
   """Reads controlsd's /dev/shm/lat_interp heartbeat. v3.3.8 format is
-  "n,authority": n = realized control-frames-per-model-frame, authority = min
-  EPS-governor bound since the last model frame (1.0 = the hardware
-  driver-torque clamp never engaged). Returns (n, authority)."""
+  "n,authority,pitch": n = realized control-frames-per-model-frame,
+  authority = min EPS-governor bound since the last model frame (1.0 = the
+  hardware driver-torque clamp never engaged), pitch = max car-frame
+  pitch-rate magnitude (deg/s) since the last model frame (UNVERIFIED
+  weight-transfer/bump hypothesis). Returns (n, authority, pitch)."""
   try:
     with open('/dev/shm/lat_interp') as f:
       parts = f.read().strip().split(',')
       n = int(parts[0])
       auth = float(parts[1]) if len(parts) > 1 else 1.0
-      return n, auth
+      pitch = float(parts[2]) if len(parts) > 2 else 0.0
+      return n, auth, pitch
   except Exception:
-    return 0, 1.0
+    return 0, 1.0, 0.0
 
 
 class _RollingExtreme:
@@ -320,7 +323,7 @@ class EpsLimitElement:
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
-    _, auth = _read_lat_interp()
+    _, auth, _ = _read_lat_interp()
     held = self._hold.update(auth)
     if not lat_active:
       return UiElement("-", "EPS", self.unit, rl.WHITE)
@@ -355,6 +358,29 @@ class DriverTorqueElement:
     else:
       color = rl.Color(255, 0, 0, 255)
     return UiElement(f"{held:.0f}", "TBAR", self.unit, color)
+
+
+class SuspensionBumpElement:
+  # FunnyPilot v3.3.8: UNVERIFIED weight-transfer/bump hypothesis. User
+  # observed the turn-in oscillation crossing railroad tracks mid-corner
+  # with EPS pinned at 100% (i.e. NOT the driver-torque clamp) — the
+  # candidate mechanism is front-axle weight transfer over the bump (grip
+  # loss / suspension rebound) rather than a torque-request problem at all.
+  # This reads the car's own IMU (car-frame Y-axis angular rate, ~pitch
+  # rate — a bump should show a coherent spike as the nose dips/rebounds),
+  # already computed every frame in controlsd as calibrated_pose; no new
+  # subscription. 1 s max-hold, same pattern as TBAR. DELIBERATELY
+  # uncolored (no claimed-confident thresholds yet — this is a first look,
+  # not a calibrated alarm): read the raw number and correlate it against
+  # the felt oscillation and the triage "pit" field before trusting it.
+  def __init__(self):
+    self.unit = "°/s"
+    self._hold = _RollingExtreme(1.0, track_min=False)
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    _, _, pitch = _read_lat_interp()
+    held = self._hold.update(pitch)
+    return UiElement(f"{held:.0f}", "BUMP", self.unit, rl.WHITE)
 
 
 class LagdElement:

@@ -21,7 +21,7 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -87,9 +87,11 @@ class LongitudinalPlannerSP:
     # LongV2: SCC-Map v2
     self._scc_map_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)
 
-    # LongV2: Speed governor selects minimum of all v_targets
+    # LongV2: Speed governor selects minimum of all v_targets. SCC-M requires
+    # SCC-V agreement to bind (gate_map_target) — vision alone retains full
+    # authority to slow the car; map alone cannot.
     v_scc_vision = self._scc_vision_v2.output_v_target
-    v_scc_map = self._scc_map_v2.output_v_target
+    v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active)
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
     # Speed limit info for road cap logic

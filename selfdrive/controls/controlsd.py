@@ -175,20 +175,31 @@ class Controls(ControlsExt):
       new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
                                                      self.sm.updated['modelV2'], time.monotonic(), next_est)
     # Dev-UI heartbeat, written at the 20 Hz model rate. v3.3.8: now
-    # "n,authority" — n is the realized control-frames-per-model-frame (kept
-    # for triage compat), authority is the MIN EPS-governor bound since the
-    # last model frame (1.00 = the hardware driver-torque clamp never
-    # engaged; see eps_limit.py). The dev UI's EPS element reads this.
+    # "n,authority,pitch" — n is the realized control-frames-per-model-frame
+    # (kept for triage compat), authority is the MIN EPS-governor bound since
+    # the last model frame (1.00 = the hardware driver-torque clamp never
+    # engaged; see eps_limit.py), pitch is the MAX car-frame pitch-rate
+    # magnitude (deg/s) since the last model frame — an UNVERIFIED
+    # weight-transfer/bump hypothesis for the railroad-track oscillation
+    # (user observed it with EPS pinned at 100%, i.e. NOT the driver-torque
+    # clamp). Read from the same calibrated IMU pose already computed each
+    # frame for carControl's orientationNED/angularVelocity — no new
+    # subscription. The dev UI's EPS/BUMP elements read this.
     eps_auth = getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0)
     self._eps_auth_min = min(getattr(self, '_eps_auth_min', 1.0), float(eps_auth))
+    pitch_rate_deg = 0.0
+    if self.calibrated_pose is not None:
+      pitch_rate_deg = math.degrees(self.calibrated_pose.angular_velocity.pitch)
+    self._pitch_max = max(getattr(self, '_pitch_max', 0.0), abs(pitch_rate_deg))
     if self.sm.updated['modelV2']:
       try:
         n = round(self.lat_smooth.health_frames) if CC.latActive else 0
         with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write(f"{n},{self._eps_auth_min:.2f}")
+          _f.write(f"{n},{self._eps_auth_min:.2f},{self._pitch_max:.1f}")
       except Exception:
         pass
       self._eps_auth_min = 1.0
+      self._pitch_max = 0.0
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
 
     actuators.curvature = self.desired_curvature
@@ -213,6 +224,7 @@ class Controls(ControlsExt):
                        eps_authority=getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0),
                        driver_torque=CS.steeringTorque,
                        torque_out=self.sm['carOutput'].actuatorsOutput.torque,
+                       pitch_rate_deg=pitch_rate_deg,
                        context_fn=lambda: {
                          "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
                          "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),

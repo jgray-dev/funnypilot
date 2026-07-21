@@ -3,8 +3,18 @@ FunnyPilot LongV2 — speed governor: applies all v_targets and selects minimum.
 """
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import weather_cap_active, weather_speed_scale
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
 _V_CRUISE_MAX_MPS = 58.1  # ~130 mph
+
+
+def gate_map_target(map_v_target: float, vision_is_active: bool) -> float:
+  """v3.3.8: SCC-M may only narrow SCC-V's cap, never introduce one on its
+  own — map route data is far more prone to false positives (mistagged/
+  rounded curve speeds, stale OSM data) than the model's own view of the
+  road. Returns CAP_INACTIVE when vision does not also think a reduction is
+  warranted, regardless of what the map suggests."""
+  return map_v_target if vision_is_active else CAP_INACTIVE
 
 
 class SpeedGovernor:
