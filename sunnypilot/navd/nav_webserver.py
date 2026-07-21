@@ -32,6 +32,7 @@ _PULSE_MAX_BYTES = 1024 * 1024
 _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
   "/data/openpilot/selfdrive/controls/lib/eps_limit.py",
+  "/data/openpilot/selfdrive/controls/lib/bump_damper.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
@@ -75,6 +76,7 @@ _CODE_MARKERS = [
   ("class EpsLimitElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "EPS/TBAR/BUMP dev UI readout"),
   ("class SuspensionBumpElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "bump/pitch-rate dev UI readout"),
   ("gate_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "SCC-M requires SCC-V confirm"),
+  ("class BumpDamper", "/data/openpilot/selfdrive/controls/lib/bump_damper.py", "bump/weight-transfer error damper"),
   ("class AutoUpdater", "/data/openpilot/sunnypilot/auto_updater/manager.py", "offroad wifi auto-updater"),
 ]
 _CODE_CMD = "; ".join(

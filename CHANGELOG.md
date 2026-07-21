@@ -1,11 +1,59 @@
-FunnyPilot v3.3.8 (2026-07-21)
+FunnyPilot v3.3.8 (2026-07-21, continued)
 ========================
-Continued: SCC-M now requires SCC-V confirmation before it can slow the
-car; dev-UI SCC-V/SCC-M badges gain arbitration coloring; a new,
-UNVERIFIED bump/weight-transfer hypothesis is instrumented (not yet
-acted on) after user feedback falsified the driver-torque clamp as the
-explanation for the railroad-track oscillation specifically.
+A real fix for the turn-in/railroad-track torque oscillation, plus a
+dev-UI readout swap. Per explicit user direction, this is an ACTED-ON
+mechanism (not a fully proven one) — instrumentation alone had converged
+on a plausible, code-verified explanation, and the user asked for a
+fix now rather than more logging.
 
+* fix(lat): NEW `BumpDamper` (`selfdrive/controls/lib/bump_damper.py`),
+  wired into `latcontrol_torque.py`. Mechanism, verified line-by-line
+  against the actual code (not just asserted): (1) `get_friction()`'s
+  slope inside its threshold band is `friction * latAccelFactor /
+  FRICTION_THRESHOLD` — for this K5 (fitted friction 0.1165) that's
+  ~1.6 with the fork-LOCKED latAccelFactor of 2.750, i.e. TWICE the
+  PID's own KP of 0.8, live exactly in the small-error turn-in regime;
+  (2) that same locked 2.750 is ~14% above the K5's fitted 2.405
+  (`opendbc/car/torque_data/params.toml`), so feedforward under-delivers
+  ~12.5% of the torque actually needed, pushing more work onto the
+  high-gain relay in (1); (3) the PID setpoint is the model's desire
+  from ~lat_delay (~0.5s) ago (the delay buffer), and the jerk
+  lookahead replays the same buffer ~0.3s later — so a bump-induced
+  measurement disturbance (bump-steer / momentary grip or
+  self-aligning-torque change from weight transfer) corrupts BOTH the
+  measurement (during the event) and the delayed setpoint (0.3-0.5s
+  later), landing squarely in the high-gain relay above for long enough
+  to ring a couple cycles — matching the observed lag between the BUMP
+  pitch-rate peak and felt oscillation onset.
+* On a detected pitch-rate spike (>5 deg/s, reusing the existing
+  car-frame IMU signal — no new subscription), BumpDamper blends the
+  measurement TOWARD the setpoint (shrinking |error| — NOT holding
+  it, which under a ramping setpoint would manufacture GROWING error
+  and thus MORE torque, exactly backwards), damps the jerk-lookahead's
+  contribution to the friction relay by the same factor, and freezes
+  the PID integrator — for 0.8s past the last supra-threshold frame
+  plus a 0.7s linear recovery. Floor 0.40 (matching the fork's other
+  established floors: lane-change 0.45, override 0.6). This can only
+  ever soften the correction TOWARD the plan's own feedforward — it
+  cannot add torque or lose the corner, and composes safely downstream
+  of nothing (it's upstream of the EPS governor and panda, both
+  untouched backstops).
+* Verified: unit tests for timing/bounds (11 cases), plus a closed-loop
+  plant simulation of a delayed-PID + friction-relay loop under a step
+  measurement disturbance — post-bump torque ringing dropped ~74% and
+  peak error during the event ~60% in that simplified plant. This is a
+  logic sanity check, not proof the real vehicle behaves this way.
+* FALSIFIABLE with the EXISTING dev-UI BUMP readout, no new
+  instrumentation: if the oscillation still occurs while BUMP shows
+  >5 deg/s (damper provably engaged that frame), this mechanism is
+  dead and the next suspect is the model's own plan, not the
+  controller's reaction to it.
+* feat(ui): L.S. (lead speed, redundant with REL SPEED/REL DIST) removed
+  from the bottom dev-UI bar for torque cars; new LIM element shows
+  whether the EPS governor's driver-torque clamp is ACTIVELY biting the
+  request right now (fraction of the last second's control frames with
+  `driver_limited=True`) — distinct from EPS's authority ceiling, which
+  can sit below 100% without the request ever actually reaching it.
 * fix(long): `SCCMapV2`'s speed cap no longer binds on its own — it now
   requires `SCCVisionV2` to also be actively constraining
   (`gate_map_target` in `speed_governor.py`). Previously the governor
@@ -49,8 +97,9 @@ explanation for the railroad-track oscillation specifically.
   the felt oscillation and against "eps"/"dtx" in the SAME second — a
   pit spike with eps pinned at 100% would support the physics theory;
   no pit spike would falsify it too and send us looking elsewhere.
-* chore: nav_webserver gains code markers for gate_map_target and
-  SuspensionBumpElement. Full import-light suite 130 green.
+* chore: nav_webserver gains code markers for gate_map_target,
+  SuspensionBumpElement, and BumpDamper; bump_damper.py added to the
+  feel-file hashes. Full import-light suite 141 green.
 
 FunnyPilot v3.3.8 (2026-07-19)
 ========================

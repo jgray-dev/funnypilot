@@ -85,7 +85,12 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
                                              FRICTION_THRESHOLD, self.lac_torque.torque_params)
 
   def update_output_torque(self, CS):
-    freeze_integrator = self._steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
+    # v3.3.8: also freeze while the EPS governor's driver-limit bound is
+    # clamping, or the bump damper is active (see eps_limit.py / bump_damper.py
+    # — this mirrors the same two conditions the base LatControlTorque adds).
+    freeze_integrator = (self._steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or
+                        getattr(self.lac_torque, '_eps_governor', None) and self.lac_torque._eps_governor.driver_limited or
+                        getattr(self.lac_torque, '_bump_damper', None) and self.lac_torque._bump_damper.active)
     self._output_torque = self._pid.update(self._pid_log.error,
                                            feedforward=self._ff,
                                            speed=CS.vEgo,

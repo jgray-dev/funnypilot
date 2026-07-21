@@ -270,6 +270,95 @@ instrument -> drive -> correlate -> THEN fix, not guess again.
   reacting to the visual disturbance of the tracks).
 - Full import-light suite 130 green (127 + 3 new gating tests).
 
+#### v3.3.8 continued (2026-07-21): bump damper — an ACTED-ON fix + LIM readout
+
+Real on-road data arrived: BUMP peaked to 7°/s exactly at a railroad-track
+crossing (baseline <3°/s), EPS went orange (clamp DID engage that time,
+unlike the prior crossing where it stayed pinned at 100%), and the felt
+oscillation started AFTER BUMP had decayed back to 2-3°/s — a LAG, not
+simultaneity. USER EXPLICIT DIRECTION: stop instrumenting, consult a
+second model (Fable-5, full repo access) with the complete history, and
+ship a fix. This section is that fix — ACTED-ON, not fully proven; the
+mechanism below was independently verified against the real code (exact
+constants, line references) before implementing, not just asserted.
+
+- `selfdrive/controls/lib/bump_damper.py` — NEW, stdlib-only.
+  `BumpDamper`. MECHANISM (three code-verified facts, not guesses):
+  (1) `opendbc/car/lateral.py:get_friction()`'s slope inside its
+  threshold band = `friction * latAccelFactor / FRICTION_THRESHOLD`;
+  for the K5 (fitted friction 0.1165, threshold 0.2) with the fork's
+  LOCKED latAccelFactor 2.750 that's ~1.6 — TWICE the PID's own KP of
+  0.8 — live exactly in the small-error turn-in regime. (2) That same
+  locked 2.750 is ~14% above the K5's FITTED 2.405
+  (`opendbc/car/torque_data/params.toml`, legend confirms column
+  order); since torque = lat_accel / latAccelFactor, locking it higher
+  makes feedforward under-deliver ~12.5% of the torque actually
+  needed, pushing more work onto the high-gain relay in (1). (3) The
+  PID setpoint is the model's desire from ~lat_delay (~0.5s) ago (the
+  delay buffer), and the jerk lookahead replays the same buffer
+  ~0.3s later — so a bump disturbance corrupts the MEASUREMENT during
+  the event and the delay-buffered SETPOINT 0.3-0.5s afterward,
+  landing in the high-gain relay window long enough to ring — this is
+  the mechanistic explanation for the observed peak-then-lag pattern.
+  On a pitch-rate spike (TRIGGER_DEG_S=5.0, between the confirmed
+  <3 baseline and the 7 event peak), blends `measurement` TOWARD
+  `setpoint` (shrinks |error| — does NOT hold measurement, which under
+  a ramping setpoint would manufacture GROWING error = MORE torque,
+  backwards) for HOLD_S=0.8s past the last supra-threshold frame (covers
+  the ~0.5s delayed-setpoint arrival) plus RECOVER_S=0.7s linear
+  recovery, floor MIN_DAMP=0.40 (matches the fork's other floors:
+  lane-change 0.45, override 0.6). Only ever softens toward the plan's
+  own feedforward — cannot add torque, cannot lose the corner.
+- `selfdrive/controls/lib/latcontrol_torque.py` — `self._bump_damper`
+  instantiated + reset on inactive (matches eps_governor/override_gate
+  convention). Blend applied right after `error = setpoint -
+  measurement` is first computed, BEFORE the friction/ff line, so both
+  the correction AND the friction relay's argument are damped; the
+  jerk-lookahead term feeding that same relay is separately scaled by
+  `damp`. `freeze_integrator` gains `or self._bump_damper.active`.
+  `raw_measurement` preserved for `pid_log.actualLateralAccel` so logs
+  stay honest (not damped). Propagates automatically into the NNLC
+  extension path (`LatControlTorqueExt.update()` receives the same
+  local `measurement` variable by reference) when NNLC is enabled —
+  verified by reading `nnlc.py`; NNLC is a pure passthrough when
+  disabled (the K5's actual default config), so for this car the base
+  LatControlTorque path IS the whole fix.
+- `sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py` — defensive addition:
+  `update_output_torque`'s OWN separate `freeze_integrator` (a
+  pre-existing gap — it already missed the EPS governor's flag too)
+  now also ORs in both `_eps_governor.driver_limited` and
+  `_bump_damper.active` via `self.lac_torque`, for consistency if NNLC
+  is ever toggled on.
+- `selfdrive/controls/lib/tests/test_bump_damper.py` — NEW (11 cases):
+  no-op below trigger, instant collapse (both pitch signs), hold
+  duration, linear recovery, full recovery to exact no-op, retrigger
+  extends hold, bounds, NaN/inf safety, reset. A closed-loop plant sim
+  (delayed-PID + friction-relay under a step measurement disturbance,
+  not committed to the repo) showed ~74% less post-bump torque ringing
+  and ~60% lower peak error with the damper — a logic sanity check,
+  not proof the real vehicle behaves this way.
+- FALSIFIABLE with the EXISTING BUMP readout, zero new instrumentation:
+  next drive, if the oscillation still occurs while BUMP shows
+  >5°/s (damper provably engaged that frame), this mechanism is dead —
+  next suspect is the model's own plan, not the controller's reaction.
+- `selfdrive/controls/controlsd.py` — /dev/shm/lat_interp heartbeat
+  extended again: "n,authority,pitch,limited" — limited = fraction of
+  control frames since the last model frame where
+  `EpsTorqueGovernor.driver_limited` was true (distinct from
+  `authority`, the ceiling — a bound can sit below 100% without ever
+  actually being hit).
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py` — L.S.
+  wiring removed (class kept, unused); NEW `TorqueLimitActiveElement`
+  ("LIM", %, 1s max-hold): 0% green = request passing through
+  unmodified, <50% orange, >=50% red. `_read_lat_interp` parses the
+  4-field heartbeat.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` — LIM
+  inserted right after EPS in the torque diagnostic group (EPS, LIM,
+  TBAR, BUMP); L.S. no longer drawn.
+- `sunnypilot/navd/nav_webserver.py` — new marker (`class BumpDamper`
+  in bump_damper.py); bump_damper.py added to `_FEEL_FILES` hashes.
+- Full import-light suite 141 green (130 + 11 new bump-damper tests).
+
 ### v3.3.6 Changes (based on funnypilot-3.3.5)
 
 Lateral: the "spend the delay window on smoothing" feel returns WITHOUT

@@ -10,6 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.override_gate import OverrideGate
 from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
+from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper
 from openpilot.common.pid import PIDController
 
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
@@ -111,6 +112,14 @@ class LatControlTorque(LatControl):
     # oscillation. Only ever reduces torque; panda remains the backstop.
     self._eps_governor = EpsTorqueGovernor(self.dt)
 
+    # v3.3.8: bump/weight-transfer damper (bump_damper.py) — ACTED-ON
+    # hypothesis for the railroad-track oscillation. Softens the error
+    # channel through a detected pitch-rate spike so a bump-induced
+    # measurement/setpoint disturbance can't ring through the high-gain
+    # friction relay. Only ever reduces the correction toward pure
+    # feedforward; never adds torque.
+    self._bump_damper = BumpDamper(self.dt)
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
     self.torque_params.latAccelOffset = latAccelOffset
@@ -140,6 +149,18 @@ class LatControlTorque(LatControl):
     delay_frames = int(np.clip(lat_delay / self.dt + 1, 1, self.lat_accel_request_buffer_len))
     setpoint = self.lat_accel_request_buffer[-delay_frames]
     error = setpoint - measurement
+    raw_measurement = measurement  # kept for honest pid_log; error/measurement below may be damped
+
+    # v3.3.8: bump/weight-transfer damper. On a detected pitch-rate spike,
+    # blend measurement TOWARD setpoint (shrinking |error|, never holding it —
+    # holding under a ramping setpoint would manufacture GROWING error and
+    # thus MORE torque, exactly backwards). See bump_damper.py for the full
+    # mechanism writeup. Exact no-op (damp==1.0) outside a detected window.
+    pitch_rate_deg = math.degrees(calibrated_pose.angular_velocity.pitch) if calibrated_pose is not None else 0.0
+    damp = self._bump_damper.update(pitch_rate_deg)
+    if damp < 1.0:
+      measurement = setpoint + damp * (measurement - setpoint)
+      error = setpoint - measurement
 
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
     raw_lateral_jerk = (self.lat_accel_request_buffer[lookahead_idx+1] - self.lat_accel_request_buffer[lookahead_idx-1]) / (2 * self.dt)
@@ -148,7 +169,9 @@ class LatControlTorque(LatControl):
     ff = gravity_adjusted_future_lateral_accel
     # latAccelOffset corrects roll compensation bias from device roll misalignment relative to car roll
     ff -= self.torque_params.latAccelOffset
-    ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+    # v3.3.8: the jerk-lookahead term also replays the delay buffer, so its
+    # contribution to the friction relay is damped by the same factor.
+    ff += get_friction(error + damp * JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
 
     # FunnyPilot v3.2.1e: track active edges + whether a blinker was involved
     # while inactive, to drive the blinker-unwind re-engage torque ramp below.
@@ -169,6 +192,7 @@ class LatControlTorque(LatControl):
       self._override_gate.reset()
       self._override_scale = self._override_filter.update(1.0)
       self._eps_governor.reset()
+      self._bump_damper.reset()
     else:
       # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
@@ -177,7 +201,8 @@ class LatControlTorque(LatControl):
       # clamping (previous frame's state) — the hardware won't take more
       # torque, so integrating the tracking error would only wind up an
       # overshoot for when authority returns.
-      freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or self._eps_governor.driver_limited
+      freeze_integrator = (steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or
+                          self._eps_governor.driver_limited or self._bump_damper.active)
       output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
@@ -255,7 +280,7 @@ class LatControlTorque(LatControl):
       pid_log.d = float(self.pid.d)
       pid_log.f = float(self.pid.f)
       pid_log.output = float(-output_torque) # TODO: log lat accel?
-      pid_log.actualLateralAccel = float(measurement)
+      pid_log.actualLateralAccel = float(raw_measurement)  # log the RAW measurement, not the damped one
       pid_log.desiredLateralAccel = float(setpoint)
       pid_log.desiredLateralJerk = float(desired_lateral_jerk)
       # v3.3.8: a sustained EPS-governor clamp is real authority loss in a
