@@ -9,9 +9,9 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
-  AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
+  AEgoElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  EpsLimitElement, DriverTorqueElement, SuspensionBumpElement, LagdElement,
+  EpsLimitElement, DriverTorqueElement, TorqueLimitActiveElement, SuspensionBumpElement, LagdElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -39,14 +39,16 @@ class DeveloperUiRenderer(Widget):
     self.desired_steer_elem = DesiredSteeringAngleElement()
     self.desired_pid_steer_elem = DesiredSteeringPIDElement()
     self.a_ego_elem = AEgoElement()
-    self.lead_speed_elem = LeadSpeedElement()
     self.friction_elem = FrictionCoefficientElement()
     self.lat_accel_factor_elem = LatAccelFactorElement()
     # FunnyPilot v3.3.8: INTERP replaced — the interpolation is knot-exact by
-    # construction now, so it read a static "5". These two show what actually
-    # matters for the turn-in oscillation: hardware torque authority and the
-    # raw torsion-bar reading that drives the clamp.
+    # construction now, so it read a static "5". These show what actually
+    # matters for the turn-in oscillation: hardware torque authority ceiling,
+    # whether that ceiling is actively biting the request right now, the raw
+    # torsion-bar reading that drives the clamp, and the bump/pitch-rate
+    # hypothesis signal.
     self.eps_limit_elem = EpsLimitElement()
+    self.torque_limit_active_elem = TorqueLimitActiveElement()
     self.driver_torque_elem = DriverTorqueElement()
     self.bump_elem = SuspensionBumpElement()
     self.lagd_elem = LagdElement()
@@ -143,14 +145,14 @@ class DeveloperUiRenderer(Widget):
     elements = []
     is_torque = sm['controlsState'].lateralControlState.which() == 'torqueState'
 
-    # Leftmost (torque only): EPS governor authority + torsion-bar reading —
-    # the two values that discriminate the grab/loosen oscillation hypotheses
+    # Leftmost (torque only): the values that discriminate the grab/loosen
+    # oscillation hypotheses — authority ceiling, whether it's biting right
+    # now, the raw torsion-bar reading, and the bump/pitch-rate signal.
     if is_torque:
       elements.append(self.eps_limit_elem.update(sm, ui_state.is_metric))
+      elements.append(self.torque_limit_active_elem.update(sm, ui_state.is_metric))
       elements.append(self.driver_torque_elem.update(sm, ui_state.is_metric))
       elements.append(self.bump_elem.update(sm, ui_state.is_metric))
-
-    elements.append(self.lead_speed_elem.update(sm, ui_state.is_metric))
 
     if sm.valid['liveDelay']:
       elements.append(self.lagd_elem.update(sm, ui_state.is_metric))

@@ -275,20 +275,23 @@ class LatAccelFactorElement:
 
 def _read_lat_interp():
   """Reads controlsd's /dev/shm/lat_interp heartbeat. v3.3.8 format is
-  "n,authority,pitch": n = realized control-frames-per-model-frame,
+  "n,authority,pitch,limited": n = realized control-frames-per-model-frame,
   authority = min EPS-governor bound since the last model frame (1.0 = the
   hardware driver-torque clamp never engaged), pitch = max car-frame
   pitch-rate magnitude (deg/s) since the last model frame (UNVERIFIED
-  weight-transfer/bump hypothesis). Returns (n, authority, pitch)."""
+  weight-transfer/bump hypothesis), limited = fraction of control frames
+  since the last model frame where the governor's bound actually clamped the
+  request. Returns (n, authority, pitch, limited)."""
   try:
     with open('/dev/shm/lat_interp') as f:
       parts = f.read().strip().split(',')
       n = int(parts[0])
       auth = float(parts[1]) if len(parts) > 1 else 1.0
       pitch = float(parts[2]) if len(parts) > 2 else 0.0
-      return n, auth, pitch
+      limited = float(parts[3]) if len(parts) > 3 else 0.0
+      return n, auth, pitch, limited
   except Exception:
-    return 0, 1.0, 0.0
+    return 0, 1.0, 0.0, 0.0
 
 
 class _RollingExtreme:
@@ -323,7 +326,7 @@ class EpsLimitElement:
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lat_active = sm['carControl'].latActive
-    _, auth, _ = _read_lat_interp()
+    _, auth, _, _ = _read_lat_interp()
     held = self._hold.update(auth)
     if not lat_active:
       return UiElement("-", "EPS", self.unit, rl.WHITE)
@@ -360,6 +363,36 @@ class DriverTorqueElement:
     return UiElement(f"{held:.0f}", "TBAR", self.unit, color)
 
 
+class TorqueLimitActiveElement:
+  # FunnyPilot v3.3.8: replaces L.S. (lead speed — redundant with the REL
+  # SPEED/REL DIST readouts elsewhere). EPS shows the current AUTHORITY
+  # CEILING the hardware driver-torque clamp allows; that ceiling can sit
+  # below 100% without ever actually being hit by the request. This shows
+  # whether the clamp is ACTUALLY biting — the fraction of the last second's
+  # control frames where the governor's bound clamped what latcontrol wanted
+  # to send (`EpsTorqueGovernor.driver_limited`). 0% green = the model's
+  # desired torque is passing through unmodified; higher means the hardware
+  # is actively stripping torque from the request, which is the direct,
+  # real-time signal for "are we fighting the clamp right now."
+  def __init__(self):
+    self.unit = "%"
+    self._hold = _RollingExtreme(1.0, track_min=False)
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    lat_active = sm['carControl'].latActive
+    _, _, _, limited = _read_lat_interp()
+    held = self._hold.update(limited)
+    if not lat_active:
+      return UiElement("-", "LIM", self.unit, rl.WHITE)
+    if held <= 0.01:
+      color = rl.Color(0, 255, 0, 255)    # request passing through unmodified
+    elif held < 0.50:
+      color = rl.Color(255, 165, 0, 255)  # intermittently clamped
+    else:
+      color = rl.Color(255, 0, 0, 255)    # persistently clamped
+    return UiElement(f"{held * 100:.0f}", "LIM", self.unit, color)
+
+
 class SuspensionBumpElement:
   # FunnyPilot v3.3.8: UNVERIFIED weight-transfer/bump hypothesis. User
   # observed the turn-in oscillation crossing railroad tracks mid-corner
@@ -378,7 +411,7 @@ class SuspensionBumpElement:
     self._hold = _RollingExtreme(1.0, track_min=False)
 
   def update(self, sm, is_metric: bool) -> UiElement:
-    _, _, pitch = _read_lat_interp()
+    _, _, pitch, _ = _read_lat_interp()
     held = self._hold.update(pitch)
     return UiElement(f"{held:.0f}", "BUMP", self.unit, rl.WHITE)
 

@@ -175,18 +175,25 @@ class Controls(ControlsExt):
       new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
                                                      self.sm.updated['modelV2'], time.monotonic(), next_est)
     # Dev-UI heartbeat, written at the 20 Hz model rate. v3.3.8: now
-    # "n,authority,pitch" — n is the realized control-frames-per-model-frame
-    # (kept for triage compat), authority is the MIN EPS-governor bound since
-    # the last model frame (1.00 = the hardware driver-torque clamp never
-    # engaged; see eps_limit.py), pitch is the MAX car-frame pitch-rate
-    # magnitude (deg/s) since the last model frame — an UNVERIFIED
+    # "n,authority,pitch,limited" — n is the realized control-frames-per-
+    # model-frame (kept for triage compat), authority is the MIN EPS-governor
+    # bound since the last model frame (1.00 = the hardware driver-torque
+    # clamp never engaged; see eps_limit.py), pitch is the MAX car-frame
+    # pitch-rate magnitude (deg/s) since the last model frame — an UNVERIFIED
     # weight-transfer/bump hypothesis for the railroad-track oscillation
     # (user observed it with EPS pinned at 100%, i.e. NOT the driver-torque
-    # clamp). Read from the same calibrated IMU pose already computed each
-    # frame for carControl's orientationNED/angularVelocity — no new
-    # subscription. The dev UI's EPS/BUMP elements read this.
-    eps_auth = getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0)
+    # clamp) — read from the same calibrated IMU pose already computed each
+    # frame for carControl's orientationNED/angularVelocity, no new
+    # subscription. limited is the FRACTION of control frames since the last
+    # model frame where the governor's bound was actually clamping the
+    # request (`driver_limited`) — distinct from authority: the bound can sit
+    # below 100% while never actually biting the request. The dev UI's
+    # EPS/LIM/BUMP elements read this.
+    eps_gov = getattr(self.LaC, '_eps_governor', None)
+    eps_auth = getattr(eps_gov, 'authority', 1.0)
     self._eps_auth_min = min(getattr(self, '_eps_auth_min', 1.0), float(eps_auth))
+    self._eps_limited_frames = getattr(self, '_eps_limited_frames', 0) + int(bool(getattr(eps_gov, 'driver_limited', False)))
+    self._eps_total_frames = getattr(self, '_eps_total_frames', 0) + 1
     pitch_rate_deg = 0.0
     if self.calibrated_pose is not None:
       pitch_rate_deg = math.degrees(self.calibrated_pose.angular_velocity.pitch)
@@ -194,12 +201,15 @@ class Controls(ControlsExt):
     if self.sm.updated['modelV2']:
       try:
         n = round(self.lat_smooth.health_frames) if CC.latActive else 0
+        limited_frac = self._eps_limited_frames / max(self._eps_total_frames, 1)
         with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write(f"{n},{self._eps_auth_min:.2f},{self._pitch_max:.1f}")
+          _f.write(f"{n},{self._eps_auth_min:.2f},{self._pitch_max:.1f},{limited_frac:.2f}")
       except Exception:
         pass
       self._eps_auth_min = 1.0
       self._pitch_max = 0.0
+      self._eps_limited_frames = 0
+      self._eps_total_frames = 0
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
 
     actuators.curvature = self.desired_curvature
