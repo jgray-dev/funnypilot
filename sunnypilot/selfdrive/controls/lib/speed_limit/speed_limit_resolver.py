@@ -160,9 +160,13 @@ class SpeedLimitResolver:
     # within an adapt distance, marked FIXME "not working as expected") is
     # REMOVED: switching speed_limit before the boundary made the cruise
     # set-speed snap fire early, i.e. BRAKING before the zone. The resolved
-    # limit now changes exactly at the boundary; slowing down beforehand is
-    # SLA's pre-zone gas gate (throttle-only, speed_limit_assist.py) using
-    # the ahead info exposed below.
+    # limit (this class's own output) still changes exactly at the boundary.
+    # v3.3.9: slowing/speeding up beforehand is now handled by TWO consumers
+    # of the ahead info exposed below — SLA's pre-zone gas gate (throttle-only,
+    # speed_limit_assist.py) AND SlaSpeedRamp (long_v2/sla_ramp.py), which
+    # predictively shapes v_cruise itself so DEC's blended MPC mode (which
+    # barely responds to a stepped v_cruise) also decelerates/accelerates
+    # smoothly for a zone change.
     if next_speed_limit > 0.:
       self.next_speed_limit = next_speed_limit
       self.next_speed_limit_final = next_speed_limit + self._offset_for_limit(next_speed_limit)

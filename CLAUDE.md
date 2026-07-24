@@ -67,6 +67,124 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.3.9 Changes (based on funnypilot-3.3.8)
+
+POLICY CHANGE, binding from here on: every change gets its own branch and
+version number — no more stacking multiple rounds of fixes onto one
+version's branch (3.3.8 accumulated three separate "continued" sections
+before this rule was set; do not repeat that pattern).
+
+Both changes below were reviewed with a second model consult (Fable-5,
+full repo access) BEFORE any code was written, per explicit user
+direction — the review caught four real corrections to the original
+SLA-ramp design (wrong envelope form, a predictive up-ramp that would have
+been actively wrong, no dropout handling, an undocumented contradiction
+with the v3.3.3 rule) and one wrong assumption in the status-dot design
+(fixed accel deadband), all verified against the actual code before
+adopting.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/sla_ramp.py` — NEW.
+  `SlaSpeedRamp`. ROOT CAUSE of "SLA predictive decel/accel doesn't work
+  under DEC," verified against `long_mpc.py`'s actual cost weights: blended
+  MPC mode is `[0., 0.1, 0.2, 5.0, a_change_cost, 1.0]` — the model's OWN
+  acceleration plan is weighted 5.0, SLA's speed/position target only 0.1
+  (position) / 0.2 (velocity). A STEPPED target (SLA flips exactly at the
+  zone boundary, v3.3.3) gives the model's own competing plan an
+  adversarial reference to fight rather than a small gap the weak terms
+  can close — 'acc' mode doesn't have this problem (obstacle weight 3.0),
+  which is why SLA already worked fine outside DEC. FIX is SPEED-DOMAIN,
+  MODE-AGNOSTIC (per explicit user direction — DEC's own acc/blended
+  heuristics are NOT touched, "just accept the SCC mode of DEC is
+  difficult to work with"): shape v_cruise itself, upstream of the MPC,
+  so a smoothly pre-ramped target keeps the cap-vs-plan gap small at every
+  instant, in either mode. Envelope: constant-decel sqrt form matching
+  scc_map_v2.py's `_raw_cap_from_map` (`sqrt(next_target^2 + 2*A_DECEL*
+  d_eff)`, standstill-safe, no v_ego division — the FIRST design draft
+  used a linear time-based form which was WRONG, caught in review).
+  A_DECEL=1.0, ARRIVAL_LEAD_T=2.0s (both pre-existing, already-validated
+  fork constants, not new tuning). DELIBERATELY NO predictive up-ramp for
+  a faster upcoming zone (the first draft had one; review caught that
+  raising the cap before the boundary commands overspeed in the CURRENT
+  slower zone, and buys nothing in blended mode since a cap can only ever
+  restrain the model's plan, never accelerate it) — the up-transition is
+  handled ENTIRELY by the post-boundary per-frame release-rate limiter
+  (RELEASE_RATE_UP=0.6 m/s^2), which only starts moving once SLA's own
+  zone target has already stepped up at the boundary. 2.5s dropout hold
+  (mirrors LeadGrace's approach) covers the resolver zeroing
+  next_speed_limit_final/distance_to_next_limit every frame map data
+  isn't currently valid — first draft had no such hold, would have
+  sawtoothed on flicker. Reuses SLA's own already-published
+  `effective_speed_limit_target`/`next_zone_target` properties (one
+  source of truth for the ratio math) — SLA's zone/ratio state machine
+  itself is COMPLETELY UNTOUCHED; this is a pure post-processing shaper.
+  KNOWN LIMITATION: only functions with map-source (ahead) limit data;
+  car-state (dash-recognized) limits have no lookahead distance and still
+  step at the boundary, same as the pre-existing gas gate. PHASE-2
+  FALLBACK if on-road data shows residual lag insufficient: clamp the
+  model's OWN velocity plan (`v = np.minimum(v, ramped_target)`) before
+  `mpc.update()` in the base planner, since blended mode integrates v to
+  build x — one clamp would align v/x/a references instead of fighting
+  them. Deliberately NOT done yet (touches the MPC's reference
+  construction more directly; wait for real-drive data per this
+  project's own instrument-then-fix discipline).
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` (SP) —
+  `update_targets` routes `v_sla` through `self._sla_ramp.update(...)`
+  instead of `self.sla.output_v_target` directly. `SlaSpeedRamp(DT_MDL)`
+  instantiated in `__init__`.
+- `selfdrive/controls/lib/longitudinal_planner.py` (fork's own) — the SLA
+  pre-zone gas gate comment SUPERSEDES its own prior claim ("the MPC
+  cannot brake for the new zone before entering it" — v3.3.3 era): that
+  is now deliberately false by this user directive. Comment rewritten to
+  say so explicitly and explain how the gas gate (GATE_COAST_ACCEL=0.35,
+  throttle-only) and the new ramp (A_DECEL=1.0) compose without
+  conflict — the gate's tighter envelope simply engages closer to the
+  boundary, sequenced automatically by the different constants, no new
+  coordination code needed. Do NOT "fix" this comment back without
+  re-reading this section — the contradiction is intentional and
+  user-directed, not a leftover bug.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_resolver.py`
+  — same supersession note added where the early-switch removal is
+  documented; clarifies the RESOLVER's own output (`speed_limit_final`)
+  still flips exactly at the boundary (unchanged) — it's specifically
+  `v_cruise`, downstream in the ramp, that now anticipates.
+- `sunnypilot/selfdrive/controls/lib/long_v2/tests/test_sla_ramp.py` —
+  NEW (14 cases): inactive/no-next-zone passthrough, clean seed on
+  activation, envelope engagement + convergence to the boundary, never
+  exceeds current target, no predictive up-ramp (explicit regression
+  test for the design mistake review caught), rate-limited release both
+  directions, dropout hold + expiry, reset/reengage, standstill safety
+  (no division), non-finite input safety.
+- `selfdrive/ui/sunnypilot/onroad/long_status_dot.py` — NEW, always-on
+  (NOT dev-UI-gated) bottom-left status dot. gray = gas gating/coasting/
+  deactivated, red = braking at any rate (mirrors brake lights), green =
+  gas/acceleration at any extent. DISCRIMINATOR CORRECTION made during
+  review: the first draft used a fixed ±0.2 m/s^2 deadband around zero —
+  WRONG, because gas gating clamps commanded accel to roughly the
+  natural coast decel (`get_coast_accel()`, -0.3 m/s^2 flat, more
+  negative downhill) which sits OUTSIDE that deadband, misreporting the
+  exact case (gas gating) the dot exists to disambiguate as red braking.
+  Fixed: compares `actuators.accel` against the SAME pitch-aware coast
+  line the planner itself computes (one-line fit duplicated in the UI
+  file, not imported — decouples the UI from the control-loop module's
+  heavier import chain, same convention as `eps_limit.py`'s duplicated
+  Hyundai constants; update both together if the fit ever changes). Red
+  only when commanding decel BEYOND what releasing the throttle would
+  produce on the current grade (`accel < coast - 0.05`); green above a
+  small `+0.1` noise-rejection threshold; gray otherwise or when
+  `not longActive`. Classification factored into a pure `classify()`
+  function, manually verified against several pitch/accel combinations
+  (no dedicated test file — this repo's onroad UI modules import
+  `pyray`, the on-device raylib binding, unavailable off-device; matches
+  every other onroad renderer file, none of which have test coverage).
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — instantiates
+  `LongStatusDotRenderer`, rendered unconditionally (always-on, unlike
+  the developer-UI-gated elements) alongside the other onroad widgets.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.3.9"; new
+  markers (`class SlaSpeedRamp`, `class LongStatusDotRenderer`).
+- `FUNNYPILOT_VERSION` -> 3.3.9. Full import-light suite 155 green (17
+  pre-existing `test_physics.py` failures excluded — documented since
+  v3.3.3 as a test-only math mismatch, unrelated and untouched).
+
 ### v3.3.8 Changes (based on funnypilot-3.3.6; 3.3.7 skipped per user request)
 
 Lateral: the turn-in "grab torque / fail to hold it / re-bite" oscillation

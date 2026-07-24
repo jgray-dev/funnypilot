@@ -8,6 +8,7 @@ See the LICENSE.md file in the root directory for more details.
 from cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
+from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
@@ -22,6 +23,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.sla_ramp import SlaSpeedRamp
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -45,6 +47,7 @@ class LongitudinalPlannerSP:
     self._scc_vision_v2 = SCCVisionV2()
     self._scc_map_v2 = SCCMapV2()
     self._speed_governor = SpeedGovernor()
+    self._sla_ramp = SlaSpeedRamp(DT_MDL)
     self._fric = 0.8
 
   @property
@@ -92,7 +95,13 @@ class LongitudinalPlannerSP:
     # authority to slow the car; map alone cannot.
     v_scc_vision = self._scc_vision_v2.output_v_target
     v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active)
-    v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
+
+    # v3.3.9: predictive, mode-agnostic ramp toward SLA's zone target (see
+    # sla_ramp.py) — fixes SLA's predictive decel/accel not functioning under
+    # DEC/blended MPC mode. SLA's own zone/ratio state machine is untouched;
+    # this only shapes what reaches the speed governor.
+    v_sla = self._sla_ramp.update(self.sla.is_active, self.sla.effective_speed_limit_target,
+                                  self.sla.next_zone_target, self.resolver.distance_to_next_limit, v_ego)
 
     # Speed limit info for road cap logic
     road_type = ""

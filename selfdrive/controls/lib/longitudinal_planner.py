@@ -204,9 +204,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # limit zone, clamp max accel to the measured coast accel (same mechanism
     # as allow_throttle). THROTTLE-ONLY by construction: the braking floor is
     # untouched, so lead-follow braking is unaffected and the gate itself can
-    # coast the car but never brake it. The cruise target does not drop until
-    # the boundary (resolver no longer early-switches), so the MPC cannot
-    # brake for the new zone before entering it.
+    # coast the car but never brake it.
+    # v3.3.9 SUPERSEDES the v3.3.3-era assumption below this comment used to
+    # state ("the MPC cannot brake for the new zone before entering it"): the
+    # RESOLVER's posted speed_limit_final still flips exactly at the boundary
+    # (unchanged), but v_cruise ITSELF — what actually reaches the MPC — is
+    # now predictively ramped toward the upcoming zone's target before the
+    # boundary by SlaSpeedRamp (sunnypilot/.../long_v2/sla_ramp.py), a
+    # deliberate, user-directed change made because DEC's blended MPC mode
+    # barely responds to a stepped v_cruise (see sla_ramp.py's docstring for
+    # the full mechanism). This gas gate composes with that ramp rather than
+    # conflicting: its envelope is tighter (GATE_COAST_ACCEL=0.35 vs the
+    # ramp's 1.0 m/s^2 comfort budget), so it engages closer to the boundary,
+    # sequenced automatically by the different constants.
     if self.sla.gas_gate_active:
       accel_clip[1] = min(accel_clip[1], max(accel_coast, accel_clip[0]))
 

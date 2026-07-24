@@ -1,3 +1,73 @@
+FunnyPilot v3.3.9 (2026-07-24)
+========================
+New branch/version per updated policy (every change gets its own branch and
+version number from here on, cut from 3.3.8). Two independent changes,
+reviewed with a second model consult BEFORE implementation per explicit user
+direction: SLA's predictive decel/accel now actually works under DEC, and a
+new always-on longitudinal status dot.
+
+* fix(long): Speed Limit Assist's predictive deceleration/acceleration did
+  not work while Dynamic Experimental Control was active. ROOT CAUSE,
+  verified against the actual MPC cost-weight code before implementing:
+  DEC's blended MPC mode weights the model's own acceleration plan (5.0) 50x
+  more heavily than SLA's speed/position target (0.1 position, 0.2
+  velocity) — a STEPPED target (SLA flips exactly at the zone boundary,
+  per v3.3.3) gives those weak terms an adversarial reference to fight
+  rather than a gap to weakly close, so the car barely responds. 'acc'
+  mode's cruise-obstacle formulation (weight 3.0) doesn't have this
+  problem, which is why the same SLA logic works fine outside DEC.
+  NEW `SlaSpeedRamp` (`sunnypilot/selfdrive/controls/lib/long_v2/sla_ramp.py`):
+  a predictive, MODE-AGNOSTIC speed-domain shaper feeding the speed
+  governor upstream of the MPC, so it works regardless of which mode ends
+  up active (per explicit user direction — DEC's own mode heuristics are
+  left untouched). Constant-decel envelope (sqrt form, matching
+  scc_map_v2.py's existing pattern — standstill-safe, no division),
+  A_DECEL=1.0 m/s^2 / ARRIVAL_LEAD_T=2.0s (both already-validated fork
+  constants), converging to the next zone's target exactly at the
+  boundary. Deliberately NO predictive up-ramp for a faster upcoming zone
+  (raising the cap before the boundary would command overspeed in the
+  current zone and buys nothing in blended mode, which can only ever
+  restrain the model's plan) — the up-direction transition is handled
+  entirely by a post-boundary, per-frame release-rate limiter
+  (0.6 m/s^2). A 2.5s dropout hold covers the resolver's per-frame
+  zeroing of next-zone data during momentary map/GPS gaps. SLA's own
+  zone/ratio state machine is completely untouched — this is a pure
+  post-processing shaper reading its already-published properties.
+  SUPERSEDES the v3.3.3-era comment stating "the MPC cannot brake for the
+  new zone before entering it" — that statement is now deliberately false
+  by user direction; comments in longitudinal_planner.py and
+  speed_limit_resolver.py updated to say so explicitly. KNOWN LIMITATION:
+  only functions with map-source (ahead) limit data; car-state
+  (dash-recognized) limits still step at the boundary, same as the
+  pre-existing gas gate. Composes safely with that gas gate (tighter
+  envelope, engages closer to the boundary — sequenced automatically by
+  the different constants, no coordination needed). 14 new unit tests.
+* feat(ui): new always-on longitudinal status dot, bottom-left of the
+  onroad screen (`selfdrive/ui/sunnypilot/onroad/long_status_dot.py`):
+  gray = gas gating/coasting/deactivated, red = braking at any rate
+  (mirrors brake lights), green = gas/acceleration at any extent.
+  DISCRIMINATOR CORRECTION made during plan review: a fixed accel
+  deadband around zero does NOT work — gas gating clamps commanded
+  accel to roughly the natural coast decel (get_coast_accel(), -0.3
+  m/s^2 on flat ground, more negative downhill), which sits outside any
+  small fixed deadband and would misreport the gas-gating case as
+  braking — exactly the state the dot exists to disambiguate. Instead
+  compares actuators.accel against the SAME pitch-aware coast line the
+  planner itself uses (duplicated as a one-line fit, decoupling the UI
+  from the control-loop module's import chain — same convention as
+  eps_limit.py's duplicated Hyundai constants): red only when
+  commanding decel BEYOND what releasing the throttle would produce on
+  the current grade. Classification logic factored into a pure,
+  standalone function and manually verified against several pitch/accel
+  combinations (not unit-tested in the CI sense — this repo's onroad
+  UI files require the on-device pyray/raylib binding, unavailable in
+  this sandbox, matching every other onroad renderer file).
+* chore: FUNNYPILOT_VERSION -> 3.3.9; nav_webserver EXPECTED_VERSION ->
+  "3.3.9", new code markers (SlaSpeedRamp, LongStatusDotRenderer). Full
+  import-light suite 155 green (17 pre-existing, unrelated test_physics.py
+  failures excluded — documented since v3.3.3 as a test-only math
+  mismatch, untouched by this change).
+
 FunnyPilot v3.3.8 (2026-07-21, continued)
 ========================
 A real fix for the turn-in/railroad-track torque oscillation, plus a

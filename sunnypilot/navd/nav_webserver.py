@@ -39,7 +39,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.3.8"
+EXPECTED_VERSION = "3.3.9"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -77,6 +77,8 @@ _CODE_MARKERS = [
   ("class SuspensionBumpElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "bump/pitch-rate dev UI readout"),
   ("gate_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "SCC-M requires SCC-V confirm"),
   ("class BumpDamper", "/data/openpilot/selfdrive/controls/lib/bump_damper.py", "bump/weight-transfer error damper"),
+  ("class SlaSpeedRamp", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/sla_ramp.py", "SLA predictive DEC-mode ramp"),
+  ("class LongStatusDotRenderer", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/long_status_dot.py", "long status dot UI"),
   ("class AutoUpdater", "/data/openpilot/sunnypilot/auto_updater/manager.py", "offroad wifi auto-updater"),
 ]
 _CODE_CMD = "; ".join(
