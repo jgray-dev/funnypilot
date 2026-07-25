@@ -155,7 +155,14 @@ class VCruiseHelperSP:
 
     return False
 
-  def update_speed_limit_assist_v_cruise_non_pcm(self, CS: car.CarState | None = None) -> None:
+  # NOTE: CS is deliberately UNANNOTATED. `car.CarState` is a capnp
+  # _StructModule, not a Python type, so `car.CarState | None` raises
+  # TypeError while the class body is being evaluated at import time — which
+  # is exactly what made v3.4.0/v3.4.1 unbootable (manager died importing
+  # process_config -> ... -> cruise_ext, so the car sat at the comma splash).
+  # Plain `X: car.CarState` annotations elsewhere in this file are fine; it is
+  # only the `|` union operator that capnp's module objects don't support.
+  def update_speed_limit_assist_v_cruise_non_pcm(self, CS=None) -> None:
     # FunnyPilot: while SLA is active the cluster set speed IS the SLA target.
     # On ACTIVATION nothing is written — the arrow confirm adopts the set
     # speed exactly as it is (no jump). Only on a zone change while ALREADY

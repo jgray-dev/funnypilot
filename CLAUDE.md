@@ -67,7 +67,42 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
-### v3.4.1 Changes (based on funnypilot-3.4.0 — 3.4.0 DID NOT BOOT)
+### v3.4.2 Changes (based on funnypilot-3.4.1 — 3.4.0 AND 3.4.1 DID NOT BOOT)
+
+THE REAL ROOT CAUSE of the unbootable car, after 3.4.1 guessed wrong:
+
+    def update_speed_limit_assist_v_cruise_non_pcm(self, CS: car.CarState | None = None)
+    TypeError: unsupported operand type(s) for |: '_StructModule' and 'NoneType'
+
+RULE: **never put a capnp type in a `|` union.** `car.CarState`,
+`custom.X`, `log.X` are capnp _StructModule objects, not Python types, and
+`|` on them raises. Function PARAMETER annotations are evaluated when the
+`def` executes (i.e. at import), so this kills the module at import time —
+and cruise_ext sits on manager's startup path (manager -> process_config ->
+mapd_manager -> osm_map_data -> base_map_data -> selfdrive.car.cruise ->
+cruise_ext), so manager never started anything and the car sat on the comma
+splash. Plain `x: car.CarState` (no union) is FINE. Attribute annotations
+inside a method body (`self.CP: car.CarParams | None = None`, as in
+ui_state.py) are also fine — Python does not evaluate annotations for
+non-simple targets; verified by direct test, so do not "fix" those.
+
+CORRECTION to the v3.4.1 section below: it blamed cereal/custom.capnp for
+the failed boot. That was WRONG — the device log showed no build error,
+only this TypeError, and 3.4.1 kept the annotation so it failed the same
+way. The capnp revert + /dev/shm channel are kept (they work, avoid a
+rebuild, and were explicitly requested) but they were NOT the fix.
+
+- `sunnypilot/selfdrive/car/cruise_ext.py` — annotation removed; a comment
+  at the signature explains why it must stay unannotated.
+- `sunnypilot/selfdrive/car/tests/test_cruise_ext_imports.py` — NEW.
+  PROCESS LESSON: no test imported cruise_ext, so two consecutive releases
+  went out "163 green" and bricked the car both times. A module on the boot
+  path needs an import test, not just logic tests. Two guards here: a real
+  import (compiled-only deps stubbed) and a source scan for capnp-in-union.
+  Both verified to FAIL with the bad annotation reintroduced.
+- `FUNNYPILOT_VERSION` -> 3.4.2, EXPECTED_VERSION -> "3.4.2". Suite 163.
+
+### v3.4.1 Changes (based on funnypilot-3.4.0 — capnp revert; did NOT fix the boot, see 3.4.2)
 
 HARD-WON RULE, read before adding any cross-process field: **do not change
 `cereal/*.capnp` on this fork unless you intend a device rebuild.** v3.4.0

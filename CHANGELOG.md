@@ -1,3 +1,39 @@
+FunnyPilot v3.4.2 (2026-07-25)
+========================
+HOTFIX. This is the ACTUAL fix for the unbootable car. v3.4.0 AND v3.4.1
+both hang at the comma splash screen — do not flash either.
+
+* fix(boot): ONE type annotation was the whole problem:
+
+      def update_speed_limit_assist_v_cruise_non_pcm(self, CS: car.CarState | None = None)
+      TypeError: unsupported operand type(s) for |: '_StructModule' and 'NoneType'
+
+  `car.CarState` is a capnp _StructModule, not a Python type, so the `|`
+  union operator raises while the CLASS BODY is evaluated at import time.
+  That import is on manager's startup path (manager -> process_config ->
+  mapd_manager -> osm_map_data -> base_map_data -> selfdrive.car.cruise ->
+  cruise_ext), so manager died before starting a single process and the
+  device never left the splash screen. Fixed by dropping the annotation.
+* CORRECTION: the v3.4.1 notes blamed the `cereal/custom.capnp` change for
+  the failed boot. That was WRONG — the device log shows no build error at
+  all, just this TypeError. v3.4.1 removed the capnp fields but kept the
+  annotation, so it would have failed identically. The capnp revert and the
+  /dev/shm channel from 3.4.1 are KEPT anyway (they work, they avoid a
+  device rebuild, and they were an explicit request), but they were not the
+  cure and are not described as such anymore.
+* test: NEW `sunnypilot/selfdrive/car/tests/test_cruise_ext_imports.py`.
+  Nothing in the suite imported cruise_ext, which is why two consecutive
+  releases tested green and still bricked the car. Two guards: an actual
+  import of the module (compiled-only deps stubbed), and a source scan for
+  capnp types in `|` unions. Both were verified to FAIL when the bad
+  annotation is reintroduced, not just to pass now.
+* Swept the rest of the tree for the same pattern. The three other hits
+  (`ui_state.py`) are attribute annotations inside method bodies, which
+  Python never evaluates — confirmed harmless by direct test. Only function
+  PARAMETER annotations are evaluated at definition time.
+* chore: FUNNYPILOT_VERSION -> 3.4.2, EXPECTED_VERSION -> "3.4.2". Suite
+  163 green.
+
 FunnyPilot v3.4.1 (2026-07-25)
 ========================
 HOTFIX for v3.4.0, which would not boot — the car sat at the comma splash
