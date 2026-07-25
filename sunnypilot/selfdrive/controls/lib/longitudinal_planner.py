@@ -13,6 +13,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimen
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.sla_shm import write_sla_shm
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
@@ -181,10 +182,6 @@ class LongitudinalPlannerSP:
     resolver.speedLimitOffset = float(self.resolver.speed_limit_offset)
     resolver.distToSpeedLimit = float(self.resolver.distance)
     resolver.source = self.resolver.source
-    # v3.4.0: upcoming-zone info reaches cruise_ext so the set speed can be
-    # walked toward the next zone's target before the boundary
-    resolver.nextSpeedLimitFinal = float(self.resolver.next_speed_limit_final)
-    resolver.distToNextSpeedLimit = float(self.resolver.distance_to_next_limit)
     assist = speedLimit.assist
     assist.state = self.sla.state
     assist.enabled = self.sla.is_enabled
@@ -193,8 +190,14 @@ class LongitudinalPlannerSP:
     assist.aTarget = float(self.sla.output_a_target)
     assist.slaLocked = bool(self.sla.sla_locked)
     assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)
-    assist.gasGating = bool(self.sla.gas_gate_active)
-    assist.vCruiseTarget = float(self.sla.v_cruise_target)
+
+    # FunnyPilot v3.4.1: the SLA set-speed ramp target and gas-gate flag are
+    # published via /dev/shm instead of new capnp fields. v3.4.0 added them to
+    # custom.capnp, which forces a SCons rebuild of the compiled schema on the
+    # device — that rebuild is what left the car stuck at the boot logo. This
+    # fork is Python + raylib end to end for these paths, so a plain file needs
+    # no compilation at all (same pattern as controlsd's /dev/shm/lat_interp).
+    write_sla_shm(self.sla.v_cruise_target, self.sla.gas_gate_active)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

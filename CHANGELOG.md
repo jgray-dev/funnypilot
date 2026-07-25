@@ -1,3 +1,34 @@
+FunnyPilot v3.4.1 (2026-07-25)
+========================
+HOTFIX for v3.4.0, which would not boot — the car sat at the comma splash
+screen and restarting did not help. DO NOT FLASH 3.4.0.
+
+* fix(boot): v3.4.0 added four fields to `cereal/custom.capnp`. A .capnp
+  change makes SCons regenerate and recompile the schema on the device at
+  next boot; that build is what hung the boot. Nothing else in either
+  feature needs compiling — the whole path is Python (plannerd, card) plus
+  Python/raylib (UI). All four fields are REMOVED and `cereal/` is now
+  byte-identical to 3.3.8, so the existing prebuilt binaries stay valid and
+  there is nothing to rebuild.
+* The two values that genuinely had to cross a process boundary (SLA's
+  set-speed ramp target, plannerd -> card; and SLA's gas-gate flag,
+  plannerd -> UI) now travel over `/dev/shm/fp_sla` via the new
+  `sla_shm.py` — the same mechanism controlsd already uses for
+  `/dev/shm/lat_interp`, so it is this fork's established pattern rather
+  than a new one. Writes are atomic (temp file + os.replace) so a reader
+  can't see a torn line; every read is best-effort and falls back to
+  "no request" on a missing/garbage file, so a telemetry failure can never
+  affect control.
+* Behavior of both v3.4.0 features is otherwise UNCHANGED: SLA still walks
+  the real cruise set speed before a zone change (the thing that works
+  under DEC), and the status dot still reads `carOutput.actuatorsOutput.accel`,
+  the literal aReqValue sent to the car.
+* LESSON (recorded in CLAUDE.md): on this device, touching any .capnp is a
+  COMPILED change and risks an unbootable car. Prefer /dev/shm for
+  fork-internal cross-process values.
+* chore: FUNNYPILOT_VERSION -> 3.4.1, EXPECTED_VERSION -> "3.4.1". Suite
+  161 green; shm round-trip verified including garbage/missing-file paths.
+
 FunnyPilot v3.4.0 (2026-07-25)
 ========================
 Branched fresh from funnypilot-3.3.8. v3.3.9 is ABANDONED — both of its

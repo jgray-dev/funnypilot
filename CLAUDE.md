@@ -67,7 +67,42 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
-### v3.4.0 Changes (based on funnypilot-3.3.8; v3.3.9 ABANDONED)
+### v3.4.1 Changes (based on funnypilot-3.4.0 — 3.4.0 DID NOT BOOT)
+
+HARD-WON RULE, read before adding any cross-process field: **do not change
+`cereal/*.capnp` on this fork unless you intend a device rebuild.** v3.4.0
+added 4 fields to custom.capnp; that forces SCons to regenerate + recompile
+the schema at next boot, and the car hung on the comma splash screen,
+unrecoverable by restarting (SSH still worked — that is how it was fixed).
+Everything these features touch is Python (plannerd, card) or Python+raylib
+(UI), so there was never a reason to pay a compile.
+
+- `cereal/custom.capnp` — REVERTED to byte-identical with 3.3.8. Verified:
+  `git diff funnypilot-3.3.8 -- cereal/` is empty, and the full diff vs
+  3.3.8 contains only .py and .md files. Existing prebuilt binaries stay
+  valid; no rebuild is triggered.
+- `sunnypilot/.../speed_limit/sla_shm.py` — NEW. `/dev/shm/fp_sla`, one line
+  `"<v_cruise_target_mps>,<gas_gate 0|1>"`, written by plannerd at 20 Hz.
+  Carries the only two values that must cross a process boundary: the SLA
+  set-speed ramp target (plannerd -> card/cruise_ext) and SLA's gas-gate
+  flag (plannerd -> UI dot). Same pattern as controlsd's /dev/shm/lat_interp.
+  Writes are atomic (tempfile + os.replace) so readers never see a torn
+  line; reads are best-effort and return (0.0, False) = "no request" on
+  missing/garbage input, so this channel can never break control.
+- `sunnypilot/.../longitudinal_planner.py` (SP) — publishes via
+  `write_sla_shm(...)` instead of the removed capnp fields.
+- `sunnypilot/selfdrive/car/cruise_ext.py` — reads the ramp target with
+  `read_sla_shm()` inside `update_speed_limit_assist` (LP_SP rate, NOT per
+  100 Hz control frame).
+- `selfdrive/ui/sunnypilot/onroad/long_status_dot.py` — SCC-V/SCC-M gate
+  flags still come from capnp (they already existed); SLA's comes from the
+  shm file.
+- All v3.4.0 BEHAVIOR is unchanged — see the v3.4.0 section below for the
+  two post-mortems that still apply (wrong-layer SLA ramp, pitch-derived
+  status dot). `FUNNYPILOT_VERSION` -> 3.4.1, EXPECTED_VERSION -> "3.4.1".
+  Suite 161 green.
+
+### v3.4.0 Changes (based on funnypilot-3.3.8; v3.3.9 ABANDONED — and 3.4.0 itself did not boot, see 3.4.1)
 
 v3.3.9 IS DEAD — do not flash it, do not carry its code forward. Both of
 its features were built on wrong premises and were re-done from scratch

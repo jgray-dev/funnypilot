@@ -32,6 +32,7 @@ approach is never masked.
 import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.sla_shm import read_sla_shm
 from openpilot.system.ui.widgets import Widget
 
 _RADIUS = 14
@@ -81,13 +82,17 @@ class LongStatusDotRenderer(Widget):
     accel = sm['carOutput'].actuatorsOutput.accel
     long_active = sm['carControl'].longActive
 
+    # SCC-V/SCC-M gate flags are already in the schema; SLA's comes over
+    # /dev/shm (v3.4.1 — see sla_shm.py; adding it to capnp is what forced the
+    # device rebuild that broke the 3.4.0 boot).
     gas_gating = False
     try:
-      lp_sp = sm['longitudinalPlanSP']
-      scc = lp_sp.smartCruiseControl
-      gas_gating = bool(lp_sp.speedLimit.assist.gasGating or scc.vision.gasGating or scc.map.gasGating)
+      scc = sm['longitudinalPlanSP'].smartCruiseControl
+      gas_gating = bool(scc.vision.gasGating or scc.map.gasGating)
     except Exception:
       pass
+    if not gas_gating:
+      _, gas_gating = read_sla_shm()
 
     self._color = _COLOR_BY_STATE[classify(long_active, accel, gas_gating)]
 

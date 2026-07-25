@@ -13,6 +13,7 @@ from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import ACTIVE_STATES as SLA_ACTIVE_STATES
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.sla_shm import read_sla_shm
 
 ButtonType = car.CarState.ButtonEvent.Type
 SpeedLimitAssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
@@ -123,7 +124,10 @@ class VCruiseHelperSP:
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
     self.sla_ratio = LP_SP.speedLimit.assist.slaDynamicOffset
-    self.sla_v_cruise_target = LP_SP.speedLimit.assist.vCruiseTarget
+    # v3.4.1: ramp target comes over /dev/shm, not capnp (see sla_shm.py — a
+    # schema change forces a device rebuild, which is what broke the 3.4.0 boot).
+    # Sampled here (LP_SP rate) rather than per 100 Hz control frame.
+    self.sla_v_cruise_target, _ = read_sla_shm()
     self.sla_req_plus, self.sla_req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
                                                                    self.speed_limit_final_last, is_metric)
 

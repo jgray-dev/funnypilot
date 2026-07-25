@@ -264,8 +264,6 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       speedLimitFinalLast @6 :Float32;
       speedLimitValid @7 :Bool;
       speedLimitLastValid @8 :Bool;
-      nextSpeedLimitFinal @9 :Float32;   # FunnyPilot v3.4.0: upcoming zone limit + offset (m/s), 0 if unknown
-      distToNextSpeedLimit @10 :Float32; # FunnyPilot v3.4.0: distance to the upcoming zone boundary (m)
     }
 
     struct Assist {
@@ -276,8 +274,6 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
       aTarget @4 :Float32;
       slaLocked @5 :Bool;           # FunnyPilot: locked into dynamic SLA mode
       slaDynamicOffset @6 :Float32; # FunnyPilot: dynamic offset ratio (e.g. 0.20 = +20% above limit)
-      gasGating @7 :Bool;           # FunnyPilot v3.4.0: pre-zone gas gate active (throttle held off)
-      vCruiseTarget @8 :Float32;    # FunnyPilot v3.4.0: set speed the cluster should show now (m/s), 0 = no request
     }
 
     enum Source {
