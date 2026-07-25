@@ -181,6 +181,10 @@ class LongitudinalPlannerSP:
     resolver.speedLimitOffset = float(self.resolver.speed_limit_offset)
     resolver.distToSpeedLimit = float(self.resolver.distance)
     resolver.source = self.resolver.source
+    # v3.4.0: upcoming-zone info reaches cruise_ext so the set speed can be
+    # walked toward the next zone's target before the boundary
+    resolver.nextSpeedLimitFinal = float(self.resolver.next_speed_limit_final)
+    resolver.distToNextSpeedLimit = float(self.resolver.distance_to_next_limit)
     assist = speedLimit.assist
     assist.state = self.sla.state
     assist.enabled = self.sla.is_enabled
@@ -189,6 +193,8 @@ class LongitudinalPlannerSP:
     assist.aTarget = float(self.sla.output_a_target)
     assist.slaLocked = bool(self.sla.sla_locked)
     assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)
+    assist.gasGating = bool(self.sla.gas_gate_active)
+    assist.vCruiseTarget = float(self.sla.v_cruise_target)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

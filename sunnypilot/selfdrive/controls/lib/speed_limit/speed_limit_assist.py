@@ -87,6 +87,17 @@ GATE_COAST_ACCEL = 0.35   # m/s^2 assumed natural coast decel (drag + engine bra
 GATE_TIME_BUFFER = 1.5    # s — aim to reach the new target this early
 GATE_MIN_OVER = 0.3       # m/s — no gate when already at/under the upcoming target
 
+# FunnyPilot v3.4.0 — predictive SET SPEED ramp (see _update_cruise_ramp).
+# The v3.3.9 attempt shaped an internal MPC cap instead of the set speed and
+# did nothing under DEC; this ramp instead walks the REAL cruise set speed
+# (cruise_ext writes it), exactly as if the driver were tapping +/- on the
+# wheel, so every downstream consumer — acc-mode cruise obstacle, blended-mode
+# position cap, and the cluster display — honors it identically.
+RAMP_DECEL = 0.8          # m/s^2 target decel when walking the set speed DOWN into a slower zone
+RAMP_ARRIVE_EARLY_T = 1.0  # s — reach the new target this early (small; the boundary is the deadline)
+RAMP_UP_DIST = 90.0       # m — window over which the set speed is walked UP into a faster zone
+RAMP_MAX_RATE = 4.0       # m/s per second — hard cap on set-speed slew in either direction
+
 
 class SpeedLimitAssist:
   def __init__(self, CP: car.CarParams, CP_SP: custom.CarParamsSP, params=None):
@@ -111,6 +122,14 @@ class SpeedLimitAssist:
     self.a_ego = 0.
     self.v_offset = 0.
     self.gas_gate_active = False
+
+    # v3.4.0 predictive set-speed ramp state. v_cruise_target is what the
+    # CLUSTER should read right now; cruise_ext follows it. _commanded_conv is
+    # the rounded display value we last asked for, used to recognize our OWN
+    # cluster changes so they don't re-derive the ratio (see update_state_machine).
+    self.v_cruise_target = 0.
+    self._commanded_conv = 0
+    self._prev_commanded_conv = 0
 
     self.v_cruise_cluster = 0.
     self.v_cruise_cluster_conv = 0
@@ -280,7 +299,10 @@ class SpeedLimitAssist:
       elif self.state in ACTIVE_STATES:
         # Manual adjustment (or our own zone-change snap, which is
         # idempotent): the cluster set speed defines the ratio.
-        if self.v_cruise_cluster_changed:
+        # v3.4.0: EXCEPT when the change is the predictive ramp's own command —
+        # mid-approach the cluster sits between zones, so re-deriving there
+        # would wipe the driver's carried offset.
+        if self.v_cruise_cluster_changed and not self._cluster_change_is_ours():
           self._set_ratio_from_cluster()
         self.state = self._active_or_adapting()
         self._clear_releases()  # presses while active are plain speed adjustments
@@ -335,6 +357,62 @@ class SpeedLimitAssist:
     if self._next_distance <= coast_dist + next_target * GATE_TIME_BUFFER:
       self.gas_gate_active = True
 
+  # ---------- predictive set-speed ramp (v3.4.0) ----------
+
+  def _update_cruise_ramp(self) -> None:
+    """Walk the SET SPEED toward the upcoming zone's target before the boundary.
+
+    This is deliberately the set speed and not an internal planner cap: it is
+    the one quantity the whole longitudinal stack agrees on regardless of
+    which MPC mode is active. DEC flipping between 'acc' and 'blended' cannot
+    make this stop working, because in acc mode the set speed is the cruise
+    obstacle and in blended mode it is the position cap — and the driver sees
+    the number move on the cluster either way, like taps on the wheel.
+
+    Down into a slower zone: constant-decel envelope (same sqrt form the map
+    curve controller uses — distance-based, so it needs no v_ego division and
+    is standstill-safe), converging on the new target at the boundary.
+    Up into a faster zone: linear over the last RAMP_UP_DIST metres. This one
+    DOES raise the set speed slightly before the sign — that is the explicit
+    intent ("increase the max speed when approaching a higher speed limit"),
+    and the window is kept short so it reads as a smooth blend into the new
+    zone rather than an early overspeed.
+    """
+    if not self.is_active or self._base_limit <= 0:
+      self.v_cruise_target = 0.
+      return
+
+    current_target = self.effective_speed_limit_target
+    target = current_target
+
+    next_target = self.next_zone_target
+    d = self._next_distance
+    if next_target > 0 and d > 0:
+      if next_target < current_target:
+        d_eff = max(0., d - next_target * RAMP_ARRIVE_EARLY_T)
+        envelope = (next_target ** 2 + 2. * RAMP_DECEL * d_eff) ** 0.5
+        target = min(current_target, envelope)
+      elif next_target > current_target:
+        blend = max(0., min(1., 1. - d / RAMP_UP_DIST))
+        target = current_target + (next_target - current_target) * blend
+
+    # slew cap so the displayed set speed can never jump, whatever the inputs do
+    if self.v_cruise_target > 0.:
+      max_step = RAMP_MAX_RATE * DT_MDL
+      target = min(max(target, self.v_cruise_target - max_step), self.v_cruise_target + max_step)
+
+    self.v_cruise_target = target
+
+  def _cluster_change_is_ours(self) -> bool:
+    """True when this frame's cluster change is the ramp's own last command.
+
+    Without this the ratio would be re-derived from our own ramped set speed
+    mid-approach (the cluster is then BETWEEN zones, not at limit*(1+ratio)),
+    silently collapsing the driver's offset. Genuine button presses land on a
+    different value and re-derive normally.
+    """
+    return self.v_cruise_cluster_conv in (self._commanded_conv, self._prev_commanded_conv)
+
   # ---------- events ----------
 
   def update_events(self, events_sp) -> None:
@@ -385,7 +463,13 @@ class SpeedLimitAssist:
     self.is_enabled, self.is_active = self.update_state_machine()
 
     self._update_gas_gate()
+    self._update_cruise_ramp()
     self.update_events(events_sp)
+
+    # remember what display value the ramp is asking for, so next frame's
+    # cluster change can be recognized as ours (see _cluster_change_is_ours)
+    self._prev_commanded_conv = self._commanded_conv
+    self._commanded_conv = round(self.v_cruise_target * speed_conv) if self.v_cruise_target > 0 else 0
 
     self.long_enabled_prev = self.long_enabled
     self._had_speed_limit = self._has_speed_limit

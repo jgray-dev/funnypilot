@@ -1,3 +1,70 @@
+FunnyPilot v3.4.0 (2026-07-25)
+========================
+Branched fresh from funnypilot-3.3.8. v3.3.9 is ABANDONED — both of its
+features were built on wrong premises (details below) and are not carried
+forward. Do not flash 3.3.9.
+
+* fix(long): SLA predictive decel/accel now works under DEC, by moving the
+  ACTUAL CRUISE SET SPEED — i.e. doing exactly what the driver would do
+  tapping +/- on the wheel — instead of shaping an internal planner target.
+  WHY v3.3.9 FAILED: it added a `SlaSpeedRamp` that pre-ramped the
+  `v_cruise` value fed to the MPC. In DEC's blended mode that value is only
+  a weakly-weighted position cap (0.1) competing with the model's own
+  acceleration plan (5.0), so shaping it changed almost nothing — the same
+  root cause the ramp was meant to fix. The set speed, by contrast, is the
+  one quantity EVERY mode honors identically: in acc mode it is the cruise
+  obstacle, in blended mode it is the position cap, and it is what the
+  cluster displays. Moving it cannot be ignored by whichever mode DEC
+  happens to pick.
+  `SpeedLimitAssist._update_cruise_ramp` now publishes `vCruiseTarget` —
+  the set speed the cluster should read right now — and
+  `cruise_ext.update_speed_limit_assist_v_cruise_non_pcm` follows it in
+  whole display units. Down into a slower zone: constant-decel envelope
+  (RAMP_DECEL = 0.8 m/s^2, sqrt/distance form, standstill-safe), converging
+  on the new target at the boundary. Up into a faster zone: linear over the
+  last RAMP_UP_DIST = 90 m, so the set speed blends up into the new zone as
+  requested. Slew-capped at RAMP_MAX_RATE = 4 m/s^2-equivalent so the
+  displayed number can never jump.
+  LOAD-BEARING GUARD: SLA re-derives the driver's carried offset ratio from
+  any cluster set-speed change. Mid-approach the cluster sits BETWEEN zones,
+  so re-deriving there would silently wipe the offset (a +20% carried
+  preference would collapse). `_cluster_change_is_ours()` recognizes the
+  ramp's own commands and suppresses re-derivation for them only; genuine
+  button presses still set the ratio exactly as before, and the boundary
+  snap stays idempotent. Directly unit-tested (3 cases).
+  cruise_ext also holds the ramp for ~1 s after any cruise button event, so
+  a driver adjustment reaches SLA instead of being overwritten next frame.
+  KNOWN LIMITATION (unchanged from the gas gate): needs map-source ahead
+  data; car-state/dash-recognized limits have no lookahead distance and
+  still change at the boundary.
+* feat(ui): longitudinal status dot, bottom-left, always on. gray = neither
+  gas nor brakes commanded (incl. gas gating and long control off), red =
+  deceleration commanded at any rate, green = acceleration commanded at any
+  extent.
+  WHY v3.3.9 FAILED: it compared the commanded accel against a
+  PITCH-DERIVED coast estimate (`get_coast_accel`) to decide what counted
+  as braking, making the dot a function of IMU-inferred road grade — the
+  "acceleration sensing" this readout was explicitly supposed to avoid.
+  Now it reads `carOutput.actuatorsOutput.accel`, which for this car is the
+  literal value the carcontroller packs into SCC12's `aReqValue` (see
+  `new_actuators.accel = self.tuning.actual_accel` in hyundai
+  carcontroller.py) — the last software layer between openpilot and the
+  car, no estimate and no measurement anywhere in the decision. Gas gating
+  reports gray via the control code's OWN published flags (SLA's pre-zone
+  gate, now published as `assist.gasGating`, plus the existing SCC-V/SCC-M
+  gate flags) rather than by trying to recognize a coast-shaped number;
+  firm commanded braking still overrides a gate flag so a real brake
+  application is never masked. Classification factored into a pure
+  `classify()` and unit-tested (9 cases), including a regression guard that
+  its inputs contain no pitch/measured-accel term.
+* cereal: `SpeedLimit.Resolver` gains `nextSpeedLimitFinal @9` /
+  `distToNextSpeedLimit @10`; `SpeedLimit.Assist` gains `gasGating @7` /
+  `vCruiseTarget @8`.
+* chore: FUNNYPILOT_VERSION -> 3.4.0; nav_webserver EXPECTED_VERSION ->
+  "3.4.0" + markers for the ramp and the dot. Full import-light suite 161
+  green (pre-existing, unrelated test_physics.py failures excluded as
+  documented since v3.3.3).
+
 FunnyPilot v3.3.8 (2026-07-21, continued)
 ========================
 A real fix for the turn-in/railroad-track torque oscillation, plus a

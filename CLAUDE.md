@@ -67,6 +67,94 @@ ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.4.0 Changes (based on funnypilot-3.3.8; v3.3.9 ABANDONED)
+
+v3.3.9 IS DEAD — do not flash it, do not carry its code forward. Both of
+its features were built on wrong premises and were re-done from scratch
+here, branching from 3.3.8. Its two post-mortems are the most valuable
+part of this section; read them before touching either feature.
+
+POST-MORTEM 1 — SLA under DEC. v3.3.9 added `long_v2/sla_ramp.py`
+(`SlaSpeedRamp`), which pre-ramped the `v_cruise` value handed to the MPC.
+That was the WRONG LAYER: in DEC's blended mode `v_cruise` enters only as a
+position cap weighted 0.1 against the model's own accel plan at 5.0, so
+shaping it changed almost nothing — the exact root cause it was written to
+fix. The correct layer is the ACTUAL CRUISE SET SPEED, which every mode
+honors identically (acc: cruise obstacle; blended: position cap; plus it is
+what the cluster shows). LESSON: when a value is weakly weighted inside the
+solver, shaping it more smoothly does not make it matter more — move the
+quantity that the whole stack already agrees on.
+
+POST-MORTEM 2 — the status dot. v3.3.9 read the commanded accel but then
+compared it against `get_coast_accel(pitch)`, an IMU-derived road-grade
+estimate, to decide "braking". That made a command-layer readout into a
+sensing-layer one — precisely what it was supposed to avoid. LESSON: if the
+requirement is "show me what we told the car", the decision must contain no
+estimated/derived physical quantity at all.
+
+- `sunnypilot/.../speed_limit/speed_limit_assist.py` — NEW
+  `_update_cruise_ramp()` (v3.4.0 marker = `_update_cruise_ramp` grep
+  target). Publishes `v_cruise_target`: the set speed the CLUSTER should
+  read right now. Down into a slower zone, constant-decel envelope
+  `sqrt(next^2 + 2*RAMP_DECEL*d_eff)` (RAMP_DECEL 0.8, distance-based so
+  there is no v_ego division / standstill blowup), converging on the new
+  target at the boundary. Up into a faster zone, linear over the last
+  RAMP_UP_DIST (90 m) — this DOES raise the set speed slightly before the
+  sign, which is the explicit user request ("increase the max speed when
+  approaching a higher speed limit"); the window is deliberately short.
+  Slew-capped by RAMP_MAX_RATE (4.0) so the displayed number never jumps.
+  LOAD-BEARING: `_cluster_change_is_ours()` + `_commanded_conv` /
+  `_prev_commanded_conv`. SLA re-derives the driver's carried offset ratio
+  from ANY cluster change (`update_state_machine`); mid-approach the
+  cluster sits BETWEEN zones, so re-deriving there would silently collapse
+  a carried +20% to whatever the ramp is passing through. The guard
+  suppresses re-derivation ONLY for values the ramp itself commanded (one
+  frame of history covers the plannerd->card->carState round trip). Genuine
+  button presses land elsewhere and re-derive normally; the boundary snap
+  is still idempotent. Unit-tested directly (TestRatioPreservedDuringRamp).
+  SLA's zone/ratio state machine is otherwise UNTOUCHED.
+- `sunnypilot/selfdrive/car/cruise_ext.py` —
+  `update_speed_limit_assist_v_cruise_non_pcm(CS)` (signature gained CS)
+  now, in addition to the existing boundary snap, follows
+  `assist.vCruiseTarget` every frame while SLA is active, writing
+  `v_cruise_kph` in whole display units — i.e. mimicking cruise button
+  taps. `_ramp_hold_frames` pauses the ramp ~1 s after ANY cruise button
+  event so the driver's own adjustment survives long enough for SLA to see
+  it and re-derive the ratio (without this the ramp would overwrite the
+  press on the very next 100 Hz frame and the press would be lost).
+- `selfdrive/car/cruise.py` — call site passes `CS`.
+- `sunnypilot/.../longitudinal_planner.py` (SP) — publishes the four new
+  capnp fields.
+- `cereal/custom.capnp` — `SpeedLimit.Resolver` += `nextSpeedLimitFinal @9`,
+  `distToNextSpeedLimit @10` (upcoming-zone info must reach cruise_ext, in
+  the card process, to drive the ramp); `SpeedLimit.Assist` +=
+  `gasGating @7` (SLA's pre-zone gate, previously internal-only — the
+  status dot needs it), `vCruiseTarget @8`.
+- `selfdrive/ui/sunnypilot/onroad/long_status_dot.py` — NEW, always-on
+  (NOT dev-UI-gated) bottom-left dot. Reads
+  `carOutput.actuatorsOutput.accel` — for this car the literal `aReqValue`
+  packed into SCC12 (hyundai carcontroller: `new_actuators.accel =
+  self.tuning.actual_accel`), i.e. the last software layer before the car.
+  gray = neither commanded / long inactive / gas gating, red = any
+  commanded decel, green = any commanded accel. Gas gating -> gray comes
+  from the controllers' OWN published booleans (SLA `assist.gasGating`,
+  SCC-V/SCC-M `gasGating`), never from recognizing a coast-shaped value;
+  `_BRAKE_FIRM` (-0.35) makes real braking win over a gate flag so a brake
+  application during an approach is never masked gray. Decision logic is
+  the pure `classify(long_active, accel, gas_gating)`.
+- `selfdrive/ui/sunnypilot/onroad/tests/test_long_status_dot.py` — NEW (9
+  cases), loads `classify()` with pyray/ui_state stubbed (onroad modules
+  can't import off-device). Includes a signature regression guard that
+  classify takes NO pitch/measured-accel argument — the v3.3.9 mistake.
+- `sunnypilot/.../speed_limit/tests/test_sla_cruise_ramp.py` — NEW (11
+  cases), reuses test_speed_limit_assist.py's import-light harness:
+  envelope walks down / never exceeds the current zone, up-ramp engages
+  only inside the window and never overshoots, slew bound under an
+  adversarial late-appearing zone, and the three ratio-preservation cases.
+- `sunnypilot/navd/nav_webserver.py` — EXPECTED_VERSION -> "3.4.0"; new
+  markers (`_update_cruise_ramp`, `class LongStatusDotRenderer`).
+- `FUNNYPILOT_VERSION` -> 3.4.0. Full import-light suite 161 green.
+
 ### v3.3.8 Changes (based on funnypilot-3.3.6; 3.3.7 skipped per user request)
 
 Lateral: the turn-in "grab torque / fail to hold it / re-bite" oscillation

@@ -64,6 +64,14 @@ class VCruiseHelperSP:
     self.sla_ratio = 0.  # FunnyPilot: dynamic offset ratio carried between zones
     self.sla_req_plus = False   # FunnyPilot v3.3.3: preActive arrow direction
     self.sla_req_minus = False
+    # FunnyPilot v3.4.0: predictive set-speed ramp. sla_v_cruise_target is the
+    # set speed SLA wants the cluster to read right now (0 = no request); we
+    # follow it in whole display units, i.e. exactly like tapping +/- on the
+    # wheel. _ramp_hold_frames pauses the ramp briefly after a real button
+    # press so the driver's own adjustment reaches SLA (which re-derives the
+    # offset ratio from it) instead of being overwritten on the next frame.
+    self.sla_v_cruise_target = 0.
+    self._ramp_hold_frames = 0
 
   def read_custom_set_speed_params(self) -> None:
     self.custom_acc_enabled = self.params.get_bool("CustomAccIncrementsEnabled")
@@ -115,6 +123,7 @@ class VCruiseHelperSP:
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
     self.sla_ratio = LP_SP.speedLimit.assist.slaDynamicOffset
+    self.sla_v_cruise_target = LP_SP.speedLimit.assist.vCruiseTarget
     self.sla_req_plus, self.sla_req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
                                                                    self.speed_limit_final_last, is_metric)
 
@@ -142,16 +151,34 @@ class VCruiseHelperSP:
 
     return False
 
-  def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
+  def update_speed_limit_assist_v_cruise_non_pcm(self, CS: car.CarState | None = None) -> None:
     # FunnyPilot: while SLA is active the cluster set speed IS the SLA target.
     # On ACTIVATION nothing is written — the arrow confirm adopts the set
     # speed exactly as it is (no jump). Only on a zone change while ALREADY
     # active does the ratio carry into the new zone: set speed :=
     # new_limit * (1 + ratio). The SLA state machine re-derives the ratio
     # from this exact value, so the snap is idempotent.
-    if (self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES and
-            self.update_speed_limit_final_last_changed):
+    sla_active = self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES
+
+    if sla_active and self.update_speed_limit_final_last_changed:
       target_kph = self.speed_limit_final_last_kph * (1.0 + self.sla_ratio)
+      self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
+
+    # FunnyPilot v3.4.0: predictive set-speed ramp. Between zone changes,
+    # follow SLA's ramped target (speed_limit_assist._update_cruise_ramp) so
+    # the SET SPEED itself walks down before a slower zone and up into a
+    # faster one — the same thing the driver would do with the cruise
+    # buttons. This is why it works under DEC: nothing here depends on which
+    # MPC mode is running, only on the set speed every mode already honors.
+    # The boundary snap above remains the final authority and is idempotent
+    # with the ramp (the ramp has already landed on that value by then).
+    if CS is not None and any(b.pressed for b in CS.buttonEvents):
+      self._ramp_hold_frames = 100  # ~1 s at the 100 Hz card rate
+
+    if self._ramp_hold_frames > 0:
+      self._ramp_hold_frames -= 1
+    elif sla_active and self.sla_v_cruise_target > 0.:
+      target_kph = self.sla_v_cruise_target * CV.MS_TO_KPH
       self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
     self.prev_sla_state = self.sla_state
