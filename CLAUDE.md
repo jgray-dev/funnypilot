@@ -7,40 +7,6 @@
 ssh comma@192.168.86.31
 ```
 
-**Remote / off-network (Tailscale VPN — works from anywhere):**
-```bash
-ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock nc %h %p" comma@100.93.118.118
-```
-Device Tailscale IP: `100.93.118.118` (hostname: `comma-740ff8eb`)
-Tailscale account: `nohaxjustdoge@`
-
-**Dev server Tailscale** runs as a persistent systemd user service (no root needed):
-```bash
-systemctl --user status tailscaled   # check status
-systemctl --user restart tailscaled  # restart if needed
-/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock status
-```
-State: `/home/astro/.local/share/tailscale/` — persists across restarts.
-Linger enabled: service auto-starts on boot even without active login session.
-
-**Device Tailscale** runs via systemd (kernel TUN mode) with state in `/data/tailscale/state/`
-(survives AGNOS updates). Managed by `/etc/systemd/system/tailscaled.service.d/state.conf`.
-
-**If device Tailscale stops working after an AGNOS update:**
-```bash
-ssh comma@192.168.86.31  # home network first
-sudo systemctl daemon-reload
-sudo systemctl restart tailscaled
-# If systemd service is gone (AGNOS wiped /etc):
-sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
-sudo mkdir -p /run/tailscale
-sudo /data/tailscale/bin/tailscaled \
-  --state=/data/tailscale/state/tailscaled.state \
-  --socket=/run/tailscale/tailscaled.sock --port=41641 &
-sleep 3
-sudo /data/tailscale/bin/tailscale --socket=/run/tailscale/tailscaled.sock up --ssh=false
-```
-
 ## Git Remotes
 
 - `funnypilot` - git@github.com:jgray-dev/funnypilot.git (push here)
@@ -57,15 +23,95 @@ Additionally, edit CLAUDE.md Key Files section to describe what changes and logi
 ```bash
 BRANCH=$(git branch --show-current)
 git push funnypilot "$BRANCH:$BRANCH" --force
-ssh -o ProxyCommand="/home/astro/bin/tailscale --socket=/home/astro/.local/share/tailscale/tailscaled.sock nc %h %p" comma@100.93.118.118 \
+ssh comma@192.168.86.31 \
   "cd /data/openpilot && git fetch funnypilot && git checkout $BRANCH && git reset --hard funnypilot/$BRANCH && sudo systemctl restart comma"
 ```
+
+**Then VERIFY — never trust the exit code alone (see v3.4.3 post-mortem):**
+```bash
+ssh comma@192.168.86.31 \
+  "cat /data/openpilot/FUNNYPILOT_VERSION; cd /data/openpilot && git rev-parse --short=9 HEAD; \
+   sleep 25; ss -ltn | grep 8888 || echo '8888 DOWN = manager dead'"
+```
+The version, the hash, AND port 8888 must all be right. A flash that "ran" proves nothing.
+
+**If `git fetch` on the device errors with `Permission denied` on `.git/logs/refs/...`:**
+root-owned files inside `.git` (left by a `sudo git` or a root-run flash) block
+checkout — `.git/HEAD` itself becomes unwritable, so the `&&` chain dies silently
+before `reset --hard`. Fix:
+```bash
+ssh comma@192.168.86.31 "sudo chown -R comma:comma /data/openpilot/.git"
+```
+Never run `git` on the device under `sudo`. Also note `cmd | tail` returns *tail's*
+exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 **Push scripts:** Only create a `PUSH<version>.sh` if the user explicitly requests it (e.g. device is offline and a manual-deploy script is needed). Do not create them by default.
 
 ## Key Files
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
+
+### v3.4.3 Changes (based on funnypilot-3.4.2)
+
+Recovery + hardening. 3.4.2's annotation fix was correct but had never run on
+the device; this branch verifies it on-road-ready, repairs the deploy path,
+and generalizes the boot guard. Control behavior is UNCHANGED from 3.4.2 —
+the SLA predictive set-speed ramp and the long status dot carry forward
+byte-identical.
+
+DEPLOY ROOT CAUSE (the reason flashes "didn't apply"): 1194 files inside
+`/data/openpilot/.git` were owned by root, including `.git/HEAD`. Fetch over
+HTTPS failed with `Permission denied` on `.git/logs/refs/...` and checkout
+could not rewrite HEAD, so the `&&` deploy chain aborted before `reset --hard`
+and the reboot — leaving old code running behind a command that looked
+successful. NOT a credentials problem (the fetch remote is public HTTPS).
+Fix: `sudo chown -R comma:comma /data/openpilot/.git`; never run `git` under
+`sudo` on the device. Also: `git ... | tail` returns TAIL's exit code, so any
+piped git check reports success unconditionally — use `${PIPESTATUS[0]}`.
+
+- `sunnypilot/tests/test_capnp_annotations.py` — NEW, repo-wide AST guard
+  (16 cases). Walks every .py file and flags capnp types (`car`/`custom`/
+  `log`/`legacy`) used as a DIRECT operand of a `|` union, but ONLY in
+  positions Python actually evaluates. THE RULE, verified empirically —
+  parameter annotations RAISE, return annotations RAISE, **class-body
+  annotated assignments RAISE** (this last form is a new finding; the
+  previously recorded rule only mentioned parameters), while
+  `self.CP: car.CarParams | None = None` in a method body and a plain local
+  annotation are BOTH SAFE (not evaluated). DO NOT convert this to a grep:
+  the safe forms are legitimately used in `selfdrive/ui/ui_state.py` and
+  `selfdrive/ui/sunnypilot/ui_state.py`, and a text matcher would demand
+  bogus "fixes" there. ALSO SAFE and deliberately not flagged: subscripted
+  forms like `list[custom.X] | None` — `list[...]` builds a
+  `types.GenericAlias` which DOES implement `__or__`, so the capnp object
+  never gets `|` applied. `sunnypilot/models/fetcher.py:126` uses exactly
+  that and is CORRECT; an early draft of the detector flagged it and the
+  false positive was confirmed empirically before touching anything.
+  Includes two self-checks so the scan can never pass vacuously.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/sla_shm.py`,
+  `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py`,
+  `sunnypilot/selfdrive/car/cruise_ext.py`,
+  `selfdrive/ui/sunnypilot/onroad/long_status_dot.py` — comment/docstring
+  CORRECTION only, no logic change. These claimed the `cereal/custom.capnp`
+  change caused the v3.4.0 boot failure. It did not — the annotation did.
+  The /dev/shm approach STAYS (no schema changes = no device rebuild is
+  right on its own merits); only the stated justification changed.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.3"; two new
+  `_CODE_MARKERS` rows (`def write_sla_shm` in sla_shm.py, and
+  `deliberately UNANNOTATED` in cruise_ext.py so the boot fix itself is
+  verifiable from the Verify page).
+- `.gitignore` — `.claude/` entry removed (Claude Code config now tracked).
+- `CLAUDE.md` — all VPN/proxy remote-access documentation removed (no longer
+  used); SSH Access is now just the home-network line, and Deploying to Device
+  uses plain `ssh comma@192.168.86.31` plus a mandatory verification block.
+- `FUNNYPILOT_VERSION` -> 3.4.3.
+
+TESTING NOTE (off-device): use Python **3.11**, not the default 3.8 — the repo
+uses PEP 585 generics and 3.8 fails collection with `'type' object is not
+subscriptable`. Deps needed for the import-light suites: pytest, numpy,
+pycapnp, setproctitle, zstandard, aiohttp, requests. Full command:
+`cd /tmp && PYTHONPATH=<repo> <py311> -m pytest --noconftest -q -p no:cacheprovider -o addopts="" <paths>`
+Both boot guards were MUTATION-TESTED (bug reintroduced -> suites fail ->
+restored), per the "make the test fail with the bug present" rule.
 
 ### v3.4.2 Changes (based on funnypilot-3.4.1 — 3.4.0 AND 3.4.1 DID NOT BOOT)
 

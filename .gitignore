@@ -99,7 +99,6 @@ Pipfile
 .history
 .ionide
 
-.claude/
 .context/
 PLAN.md
 TASK.md

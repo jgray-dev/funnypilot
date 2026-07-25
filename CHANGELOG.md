@@ -1,3 +1,62 @@
+FunnyPilot v3.4.3 (2026-07-25)
+========================
+Recovery + hardening release. Gets the car off the splash screen, fixes the
+deploy path that had been silently dropping every flash, and generalizes the
+v3.4.2 boot guard so the next occurrence of that bug class is caught anywhere
+in the tree. The two v3.4.0 features (SLA predictive set-speed ramp, long
+status dot) are carried forward unchanged and are finally running on-device.
+
+* fix(deploy): ROOT CAUSE of "my flashes silently didn't apply". It was never
+  credentials — the device fetches over HTTPS from a public repo. 1194 files
+  inside `/data/openpilot/.git` were owned by root (left behind by `sudo git`
+  / root-run flashes), INCLUDING `.git/HEAD` itself. As user `comma`,
+  `git fetch` failed with `Permission denied` on `.git/logs/refs/...` and
+  `git checkout` could not rewrite HEAD, so the `&&` chain died before
+  `reset --hard` and before the reboot. The device kept running old code while
+  the deploy command looked like it had worked. Fixed on-device with
+  `sudo chown -R comma:comma /data/openpilot/.git`; CLAUDE.md now documents
+  the symptom, the fix, and the rule to never run `git` under `sudo` there.
+  Related trap now documented: `git ... | tail` returns TAIL's exit status,
+  so piped git checks report success unconditionally — use `${PIPESTATUS[0]}`.
+* feat(test): NEW `sunnypilot/tests/test_capnp_annotations.py` — repo-wide AST
+  guard against capnp types in `|` unions. v3.4.2's guard only covered
+  cruise_ext.py; the next instance will be in a different file. This one walks
+  all ~1900 .py files and reports only annotations Python actually EVALUATES:
+
+    RAISES  def f(x: car.CarState | None)         parameter annotation
+    RAISES  def f() -> car.CarState | None        return annotation
+    RAISES  class C: CP: car.CarParams | None     class-BODY annotated assign
+    SAFE    self.CP: car.CarParams | None = None  inside a method body
+    SAFE    x: car.CarState | None = None         local in a function body
+
+  The class-body form is a NEW finding — the previously recorded rule only
+  covered parameter annotations, but a class-body annotation is evaluated too
+  and is equally fatal. All five behaviors were verified empirically rather
+  than assumed.
+  It is an AST walk and not a grep precisely because of the SAFE rows: a text
+  matcher would demand a bogus "fix" to `ui_state.py`, which is correct as
+  written. Subscripted forms are also SAFE and are not flagged —
+  `list[custom.X] | None` builds a `types.GenericAlias`, which DOES implement
+  `__or__` (verified), so `sunnypilot/models/fetcher.py:126` is correct and
+  was deliberately left alone after the first draft of the detector flagged it.
+  Both this guard and v3.4.2's were mutation-tested: the bug was reintroduced
+  into cruise_ext.py and both suites were confirmed to FAIL, then restored.
+* docs: corrected the capnp misattribution in `sla_shm.py`,
+  `longitudinal_planner.py`, `cruise_ext.py` and `long_status_dot.py`. Those
+  comments still claimed the `cereal/custom.capnp` change caused the v3.4.0
+  boot failure. It did not — the annotation did. The /dev/shm approach STAYS
+  (avoiding device rebuilds is right on its own merits), but the stated reason
+  is now accurate so the next debugging session isn't sent down a dead end.
+* chore: `.claude/` removed from `.gitignore` (Claude Code config now tracked).
+  ALL VPN/proxy remote-access documentation stripped from CLAUDE.md (no longer
+  used) — SSH Access is now just the home-network line and Deploying to Device
+  uses a plain `ssh` invocation, plus a mandatory post-deploy verification
+  block (version + hash + port 8888).
+* test: 163 pre-existing cases still green, +16 new (13 detector-semantics
+  cases, 2 self-checks that the repo scan isn't vacuous, 1 repo sweep).
+  Off-device runs need Python 3.11 — the repo uses PEP 585 generics, and a
+  3.8 interpreter fails collection with `'type' object is not subscriptable`.
+
 FunnyPilot v3.4.2 (2026-07-25)
 ========================
 HOTFIX. This is the ACTUAL fix for the unbootable car. v3.4.0 AND v3.4.1

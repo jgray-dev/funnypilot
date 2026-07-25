@@ -83,8 +83,7 @@ class LongStatusDotRenderer(Widget):
     long_active = sm['carControl'].longActive
 
     # SCC-V/SCC-M gate flags are already in the schema; SLA's comes over
-    # /dev/shm (v3.4.1 — see sla_shm.py; adding it to capnp is what forced the
-    # device rebuild that broke the 3.4.0 boot).
+    # /dev/shm (v3.4.1 — see sla_shm.py, which explains why no capnp field).
     gas_gating = False
     try:
       scc = sm['longitudinalPlanSP'].smartCruiseControl

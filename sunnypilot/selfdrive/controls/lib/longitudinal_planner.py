@@ -192,11 +192,12 @@ class LongitudinalPlannerSP:
     assist.slaDynamicOffset = float(self.sla.dynamic_offset_ratio)
 
     # FunnyPilot v3.4.1: the SLA set-speed ramp target and gas-gate flag are
-    # published via /dev/shm instead of new capnp fields. v3.4.0 added them to
-    # custom.capnp, which forces a SCons rebuild of the compiled schema on the
-    # device — that rebuild is what left the car stuck at the boot logo. This
-    # fork is Python + raylib end to end for these paths, so a plain file needs
-    # no compilation at all (same pattern as controlsd's /dev/shm/lat_interp).
+    # published via /dev/shm instead of new capnp fields. A .capnp change forces
+    # a SCons rebuild of the compiled schema on the device, which this fork
+    # avoids on principle; these paths are Python + raylib end to end, so a
+    # plain file needs no compilation (same pattern as /dev/shm/lat_interp).
+    # NOTE (v3.4.3): the capnp change did NOT cause the v3.4.0 boot failure —
+    # that was a `car.CarState | None` annotation in cruise_ext.py. See sla_shm.py.
     write_sla_shm(self.sla.v_cruise_target, self.sla.gas_gate_active)
 
     # E2E Alerts

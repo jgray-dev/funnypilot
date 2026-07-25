@@ -1,0 +1,11 @@
+{
+  "outputStyle": "Explanatory",
+  "spinnerTipsEnabled": false,
+  "permissions": {
+    "allow": [
+      "Bash(git -C /home/astro/Development/c3x ls-remote --heads funnypilot funnypilot-3.3.7)",
+      "Bash(git -C /home/astro/Development/c3x log --oneline -1)",
+      "Bash(git -C /home/astro/Development/c3x status -sb)"
+    ]
+  }
+}

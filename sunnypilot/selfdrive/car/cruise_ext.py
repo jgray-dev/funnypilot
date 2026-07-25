@@ -125,7 +125,7 @@ class VCruiseHelperSP:
     self.sla_state = LP_SP.speedLimit.assist.state
     self.sla_ratio = LP_SP.speedLimit.assist.slaDynamicOffset
     # v3.4.1: ramp target comes over /dev/shm, not capnp (see sla_shm.py — a
-    # schema change forces a device rebuild, which is what broke the 3.4.0 boot).
+    # schema change would force a device rebuild, which this fork avoids).
     # Sampled here (LP_SP rate) rather than per 100 Hz control frame.
     self.sla_v_cruise_target, _ = read_sla_shm()
     self.sla_req_plus, self.sla_req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
