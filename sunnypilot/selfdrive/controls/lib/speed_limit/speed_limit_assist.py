@@ -37,14 +37,21 @@ While active (the v3.2.6e stack, unchanged):
     ratio from it is idempotent (no self-wipe at boundaries).
   * Deactivation only on longitudinal disengage or turning the mode off.
 
-Pre-zone gas gating (new in v3.3.3):
-  * While active and approaching a LOWER zone, once the remaining distance is
-    inside the coast envelope (assumed GATE_COAST_ACCEL natural decel, plus a
-    GATE_TIME_BUFFER early-arrival margin), gas_gate_active goes True. The
-    base planner then clamps max accel to the measured coast accel — no
-    throttle, NO brakes. The resolver no longer switches the limit early, so
-    the set-speed snap (and any light braking to shed residual overspeed)
-    happens exactly at the boundary.
+Predictive set-speed ramp + gas gate (v3.4.5):
+  * Approaching a LOWER zone, the SET SPEED itself is walked down before the
+    boundary on a constant-decel envelope, so the car arrives at the sign
+    already at the new limit instead of stepping there and then hauling the
+    speed off. See _update_cruise_ramp for the full derivation; the rate is
+    ~1 mph/s, tightening only as far as the MPC's own CRUISE_MIN_ACCEL allows.
+  * gas_gate_active is now defined off that ramp: True exactly while the ramp
+    is holding the set speed below the current zone's target. The base planner
+    then clamps max accel to the coast accel — no throttle, NO brakes.
+
+  * NOTE ON HISTORY: through v3.4.4 neither of these ever ran on a moving car.
+    Both keyed off `distance_to_next_limit`, which the resolver was computing
+    with a monotonic-minus-epoch subtraction and returning as ~4e10 m. The
+    boundary behaviour the driver felt was purely the old set-speed slew cap
+    firing after the zone changed. Fixed in speed_limit_resolver.py.
 """
 import time
 
@@ -82,21 +89,62 @@ CRUISE_BUTTONS_PLUS = (ButtonType.accelCruise, ButtonType.resumeCruise)
 CRUISE_BUTTONS_MINUS = (ButtonType.decelCruise, ButtonType.setCruise)
 CONFIRM_HOLD = 0.5  # secs a button release stays consumable by the 20 Hz state machine
 
-# Pre-zone gas gate envelope
-GATE_COAST_ACCEL = 0.35   # m/s^2 assumed natural coast decel (drag + engine braking)
-GATE_TIME_BUFFER = 1.5    # s — aim to reach the new target this early
-GATE_MIN_OVER = 0.3       # m/s — no gate when already at/under the upcoming target
+# How many 20 Hz frames a cruise button event keeps explaining cluster changes.
+# Must comfortably exceed the plannerd -> card -> carState round trip, so the
+# change a press caused is still attributed to that press when the state machine
+# sees it. Counted in FRAMES, not wall-clock seconds, deliberately: the window
+# has to be a fixed number of update() calls to be reasoned about (and tested)
+# at all — a monotonic deadline makes the window's length depend on scheduling.
+BUTTON_INTENT_FRAMES = int(0.5 / DT_MDL)  # 10 frames = 0.5 s
 
-# FunnyPilot v3.4.0 — predictive SET SPEED ramp (see _update_cruise_ramp).
-# The v3.3.9 attempt shaped an internal MPC cap instead of the set speed and
-# did nothing under DEC; this ramp instead walks the REAL cruise set speed
-# (cruise_ext writes it), exactly as if the driver were tapping +/- on the
-# wheel, so every downstream consumer — acc-mode cruise obstacle, blended-mode
-# position cap, and the cluster display — honors it identically.
-RAMP_DECEL = 0.8          # m/s^2 target decel when walking the set speed DOWN into a slower zone
-RAMP_ARRIVE_EARLY_T = 1.0  # s — reach the new target this early (small; the boundary is the deadline)
+# FunnyPilot v3.4.5 — predictive SET SPEED ramp (see _update_cruise_ramp).
+#
+# WHY THE SET SPEED AND NOT AN MPC CAP: the v3.3.9 attempt shaped an internal
+# planner value and did essentially nothing under DEC. The cruise set speed is
+# the one quantity every mode honors (acc: cruise obstacle; blended: position
+# cap) AND the one the driver can see on the cluster, so walking it is both
+# effective and legible — it looks exactly like taps on the wheel.
+#
+# THE RATE, derived rather than picked. The user asked for the adjustment to be
+# spread over 10-15 s, "roughly 1 mph every 1 second". 1 mph/s = 0.447 m/s^2,
+# hence RATE_NOM. That is the rate used whenever there is room for it; a large
+# drop with little distance left tightens up to RATE_MAX and no further.
+#
+# RATE_MAX IS NOT A COMFORT NUMBER — it is a structural ceiling. long_mpc.py
+# sets CRUISE_MIN_ACCEL = -1.2, so the cruise obstacle physically cannot demand
+# a steeper decel than 1.2 m/s^2. Slewing the set speed faster than that would
+# simply move a number on the cluster that the car never follows, which is the
+# worst of both worlds: it looks like the system reacted and it didn't. A test
+# pins RATE_MAX <= abs(CRUISE_MIN_ACCEL) so a future retune cannot break the
+# tie silently.
+RATE_NOM = 0.45           # m/s^2 ~= 1.0 mph/s — the requested comfortable rate
+RATE_MAX = 1.2            # m/s^2 == abs(long_mpc.CRUISE_MIN_ACCEL); see above
+RAMP_T_MAX = 15.0         # s — upper bound on how long a ramp is allowed to take
+RAMP_D_MAX = 250.0        # m — upper bound on how far ahead a ramp may engage
+RAMP_ARRIVE_EARLY_T = 1.0  # s of TRAVEL (scaled by v_ego) to reach the target early
 RAMP_UP_DIST = 90.0       # m — window over which the set speed is walked UP into a faster zone
-RAMP_MAX_RATE = 4.0       # m/s per second — hard cap on set-speed slew in either direction
+
+# The upcoming-limit signal comes from OSM through mapd and can flicker for a
+# frame when the route match jumps. CONFIRM_N consecutive agreeing frames
+# (150 ms at 20 Hz) are required before a ramp engages, so a one-frame ghost
+# limit can never move the driver's set speed.
+CONFIRM_N = 3
+
+# Monotone-descent latch release. `distance_to_next_limit` legitimately jumps
+# UP when the route changes (a turn onto a different road). Small increases are
+# GPS noise and must not un-do a descent already committed to; a sustained
+# increase of more than this means it is a different zone and the latch is
+# dropped.
+LATCH_RELEASE_D = 30.0    # m
+
+# Must equal intelligent_cruise_button_management.helpers.get_minimum_set_speed.
+# Duplicated rather than imported to keep this module import-light (it is on
+# plannerd's path and the tests run without the compiled params extension); a
+# test asserts the two agree. NOTE the imperial floor is 20 KPH (~12.4 mph),
+# not 20 mph.
+MIN_SET_SPEED_KPH_METRIC = 30
+MIN_SET_SPEED_KPH_IMPERIAL = 20
+V_CRUISE_MAX_KPH = 145    # selfdrive/car/cruise.py
 
 
 class SpeedLimitAssist:
@@ -123,13 +171,23 @@ class SpeedLimitAssist:
     self.v_offset = 0.
     self.gas_gate_active = False
 
-    # v3.4.0 predictive set-speed ramp state. v_cruise_target is what the
-    # CLUSTER should read right now; cruise_ext follows it. _commanded_conv is
-    # the rounded display value we last asked for, used to recognize our OWN
-    # cluster changes so they don't re-derive the ratio (see update_state_machine).
+    # v3.4.5 predictive set-speed ramp state. v_cruise_target is what the
+    # CLUSTER should read right now; cruise_ext follows it and is the only
+    # writer of v_cruise_kph while SLA is active.
     self.v_cruise_target = 0.
-    self._commanded_conv = 0
-    self._prev_commanded_conv = 0
+    self._latch = 0.          # monotone-descent latch (0 = not latched)
+    self._d_min = float('inf')  # closest approach seen this descent
+    self._confirm_val = 0.    # upcoming-limit value being confirmed
+    self._confirm_n = 0       # consecutive frames it has agreed
+
+    # Monotonic deadline after any cruise button activity. This is the ONLY
+    # discriminator between "the driver adjusted the set speed" and "the ramp
+    # moved it" — see update_state_machine. The v3.4.0 approach compared the
+    # cluster value against the value the ramp last commanded, which fails
+    # exactly when it matters: a driver press that happens to land on a value
+    # the ramp recently passed through would be mistaken for our own command
+    # and their carried offset silently discarded.
+    self._button_frames = 0
 
     self.v_cruise_cluster = 0.
     self.v_cruise_cluster_conv = 0
@@ -232,12 +290,22 @@ class SpeedLimitAssist:
     """Runs at carState rate (100 Hz) from plannerd; records button releases."""
     now = time.monotonic()
     for b in CS.buttonEvents:
+      # v3.4.5: ANY cruise button activity — press OR release — arms the
+      # driver-intent window. Presses are included deliberately: the set speed
+      # moves on the press for a long hold, so a release-only trigger would
+      # miss the very case where the cluster is being dragged.
+      if b.type in CRUISE_BUTTONS_PLUS or b.type in CRUISE_BUTTONS_MINUS:
+        self._button_frames = BUTTON_INTENT_FRAMES
       if b.pressed:
         continue
       if b.type in CRUISE_BUTTONS_PLUS:
         self._hold_deadline["plus"] = now + CONFIRM_HOLD
       elif b.type in CRUISE_BUTTONS_MINUS:
         self._hold_deadline["minus"] = now + CONFIRM_HOLD
+
+  def _button_event_recent(self) -> bool:
+    """True while a cruise button event is recent enough to explain a cluster change."""
+    return self._button_frames > 0
 
   def _consume_release(self, kind: str) -> bool:
     now = time.monotonic()
@@ -297,12 +365,15 @@ class SpeedLimitAssist:
         self._clear_releases()
 
       elif self.state in ACTIVE_STATES:
-        # Manual adjustment (or our own zone-change snap, which is
-        # idempotent): the cluster set speed defines the ratio.
-        # v3.4.0: EXCEPT when the change is the predictive ramp's own command —
-        # mid-approach the cluster sits between zones, so re-deriving there
-        # would wipe the driver's carried offset.
-        if self.v_cruise_cluster_changed and not self._cluster_change_is_ours():
+        # v3.4.5: the ratio is re-derived ONLY from a cluster change the DRIVER
+        # caused. Inverting the old test is the whole point: previously any
+        # unrecognised change re-derived, so the default on ambiguity was to
+        # overwrite the driver's carried offset. Now the default is to keep it,
+        # and only a recent button event grants permission to change it.
+        # Mid-approach the cluster sits BETWEEN zones (the ramp is walking it),
+        # so re-deriving there would collapse a carried +20% to whatever value
+        # the ramp happened to be passing through.
+        if self.v_cruise_cluster_changed and self._button_event_recent():
           self._set_ratio_from_cluster()
         self.state = self._active_or_adapting()
         self._clear_releases()  # presses while active are plain speed adjustments
@@ -342,76 +413,149 @@ class SpeedLimitAssist:
   # ---------- pre-zone gas gate ----------
 
   def _update_gas_gate(self) -> None:
-    self.gas_gate_active = False
-    if not self.is_active:
-      return
-    next_target = self.next_zone_target
-    if next_target <= 0 or self._next_distance <= 0:
-      return
-    current_target = self.effective_speed_limit_target
-    if current_target > 0 and next_target >= current_target:
-      return  # not a reduction
-    if self.v_ego <= next_target + GATE_MIN_OVER:
-      return  # already slow enough
-    coast_dist = (self.v_ego ** 2 - next_target ** 2) / (2.0 * GATE_COAST_ACCEL)
-    if self._next_distance <= coast_dist + next_target * GATE_TIME_BUFFER:
-      self.gas_gate_active = True
+    """Throttle-only clamp while the ramp is holding the set speed down.
 
-  # ---------- predictive set-speed ramp (v3.4.0) ----------
+    v3.4.5 redefines this off the ramp instead of computing its own coast
+    envelope. The old version modelled an assumed 0.35 m/s^2 coast decel and
+    compared it against `_next_distance` — a second, independent notion of
+    "when should we start slowing", which could and did disagree with the
+    ramp's. There is now ONE answer: if the ramp has walked the set speed
+    below the current zone's target, the car should not be adding throttle to
+    fight it. That also means this can never engage while the ramp is
+    inactive, which is what makes it impossible for the gate to brake early
+    on its own initiative.
+
+    MUST be called AFTER _update_cruise_ramp() — it reads that frame's target.
+    """
+    self.gas_gate_active = (self.is_active and self.v_cruise_target > 0.
+                            and self.v_cruise_target < self.effective_speed_limit_target - 0.1)
+
+  # ---------- predictive set-speed ramp (v3.4.5) ----------
+
+  def _min_set_speed(self) -> float:
+    kph = MIN_SET_SPEED_KPH_METRIC if self.is_metric else MIN_SET_SPEED_KPH_IMPERIAL
+    return kph * CV.KPH_TO_MS
 
   def _update_cruise_ramp(self) -> None:
-    """Walk the SET SPEED toward the upcoming zone's target before the boundary.
+    """Walk the SET SPEED toward the upcoming zone's target BEFORE the boundary.
 
-    This is deliberately the set speed and not an internal planner cap: it is
-    the one quantity the whole longitudinal stack agrees on regardless of
-    which MPC mode is active. DEC flipping between 'acc' and 'blended' cannot
-    make this stop working, because in acc mode the set speed is the cruise
-    obstacle and in blended mode it is the position cap — and the driver sees
-    the number move on the cluster either way, like taps on the wheel.
+    THE MATH. Given the current target v0, the upcoming target v1 < v0 and the
+    remaining distance d, a constant-decel walk of the set speed satisfies
+    v_set(d) = sqrt(v1^2 + 2*a*d), which reaches exactly v1 at d = 0. Solving
+    that envelope for the rate needed to be done by the boundary gives
+    a = (v0^2 - v1^2) / (2*d). We choose `a` up front from two independent
+    bounds and then hold it fixed for the descent:
 
-    Down into a slower zone: constant-decel envelope (same sqrt form the map
-    curve controller uses — distance-based, so it needs no v_ego division and
-    is standstill-safe), converging on the new target at the boundary.
-    Up into a faster zone: linear over the last RAMP_UP_DIST metres. This one
-    DOES raise the set speed slightly before the sign — that is the explicit
-    intent ("increase the max speed when approaching a higher speed limit"),
-    and the window is kept short so it reads as a smooth blend into the new
-    zone rather than an early overspeed.
+        a = clip( max( dv / RAMP_T_MAX,                       # duration bound
+                       (v0^2 - v1^2) / (2 * RAMP_D_MAX) ),    # distance bound
+                  RATE_NOM, RATE_MAX )
+
+    The duration bound says "never take longer than 15 s". The distance bound
+    says "never start further out than 250 m". `max` of the two picks whichever
+    is more demanding, and the final clip means the answer is RATE_NOM (1 mph/s,
+    what the user asked for) whenever both bounds are slack, and never exceeds
+    the MPC's own CRUISE_MIN_ACCEL ceiling.
+
+    Worked example, the design case: 70 -> 45 mph is dv = 11.2 m/s, so the
+    duration bound wants 0.745 m/s^2 and the distance bound wants 1.15 m/s^2.
+    a = 1.15, and the envelope reaches v0 at d = (v0^2-v1^2)/(2a) = 250 m —
+    i.e. it engages at exactly RAMP_D_MAX and takes 11.2/1.15 = 9.7 s. A gentler
+    change, 45 -> 35 mph (dv = 4.5), takes the RATE_NOM floor and engages at
+    89 m / 10 s. Both land inside the requested 10-15 s feel.
+
+    WHY DISTANCE-PARAMETERISED AND NOT A TIMER: the envelope is re-evaluated
+    from the CURRENT d every frame, so it self-corrects. If the car is going
+    faster than expected it is deeper into the envelope and the set speed drops
+    faster; if mapd revises d, the ramp simply lands on the new answer. There
+    is no accumulated ramp state to get out of sync with the road, and no
+    division by v_ego, so standstill is safe by construction.
+
+    Up into a faster zone: linear over the last RAMP_UP_DIST metres. This DOES
+    raise the set speed slightly before the sign — the explicit intent — and
+    the window is kept short so it reads as a blend, not an early overspeed.
     """
     if not self.is_active or self._base_limit <= 0:
       self.v_cruise_target = 0.
+      self._latch = 0.
+      self._d_min = float('inf')
+      self._confirm_n = 0
       return
 
     current_target = self.effective_speed_limit_target
-    target = current_target
+
+    # RE-SEED. Three cases where continuity with the previous frame is wrong
+    # and the slew cap must be bypassed rather than fought:
+    #   * a zone boundary was crossed — current_target just stepped, and the
+    #     ramp should be AT the new value, not crawling toward it;
+    #   * the driver pressed a cruise button — their intent outranks ours, and
+    #     the ratio has just been re-derived from where they put it;
+    #   * first active frame — there is no previous value to be continuous with.
+    # Seeding also clears the descent latch: a driver press mid-descent must be
+    # able to raise the set speed again.
+    if (self.speed_limit_final_last_changed or self._button_event_recent()
+        or self.v_cruise_target <= 0.):
+      self.v_cruise_target = self._clamp_set_speed(current_target)
+      self._latch = 0.
+      self._d_min = float('inf')
+      self._confirm_n = 0
+      return
+
+    # CONFIRMATION. Require CONFIRM_N agreeing frames before acting on an
+    # upcoming limit, so a single-frame OSM ghost can't move the set speed.
+    next_final = self._next_limit_final
+    if next_final > 0. and abs(next_final - self._confirm_val) < 0.1:
+      self._confirm_n += 1
+    else:
+      self._confirm_val = next_final
+      self._confirm_n = 1
 
     next_target = self.next_zone_target
     d = self._next_distance
-    if next_target > 0 and d > 0:
-      if next_target < current_target:
-        d_eff = max(0., d - next_target * RAMP_ARRIVE_EARLY_T)
-        envelope = (next_target ** 2 + 2. * RAMP_DECEL * d_eff) ** 0.5
-        target = min(current_target, envelope)
-      elif next_target > current_target:
-        blend = max(0., min(1., 1. - d / RAMP_UP_DIST))
-        target = current_target + (next_target - current_target) * blend
+    engaged = self._confirm_n >= CONFIRM_N and next_target > 0. and d > 0.
 
-    # slew cap so the displayed set speed can never jump, whatever the inputs do
-    if self.v_cruise_target > 0.:
-      max_step = RAMP_MAX_RATE * DT_MDL
-      target = min(max(target, self.v_cruise_target - max_step), self.v_cruise_target + max_step)
+    target = current_target
+    if engaged and next_target < current_target:
+      dv = current_target - next_target
+      a = max(dv / RAMP_T_MAX,
+              (current_target ** 2 - next_target ** 2) / (2. * RAMP_D_MAX))
+      a = min(max(a, RATE_NOM), RATE_MAX)
+      # Arrive early by a fixed TRAVEL TIME, i.e. scaled by v_ego. The v3.4.0
+      # version scaled it by next_target, which made the early-arrival margin
+      # depend on the destination speed rather than on how fast the boundary is
+      # actually approaching — backwards, and it vanished at low speed limits.
+      d_eff = max(0., d - self.v_ego * RAMP_ARRIVE_EARLY_T)
+      target = min(current_target, (next_target ** 2 + 2. * a * d_eff) ** 0.5)
 
-    self.v_cruise_target = target
+      # MONOTONE-DESCENT LATCH. d is a great-circle distance from OSM and can
+      # tick back up on noise; without this the set speed would visibly bounce
+      # back up mid-approach. Released only on a SUSTAINED increase, which
+      # means the route changed and this is a different zone.
+      self._d_min = min(self._d_min, d)
+      if d > self._d_min + LATCH_RELEASE_D:
+        self._latch = 0.
+        self._d_min = d
+      if self._latch > 0.:
+        target = min(target, self._latch)
+      self._latch = target
+    elif engaged and next_target > current_target:
+      self._latch = 0.
+      self._d_min = float('inf')
+      blend = max(0., min(1., 1. - d / RAMP_UP_DIST))
+      target = current_target + (next_target - current_target) * blend
+    else:
+      self._latch = 0.
+      self._d_min = float('inf')
 
-  def _cluster_change_is_ours(self) -> bool:
-    """True when this frame's cluster change is the ramp's own last command.
+    # Slew cap. Because the re-seed above guarantees v_cruise_target is never 0
+    # while active, this is live on the very first engaged frame — the case the
+    # v3.4.0 `if self.v_cruise_target > 0.` guard silently skipped.
+    max_step = RATE_MAX * DT_MDL
+    target = min(max(target, self.v_cruise_target - max_step), self.v_cruise_target + max_step)
 
-    Without this the ratio would be re-derived from our own ramped set speed
-    mid-approach (the cluster is then BETWEEN zones, not at limit*(1+ratio)),
-    silently collapsing the driver's offset. Genuine button presses land on a
-    different value and re-derive normally.
-    """
-    return self.v_cruise_cluster_conv in (self._commanded_conv, self._prev_commanded_conv)
+    self.v_cruise_target = self._clamp_set_speed(target)
+
+  def _clamp_set_speed(self, v: float) -> float:
+    return min(max(v, self._min_set_speed()), V_CRUISE_MAX_KPH * CV.KPH_TO_MS)
 
   # ---------- events ----------
 
@@ -462,14 +606,17 @@ class SpeedLimitAssist:
     self._state_prev = self.state
     self.is_enabled, self.is_active = self.update_state_machine()
 
-    self._update_gas_gate()
+    # ORDER IS LOAD-BEARING: the gas gate is defined off this frame's ramp
+    # target (see _update_gas_gate), so the ramp must run first. v3.4.0 had
+    # these the other way round and the gate read the previous frame's value.
     self._update_cruise_ramp()
+    self._update_gas_gate()
     self.update_events(events_sp)
 
-    # remember what display value the ramp is asking for, so next frame's
-    # cluster change can be recognized as ours (see _cluster_change_is_ours)
-    self._prev_commanded_conv = self._commanded_conv
-    self._commanded_conv = round(self.v_cruise_target * speed_conv) if self.v_cruise_target > 0 else 0
+    # Aged out LAST: everything above this line in this frame must see the same
+    # answer from _button_event_recent(), or the state machine and the ramp
+    # could disagree about whether the driver just intervened.
+    self._button_frames = max(0, self._button_frames - 1)
 
     self.long_enabled_prev = self.long_enabled
     self._had_speed_limit = self._has_speed_limit

@@ -25,6 +25,7 @@ CRUISE_BUTTON_TIMER = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0,
 V_CRUISE_MIN = 8
 V_CRUISE_MAX = 145
 V_CRUISE_UNSET = 255
+IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # 1.6 — must match selfdrive/car/cruise.py
 
 
 def update_manual_button_timers(CS: car.CarState, button_timers: dict[car.CarState.ButtonEvent.Type, int]) -> None:
@@ -72,6 +73,7 @@ class VCruiseHelperSP:
     # press so the driver's own adjustment reaches SLA (which re-derives the
     # offset ratio from it) instead of being overwritten on the next frame.
     self.sla_v_cruise_target = 0.
+    self.sla_is_metric = False
     self._ramp_hold_frames = 0
 
   def read_custom_set_speed_params(self) -> None:
@@ -128,6 +130,7 @@ class VCruiseHelperSP:
     # schema change would force a device rebuild, which this fork avoids).
     # Sampled here (LP_SP rate) rather than per 100 Hz control frame.
     self.sla_v_cruise_target, _ = read_sla_shm()
+    self.sla_is_metric = bool(is_metric)  # v3.4.5: display-grid quantization needs it
     self.sla_req_plus, self.sla_req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
                                                                    self.speed_limit_final_last, is_metric)
 
@@ -163,34 +166,36 @@ class VCruiseHelperSP:
   # Plain `X: car.CarState` annotations elsewhere in this file are fine; it is
   # only the `|` union operator that capnp's module objects don't support.
   def update_speed_limit_assist_v_cruise_non_pcm(self, CS=None) -> None:
-    # FunnyPilot: while SLA is active the cluster set speed IS the SLA target.
-    # On ACTIVATION nothing is written — the arrow confirm adopts the set
-    # speed exactly as it is (no jump). Only on a zone change while ALREADY
-    # active does the ratio carry into the new zone: set speed :=
-    # new_limit * (1 + ratio). The SLA state machine re-derives the ratio
-    # from this exact value, so the snap is idempotent.
+    # FunnyPilot v3.4.5: while SLA is active the SET SPEED FOLLOWS SLA'S RAMP,
+    # and that is the ONLY thing that writes it here. There used to be a second
+    # writer — a boundary snap to limit*(1+ratio) on a zone change — sitting in
+    # a separate, unchained `if` immediately above. Both ran on the same frame
+    # and the ramp ran last, so the snap's value was overwritten before it ever
+    # reached the car: it was dead code that nevertheless read as the
+    # authoritative path. SLA now owns the value end to end (its ramp re-seeds
+    # to the new zone's target on the boundary crossing, which is exactly what
+    # the snap was for), and a test asserts there is exactly one assignment to
+    # v_cruise_kph in this method so the second writer cannot come back.
     sla_active = self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES
 
-    if sla_active and self.update_speed_limit_final_last_changed:
-      target_kph = self.speed_limit_final_last_kph * (1.0 + self.sla_ratio)
-      self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
-
-    # FunnyPilot v3.4.0: predictive set-speed ramp. Between zone changes,
-    # follow SLA's ramped target (speed_limit_assist._update_cruise_ramp) so
-    # the SET SPEED itself walks down before a slower zone and up into a
-    # faster one — the same thing the driver would do with the cruise
-    # buttons. This is why it works under DEC: nothing here depends on which
-    # MPC mode is running, only on the set speed every mode already honors.
-    # The boundary snap above remains the final authority and is idempotent
-    # with the ramp (the ramp has already landed on that value by then).
     if CS is not None and any(b.pressed for b in CS.buttonEvents):
       self._ramp_hold_frames = 100  # ~1 s at the 100 Hz card rate
 
     if self._ramp_hold_frames > 0:
       self._ramp_hold_frames -= 1
     elif sla_active and self.sla_v_cruise_target > 0.:
-      target_kph = self.sla_v_cruise_target * CV.MS_TO_KPH
-      self.v_cruise_kph = np.clip(round(target_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
+      # QUANTIZE TO THE DISPLAY GRID. The driver's cruise buttons can only ever
+      # produce whole display units (1 kph metric, 1 mph = 1.6 kph imperial), so
+      # writing a raw continuous value would put v_cruise_kph somewhere the
+      # driver could not have set it — and the next `+` press would then snap to
+      # the nearest grid point, losing part of their input. Rounding in DISPLAY
+      # units first and converting back keeps the set speed on the same lattice
+      # the buttons use, which is also what makes the ramp read as a sequence of
+      # ordinary 1-mph taps on the cluster.
+      is_metric = self.sla_is_metric
+      disp = round(self.sla_v_cruise_target * (CV.MS_TO_KPH if is_metric else CV.MS_TO_MPH))
+      target_kph = disp * (1.0 if is_metric else IMPERIAL_INCREMENT)
+      self.v_cruise_kph = np.clip(target_kph, self.v_cruise_min, V_CRUISE_MAX)
 
     self.prev_sla_state = self.sla_state
     self.prev_speed_limit_final_last_kph = self.speed_limit_final_last_kph

@@ -51,14 +51,14 @@ class TestRoundTrip:
 
   def test_stale_file_is_unknown_not_false(self, shm_path):
     m._write(False)
-    old = time.time() - (m.STALE_S + 5.0)
+    old = time.clock_gettime(time.CLOCK_REALTIME) - (m.STALE_S + 5.0)
     os.utime(shm_path, (old, old))
     assert m.read_brake_light() is None
 
   def test_stale_true_is_also_unknown(self, shm_path):
     # a stale lit lamp must not pin the dot red forever either
     m._write(True)
-    old = time.time() - (m.STALE_S + 5.0)
+    old = time.clock_gettime(time.CLOCK_REALTIME) - (m.STALE_S + 5.0)
     os.utime(shm_path, (old, old))
     assert m.read_brake_light() is None
 

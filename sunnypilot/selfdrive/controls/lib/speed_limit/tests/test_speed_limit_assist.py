@@ -14,7 +14,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import (
   SpeedLimitAssist, ACTIVE_STATES, DISABLED_GUARD_PERIOD, PRE_ACTIVE_WINDOW, RATIO_LIMIT,
-  GATE_COAST_ACCEL, GATE_TIME_BUFFER, V_CRUISE_UNSET,
+  BUTTON_INTENT_FRAMES, CONFIRM_N, V_CRUISE_UNSET,
 )
 
 ButtonType = car.CarState.ButtonEvent.Type
@@ -228,6 +228,11 @@ class TestPreActiveConfirm:
 class TestRatioCarryover:
   def _active_with_ratio(self, sla, events, set_mph, limit_mph):
     activate(sla, events, cluster_mph=limit_mph, limit_mph=limit_mph)
+    # v3.4.5: re-derivation is now gated on a RECENT BUTTON EVENT, so a manual
+    # adjustment must be modelled as one. Without this the cluster change is
+    # indistinguishable from the ramp moving the set speed itself, and SLA
+    # (correctly) refuses to re-read its offset from its own output.
+    release(sla, ButtonType.accelCruise if set_mph > limit_mph else ButtonType.decelCruise)
     step(sla, events, cluster_mph=set_mph, limit_mph=limit_mph)  # manual adjust
     assert sla.is_active
     events.clear()
@@ -264,7 +269,8 @@ class TestRatioCarryover:
     self._active_with_ratio(sla, events, 60., 50.)
     step(sla, events, cluster_mph=60., limit_mph=30.)
     step(sla, events, cluster_mph=36., limit_mph=30.)
-    step(sla, events, cluster_mph=33., limit_mph=30.)  # user decreases
+    release(sla, ButtonType.decelCruise)               # user taps down...
+    step(sla, events, cluster_mph=33., limit_mph=30.)  # ...and the cluster follows
     assert abs(sla.dynamic_offset_ratio - 0.10) < 1e-6
 
     step(sla, events, cluster_mph=33., limit_mph=40.)
@@ -325,36 +331,31 @@ class TestDeactivation:
 
 
 class TestGasGate:
-  """45 zone approaching a 35 zone: gate inside the coast envelope, never brake."""
+  """v3.4.5: the gate is now DEFINED as "the ramp is holding the set speed below
+  the current zone's target". It no longer models its own coast envelope, so
+  there is no second, independent opinion about when to start slowing. Detailed
+  coverage lives in test_sla_cruise_ramp.py::TestGasGate; these pin the contract.
+  """
 
-  def _active_45(self, sla, events):
+  def _settled_45(self, sla, events):
     activate(sla, events, cluster_mph=45., limit_mph=45.)
+    step(sla, events, cluster_mph=45., limit_mph=45., n=BUTTON_INTENT_FRAMES + 2)
 
-  @staticmethod
-  def _envelope(v_ego_ms, target_ms):
-    return (v_ego_ms ** 2 - target_ms ** 2) / (2.0 * GATE_COAST_ACCEL) + target_ms * GATE_TIME_BUFFER
-
-  def test_gate_engages_inside_envelope(self):
+  def test_gate_requires_the_ramp_to_be_holding_speed_down(self):
     sla = make_sla()
     events = FakeEvents()
-    self._active_45(sla, events)
-    envelope = self._envelope(45. * MPH, 35. * MPH)
-    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=35., next_dist=envelope - 5.)
-    assert sla.gas_gate_active
-
-  def test_no_gate_far_from_zone(self):
-    sla = make_sla()
-    events = FakeEvents()
-    self._active_45(sla, events)
-    envelope = self._envelope(45. * MPH, 35. * MPH)
-    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=35., next_dist=envelope + 100.)
+    self._settled_45(sla, events)
     assert not sla.gas_gate_active
+    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=30.,
+         next_dist=120., n=CONFIRM_N + 6)
+    assert sla.gas_gate_active
 
   def test_no_gate_for_higher_zone(self):
     sla = make_sla()
     events = FakeEvents()
-    self._active_45(sla, events)
-    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=55., next_dist=50.)
+    self._settled_45(sla, events)
+    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=55.,
+         next_dist=50., n=CONFIRM_N + 4)
     assert not sla.gas_gate_active
 
   def test_no_gate_when_inactive(self):
@@ -364,34 +365,14 @@ class TestGasGate:
     step(sla, events, cluster_mph=40., limit_mph=45., next_limit_mph=35., next_dist=50.)
     assert not sla.gas_gate_active
 
-  def test_no_gate_when_already_slow_enough(self):
-    sla = make_sla()
-    events = FakeEvents()
-    self._active_45(sla, events)
-    step(sla, events, cluster_mph=45., limit_mph=45., v_ego_mph=34., next_limit_mph=35., next_dist=50.)
-    assert not sla.gas_gate_active
-
-  def test_gate_target_honors_ratio(self):
-    # +20% ratio: the upcoming 35 zone's target is 42, so at 43 mph the
-    # envelope is short — barely over means the gate arms only very close in
-    sla = make_sla()
-    events = FakeEvents()
-    activate(sla, events, cluster_mph=50., limit_mph=50.)
-    step(sla, events, cluster_mph=60., limit_mph=50.)  # ratio -> +20%
-    next_target = 35. * MPH * 1.2
-    envelope = self._envelope(60. * MPH, next_target)
-    step(sla, events, cluster_mph=60., limit_mph=50., next_limit_mph=35., next_dist=envelope - 5.)
-    assert sla.gas_gate_active
-    step(sla, events, cluster_mph=60., limit_mph=50., next_limit_mph=35., next_dist=envelope + 50.)
-    assert not sla.gas_gate_active
-
   def test_gate_clears_on_zone_entry(self):
     sla = make_sla()
     events = FakeEvents()
-    self._active_45(sla, events)
-    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=35., next_dist=100.)
+    self._settled_45(sla, events)
+    step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=30.,
+         next_dist=120., n=CONFIRM_N + 6)
     assert sla.gas_gate_active
-    # boundary crossed: ahead info gone, current limit is now 35
-    step(sla, events, cluster_mph=45., limit_mph=35., v_ego_mph=38.)
+    # boundary crossed: ahead info gone, current limit is now 30 -> ramp re-seeds
+    step(sla, events, cluster_mph=45., limit_mph=30., v_ego_mph=38.)
     assert not sla.gas_gate_active
     assert sla.is_active

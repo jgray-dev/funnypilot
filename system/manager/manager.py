@@ -14,6 +14,7 @@ from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.text_window import TextWindow
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog
+from openpilot.system.manager import storage_cleanup
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_ID
@@ -99,6 +100,12 @@ def manager_init() -> None:
                        commit=build_metadata.openpilot.git_commit,
                        dirty=build_metadata.openpilot.is_dirty,
                        device=HARDWARE.get_device_type())
+
+  # FunnyPilot v3.4.5: reclaim disk before anything starts writing to it.
+  # Daemon thread + never-raises by construction (see storage_cleanup.py) —
+  # boot must not wait on `du`/`git gc`, and a cleanup bug must not be a car
+  # that doesn't start.
+  storage_cleanup.cleanup_async(log=lambda r: cloudlog.event("storage_cleanup", **r))
 
   # preimport all processes
   for p in managed_processes.values():

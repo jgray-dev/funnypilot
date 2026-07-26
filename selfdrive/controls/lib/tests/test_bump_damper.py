@@ -5,7 +5,6 @@ contract and safety bounds. Whether the mechanism actually cures the
 railroad-track oscillation is verified on-road via the existing BUMP/EPS
 dev-UI readouts, not here.
 """
-import math
 
 from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper, TRIGGER_DEG_S, MIN_DAMP, HOLD_S, RECOVER_S
 

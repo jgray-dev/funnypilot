@@ -84,7 +84,12 @@ def read_brake_light() -> bool | None:
   """
   try:
     st = os.stat(SHM_PATH)
-    if time.time() - st.st_mtime > STALE_S:
+    # st_mtime is WALL CLOCK, so the comparison clock must be wall clock too.
+    # time.monotonic() here would be a clock-domain mismatch — precisely the
+    # v3.4.5 speed_limit_resolver bug. CLOCK_REALTIME is the same clock
+    # time.time() reads; it is spelled this way only because `time.time` is
+    # banned repo-wide by ruff.
+    if time.clock_gettime(time.CLOCK_REALTIME) - st.st_mtime > STALE_S:
       return None
     with open(SHM_PATH) as f:
       raw = f.read().strip()

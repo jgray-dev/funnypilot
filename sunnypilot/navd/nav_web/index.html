@@ -32,9 +32,23 @@
       font-size: 15px;
       font-weight: 700;
       color: #e94560;
-      flex: 1;
       letter-spacing: 0.3px;
     }
+    /* v3.4.5: running version, read from FUNNYPILOT_VERSION on the device.
+       The spacer (not h1's flex) pushes the buttons right, so the version
+       sits with the title instead of drifting across the bar. */
+    #fp-version {
+      font-size: 11px;
+      font-weight: 600;
+      color: #9aa0a6;
+      background: #242424;
+      border: 1px solid #2f2f2f;
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+    #fp-version.stale { color: #f0932b; border-color: #5a4520; }
+    #topbar .spacer { flex: 1; }
     #conn-status {
       font-size: 11px;
       color: #555;
@@ -353,6 +367,8 @@
 
 <div id="topbar">
   <h1>FunnyPilot</h1>
+  <span id="fp-version" title="running version">…</span>
+  <span class="spacer"></span>
   <span id="conn-status">connecting</span>
   <button id="logs-btn" class="btn-secondary" style="flex:none;padding:7px 14px;font-size:13px;" onclick="openLogsModal()">Logs</button>
   <button id="diag-btn" onclick="openDiagModal()">Verify</button>
@@ -433,6 +449,30 @@
   term.open(document.getElementById('terminal-container'));
   fitAddon.fit();
   window.addEventListener('resize', () => fitAddon.fit());
+
+  // ── Running version (v3.4.5) ──────────────────────────────────────────────
+  // Shows what the device is ACTUALLY running, from FUNNYPILOT_VERSION on
+  // disk. Highlighted when it disagrees with the version this web UI was
+  // shipped with — that mismatch is exactly the "the flash looked fine but
+  // the old code is still running" failure this fork has hit before.
+  async function loadVersion() {
+    const el = document.getElementById('fp-version');
+    try {
+      const d = await fetch('/api/version').then(r => r.json());
+      const running = (d.version || '').trim();
+      el.textContent = running ? `v${running}` : 'v?';
+      if (running && d.expected && running !== d.expected) {
+        el.classList.add('stale');
+        el.title = `running ${running}, this UI ships with ${d.expected}`;
+      } else {
+        el.title = `running ${running || 'unknown'}`;
+      }
+    } catch (e) {
+      el.textContent = 'v?';
+      el.title = `version unavailable: ${e.message}`;
+    }
+  }
+  loadVersion();
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
   let ws = null;

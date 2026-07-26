@@ -51,6 +51,149 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.4.5 Changes (based on funnypilot-3.4.4)
+
+SLA plans for the sign instead of reacting to it. But the FEATURE is not the
+important part of this release — the CLOCK-DOMAIN FIX is. Without it, the
+v3.4.0 ramp and the v3.3.3 pre-zone gas gate were both inert on a moving car
+while every readout said they were fine.
+
+ROOT CAUSE (read this before touching anything upcoming-zone related):
+`speed_limit_resolver.py` aged map data with
+
+    time.monotonic() - sm['gpsLocation'].unixTimestampMillis * 1e-3
+
+i.e. a UNIX EPOCH (~1.8e9) subtracted from a SINCE-BOOT counter (~1e4).
+Measured on this device: about **-1.785e9 s**, making
+`distance_to_next_limit` about **3.93e10 m** at 22 m/s. Consequences, both
+silent: the down-ramp envelope evaluated to ~2.5e5 m/s so `min(target,
+envelope)` never bound; the gas gate never fired above standstill; the
+up-ramp blend clipped to 0. What the driver actually felt at a zone boundary
+was ONLY the old `RAMP_MAX_RATE = 4.0` slew unwinding at ~8.95 mph/s — the
+"it spams one mph at a time once we're already in the zone" report.
+The staleness gate was broken in the same expression: `age >
+LIMIT_MAX_MAP_DATA_AGE` could never fire for a real fix, so it was an
+accidental *has-ever-had-a-GPS-fix* test wearing a freshness test's clothes.
+
+CLOCK RULE, generalized: **`sm.recv_time[service]` is the only age source
+that is domain-safe.** SubMaster stamps it with the CONSUMER's
+`time.monotonic()` no matter who published. `logMonoTime` is NOT a
+substitute — `cereal/messaging/__init__.py:45` stamps it with
+`time.monotonic()` for Python publishers while C++ ones use `CLOCK_BOOTTIME`
+(`common/timing.h`), so it reintroduces this bug class through another door.
+`recv_time` is `0.` until the first message, which is a *reject*, not a
+zero age. Corollary elsewhere: where the comparand is a WALL-CLOCK value
+(`os.stat().st_mtime`), monotonic is the wrong clock — see brake_light_shm.
+
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_resolver.py` —
+  `MAP_MSG_MAX_AGE = 2.0` (> 1 s so a single dropped message on the 1 Hz
+  `liveMapDataSP` doesn't blink the upcoming zone out). `_process_map_data`
+  gates on `sm.valid['liveMapDataSP']` (which is literally `llk.gpsOK`, see
+  `base_map_data.py:50` — the GPS-fix condition the epoch subtraction was
+  groping for) and computes `map_age = max(0., time.monotonic() -
+  sm.recv_time['liveMapDataSP'])`. `_calculate_map_data_limits` now takes
+  `map_age` as a PARAMETER rather than recomputing it: the two must not be
+  able to disagree. `unixTimestampMillis` and `LIMIT_MAX_MAP_DATA_AGE` are
+  gone and a test asserts they stay gone. ~20 lines of comment record the
+  measured numbers above.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
+  `_update_cruise_ramp()` rewritten with a full math derivation in its
+  docstring. DISTANCE-PARAMETERISED constant-decel envelope
+  `v_set(d) = sqrt(v_next^2 + 2*a*d_eff)`. Distance, not a timer: no `v_ego`
+  division (standstill-safe) and it is SELF-CORRECTING — every frame
+  re-solves from the current distance, so a late-appearing zone, a route
+  change, or the driver slowing early all converge with no state to get
+  stuck in. New constants: `RATE_NOM = 0.45` m/s per second (~1 mph/s, the
+  user's "1 mph every 1 second"), `RATE_MAX = 1.2`, `RAMP_T_MAX = 15.0` s,
+  `RAMP_D_MAX = 250.0` m, `RAMP_ARRIVE_EARLY_T = 1.0` s (target reached
+  BEFORE the sign, not at it), `RAMP_UP_DIST = 90.0`, `CONFIRM_N = 3`,
+  `LATCH_RELEASE_D = 30.0`, `BUTTON_INTENT_FRAMES = int(0.5 / DT_MDL)`,
+  `MIN_SET_SPEED_KPH_METRIC/IMPERIAL`, `V_CRUISE_MAX_KPH = 145`.
+  `RATE_MAX` IS NOT A TASTE VALUE: `CRUISE_MIN_ACCEL = -1.2`
+  (`long_mpc.py:65`) is a structural ceiling on what a falling cruise speed
+  can command, so any faster slew is display-only theatre. Do not raise it
+  without changing that first.
+  DELETED: `RAMP_DECEL`, `RAMP_MAX_RATE`, `GATE_COAST_ACCEL`,
+  `GATE_TIME_BUFFER`, `GATE_MIN_OVER`, `_cluster_change_is_ours`,
+  `_commanded_conv`, `_prev_commanded_conv`. The gas gate is now defined off
+  the ramp's own envelope instead of a second independent coast model.
+  RATIO RE-DERIVATION IS NOW BUTTON-GATED (`if self.v_cruise_cluster_changed
+  and self._button_event_recent():`). Mid-approach the cluster sits BETWEEN
+  zones, so re-reading the carried offset from a cluster change the RAMP
+  caused would silently collapse a +20% into whatever the ramp was passing
+  through. v3.4.0's one-frame `_cluster_change_is_ours` could not tell the
+  two apart once the ramp spanned many frames.
+- `sunnypilot/selfdrive/car/cruise_ext.py` — `update_speed_limit_assist_v_
+  cruise_non_pcm` is now a SINGLE WRITER of `self.v_cruise_kph`. It used to
+  have two unchained `if` blocks — the documented "idempotent boundary snap"
+  and the ramp follow — with the ramp LAST, so the snap was overwritten
+  before it reached the car. Dead code that read like the authoritative
+  path. Writes land on the DISPLAY GRID (`IMPERIAL_INCREMENT =
+  round(CV.MPH_TO_KPH, 1)`, 1 kph metric via `self.sla_is_metric`): the same
+  lattice the cruise buttons produce, so the ramp reads on the cluster as
+  ordinary 1-mph taps AND the driver's next `+` press cannot snap to a grid
+  point and silently eat part of the change. The "CS is deliberately
+  UNANNOTATED" comment block (the v3.4.2 boot fix) is untouched.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/sla_shm.py` — payload is now
+  3 fields, `"<target>,<gate>,<time.monotonic()>"`, with `STALE_S = 0.5`.
+  cruise_ext writes this channel's value into `v_cruise_kph` at 100 Hz, so
+  an unstamped channel meant a wedged plannerd left its last target in the
+  file forever and the car kept obeying a dead process — including reverting
+  the driver's own SET+ press a fraction of a second after they made it.
+  THE FAILURE MODE OF THIS CHANNEL MUST BE "NO REQUEST", NEVER A STUCK ONE.
+  A legacy 2-field line reads as stale, never as trusted.
+- `system/manager/storage_cleanup.py` — NEW, stdlib-only (an openpilot
+  import here would drag cereal/params onto the boot path before manager has
+  set them up). Called from `manager_init()` via `cleanup_async()` on a
+  background thread — NEVER synchronously, which would add `du` + `git gc`
+  to every boot. It is an ALLOW-LIST, not a walk-and-decide: absolute paths,
+  no globs, and a test asserts `/`, `/data`, `/data/openpilot`,
+  `/data/params`, `/data/media` can never appear in it. `cleanup()` is TOTAL
+  — no input makes it raise, because it runs before the car can start.
+  Thresholds (`LOW_BYTES`, `LOW_PERCENT`) sit ABOVE `deleter.py`'s 5 GB/10%
+  floor so this engages BEFORE drive logs get eaten, not after.
+  The actual cause of the user's "storage full" message was never diagnosed
+  (device offline at the time) — the `storage` Verify row exists so the next
+  occurrence produces evidence.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.5"; new
+  `/api/version` endpoint + `_VERSION_FILE`; new `storage` DIAG row (`df`,
+  graded on use%); four new `_CODE_MARKERS` rows (`MAP_MSG_MAX_AGE`,
+  `RAMP_ARRIVE_EARLY_T`, `BUTTON_INTENT_FRAMES`, `STALE_S`), 36 total.
+- `sunnypilot/navd/nav_web/index.html` — version pill in the title bar.
+- TESTS — 291 green off-device (was 200). NEW:
+  `speed_limit/tests/test_speed_limit_resolver_clock.py` (11) drives the
+  PRODUCER; the reason nothing caught the epoch bug for two years of forks
+  is that every SLA test fed `next_distance` in by hand and so exercised the
+  consumers with known-good metres. `speed_limit/tests/test_sla_shm.py` (19)
+  pins the freshness contract — the stale cases deliberately leave a VALID
+  non-zero target in the file so only the timestamp is old.
+  `car/tests/test_cruise_ext_sla_ramp.py` (10) pins quantization and, via
+  AST, the single-writer invariant (AST not grep: the method's comment block
+  describes the deleted writer at length). `system/manager/tests/
+  test_storage_cleanup.py` (pytest, `unittest` is ruff-banned) carries the
+  boot-path IMPORT guard.
+  FIVE mutation tests run and confirmed fail-then-restore: epoch bug (5
+  failures), shm age check (2), second `v_cruise_kph` writer (1), missing
+  quantization (3), ungated re-derivation (2).
+  TWO PRE-EXISTING TESTS WERE FOUND VACUOUS while updating them — both ran
+  so few frames that the slew cap dominated and their two branches produced
+  IDENTICAL values, so they would have passed with the feature deleted. Both
+  now run to settling (n=200). Watch for this shape.
+- ALSO NOTE: `sunnypilot/selfdrive/controls/lib/tests/test_lane_turn_desire.py`
+  is DEVICE-ONLY (needs `params_pyx.so`). It appears to collect off-device
+  only because a sibling test stubs `openpilot.common.params` into
+  `sys.modules`; it then runs against a lying Params and reports meaningless
+  failures. Exclude it alongside `test_cruise_mode.py`,
+  `test_custom_cruise.py`, `test_speed_limit_resolver.py`,
+  `test_auto_lane_change.py`.
+- `FUNNYPILOT_VERSION` -> 3.4.5.
+- ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE: the ramp depends on OSM's
+  `speedLimitAheadDistance` being a real metre value. If the next drive still
+  shows the adjustment starting only AT the boundary, check the Verify code
+  markers and `liveMapDataSP` freshness FIRST. Do not retune the ramp
+  constants until the distance is confirmed sane — that is how v3.4.0 spent
+  a whole release tuning a number that was never reaching the code.
+
 ### v3.4.4 Changes (based on funnypilot-3.4.3)
 
 The longitudinal status dot answers the question it was BUILT to answer: are my
@@ -186,6 +329,10 @@ uses PEP 585 generics and 3.8 fails collection with `'type' object is not
 subscriptable`. Deps needed for the import-light suites: pytest, numpy,
 pycapnp, setproctitle, zstandard, aiohttp, requests. Full command:
 `cd /tmp && PYTHONPATH=<repo> <py311> -m pytest --noconftest -q -p no:cacheprovider -o addopts="" <paths>`
+DEVICE-ONLY, always `--ignore` these (they need compiled extensions):
+`test_cruise_mode.py`, `test_custom_cruise.py`, `test_speed_limit_resolver.py`,
+`test_auto_lane_change.py`, `test_lane_turn_desire.py`. Known pre-existing
+failure to ignore: `long_v2/tests/test_physics.py`.
 Both boot guards were MUTATION-TESTED (bug reintroduced -> suites fail ->
 restored), per the "make the test fail with the bug present" rule.
 

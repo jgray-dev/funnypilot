@@ -13,10 +13,30 @@ from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
+
+# FunnyPilot v3.4.5 — CLOCK DOMAIN FIX. The upstream code computed map-data age
+# as `time.monotonic() - gpsLocation.unixTimestampMillis * 1e-3`. Those are two
+# DIFFERENT clocks: monotonic counts seconds since boot (~1e4), the GPS stamp is
+# a Unix epoch (~1.8e9, qcomgpsd.py sets it from `dt.timestamp()`). The
+# difference is about -1.785e9 s, so:
+#   * the staleness gate `age > 10` was never true for any real fix (it only
+#     rejected `unixTimestampMillis == 0`, i.e. "no fix ever") — an accidental
+#     has-ever-had-a-fix test, not a freshness test;
+#   * `distance_since_fix = v_ego * age` came out around -3.9e10 m at highway
+#     speed, so `distance_to_next_limit` was ~3.9e10 m instead of metres. Every
+#     consumer of that distance (SLA's pre-zone gas gate, and the v3.4.0
+#     set-speed ramp) was therefore DEAD CODE on a moving car — which is
+#     precisely the "it only starts adjusting once we enter the new zone"
+#     report this version fixes.
+# The correct age is measured in the CONSUMER's own clock: SubMaster stamps
+# `recv_time[s]` with `time.monotonic()` when it receives a message, regardless
+# of what language published it. Do NOT substitute `logMonoTime` here —
+# cereal/messaging stamps that with time.monotonic() for Python publishers but
+# CLOCK_BOOTTIME for C++ ones, which would reintroduce this exact bug class.
+MAP_MSG_MAX_AGE = 2.0  # s — liveMapDataSP is 1 Hz, so this tolerates one drop
 
 ALL_SOURCES = tuple(SpeedLimitSource.schema.enumerants.values())
 
@@ -134,23 +154,28 @@ class SpeedLimitResolver:
     self._process_map_data(sm)
 
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
-    gps_data = sm[self._gps_location_service]
     map_data = sm['liveMapDataSP']
 
-    gps_fix_age = time.monotonic() - gps_data.unixTimestampMillis * 1e-3
-    if gps_fix_age > LIMIT_MAX_MAP_DATA_AGE:
+    # recv_time defaults to 0. until the first message arrives, so this also
+    # rejects "no map data yet" without a separate check. sm.valid for this
+    # service is literally llk.gpsOK (base_map_data.py), i.e. the GPS-fix test
+    # the old epoch subtraction was reaching for.
+    map_age = max(0., time.monotonic() - sm.recv_time['liveMapDataSP'])
+    if not sm.valid['liveMapDataSP'] or map_age > MAP_MSG_MAX_AGE:
       return
 
     speed_limit = map_data.speedLimit if map_data.speedLimitValid else 0.
     next_speed_limit = map_data.speedLimitAhead if map_data.speedLimitAheadValid else 0.
 
-    self._calculate_map_data_limits(sm, speed_limit, next_speed_limit)
+    self._calculate_map_data_limits(sm, speed_limit, next_speed_limit, map_age)
 
-  def _calculate_map_data_limits(self, sm: messaging.SubMaster, speed_limit: float, next_speed_limit: float) -> None:
-    gps_data = sm[self._gps_location_service]
+  def _calculate_map_data_limits(self, sm: messaging.SubMaster, speed_limit: float, next_speed_limit: float,
+                                 map_age: float = 0.) -> None:
     map_data = sm['liveMapDataSP']
 
-    distance_since_fix = self.v_ego * (time.monotonic() - gps_data.unixTimestampMillis * 1e-3)
+    # map_age is passed in, not recomputed: the caller already gated on it and
+    # the two must not be able to disagree.
+    distance_since_fix = self.v_ego * map_age
     distance_to_speed_limit_ahead = max(0., map_data.speedLimitAheadDistance - distance_since_fix)
 
     self.limit_solutions[SpeedLimitSource.map] = speed_limit

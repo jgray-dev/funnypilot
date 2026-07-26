@@ -21,6 +21,7 @@ REPO = "jgray-dev/funnypilot"
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
 _SHELL = "/bin/bash"
 _PORT = 8888
+_VERSION_FILE = "/data/openpilot/FUNNYPILOT_VERSION"
 
 # FunnyPilot v3.2.7: triage flight-recorder logs (see
 # selfdrive/controls/lib/triage_recorder.py for the format and rationale).
@@ -39,7 +40,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.4.4"
+EXPECTED_VERSION = "3.4.5"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -86,6 +87,15 @@ _CODE_MARKERS = [
   # plain substring: the marker string is fed to grep inside single quotes, so
   # keep it free of quotes/metacharacters
   ("BrakeLight", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/carstate_ext.py", "brake-lamp bit read from CAN"),
+  ("def cleanup_async", "/data/openpilot/system/manager/storage_cleanup.py", "startup storage cleanup"),
+  ("storage_cleanup.cleanup_async", "/data/openpilot/system/manager/manager.py", "storage cleanup wired into manager"),
+  # v3.4.5: the clock-domain fix is the load-bearing part of the predictive
+  # ramp — without it distance_to_next_limit reads ~4e10 m and every consumer
+  # of it is silently dead code on a moving car.
+  ("MAP_MSG_MAX_AGE", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_resolver.py", "map-data clock-domain fix"),
+  ("RAMP_ARRIVE_EARLY_T", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "predictive set-speed ramp (v3.4.5)"),
+  ("BUTTON_INTENT_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "button-intent ratio gate"),
+  ("STALE_S", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/sla_shm.py", "SLA shm staleness gate"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
@@ -100,6 +110,17 @@ _UPDATER_CMD = (
   "echo \"staged: $(git -c safe.directory='*' -C /data/safe_staging/finalized rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(none)')\""
 )
 
+# FunnyPilot v3.4.5: READ-ONLY storage picture. The "storage full" report on
+# the v3.4.4 flash could not be diagnosed because nothing recorded what was
+# actually consuming the disk — this row exists so the next occurrence is
+# evidence rather than a guess. `du -sh` on a handful of named suspects only;
+# no whole-filesystem walk (that would take minutes on the drive log tree).
+_STORAGE_CMD = (
+  "df -h /data | tail -1; "
+  "du -sh /data/media/0/realdata /data/openpilot/.git /data/safe_staging/old_openpilot "
+  "/data/core /data/funnypilot_triage 2>/dev/null"
+)
+
 DIAG_CHECKS = [
   {"id": "version", "name": "FunnyPilot version",       "cmd": "cat /data/openpilot/FUNNYPILOT_VERSION 2>&1"},
   {"id": "branch",  "name": "Git branch",               "cmd": f"{_GIT} rev-parse --abbrev-ref HEAD 2>&1"},
@@ -108,6 +129,7 @@ DIAG_CHECKS = [
   {"id": "updater", "name": "Updater target / staged",  "cmd": _UPDATER_CMD},
   {"id": "model_bundle", "name": "Active model bundle", "cmd": "cat /data/params/d/ModelManager_ActiveBundle 2>/dev/null || echo '(none / stock)'"},
   {"id": "logs",    "name": "Triage logs on disk",      "cmd": "ls -sh1 /data/funnypilot_triage/ 2>/dev/null || echo '(no logs yet)'"},
+  {"id": "storage", "name": "Disk usage",               "cmd": _STORAGE_CMD},
 ]
 
 
@@ -139,6 +161,29 @@ def _eval_diag(check_id: str, out: str):
     if staged not in ("", "(none)") and EXPECTED_VERSION not in staged:
       return ("warn", f"staged: {staged} (boot guard will discard it)")
     return ("pass", f"target {target or '(unset)'}, staged {staged or '(none)'}")
+  if check_id == "storage":
+    # First line is `df -h /data | tail -1`; its 5th field is use%. Graded, not
+    # merely reported, so "storage full" shows up here BEFORE it shows up as a
+    # failed flash. old_openpilot appearing at all is its own warning: the
+    # startup cleanup should have removed it, and while it exists
+    # launch_chffrplus.sh refuses to install any update.
+    lines = s.splitlines()
+    use = ""
+    if lines:
+      parts = lines[0].split()
+      use = next((p for p in parts if p.endswith("%")), "")
+    stale_backup = any("old_openpilot" in ln for ln in lines)
+    try:
+      pct = int(use.rstrip("%"))
+    except ValueError:
+      return ("info", s.replace("\n", " | ") or "(unavailable)")
+    if pct >= 95:
+      return ("fail", f"/data {use} full")
+    if stale_backup:
+      return ("warn", f"/data {use} used; old_openpilot backup present (blocks updates)")
+    if pct >= 85:
+      return ("warn", f"/data {use} used")
+    return ("pass", f"/data {use} used")
   return ("info", "")
 
 
@@ -151,7 +196,7 @@ async def _run_diag_check(check: dict) -> dict:
     )
     out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
     text = out_b.decode(errors="replace")
-  except asyncio.TimeoutError:
+  except TimeoutError:
     text = "(timed out)"
   except Exception as e:
     text = f"(error: {e})"
@@ -490,10 +535,29 @@ async def _start_triage_background(app: web.Application) -> None:
   app["triage_pulse"] = asyncio.create_task(_pulse_task())
 
 
+async def handle_version(request: web.Request) -> web.Response:
+  """FunnyPilot v3.4.5: the running version, for the web UI title bar.
+
+  Read from disk on every request rather than reported from EXPECTED_VERSION,
+  because the whole point is to show what the device is ACTUALLY running. A
+  stale checkout still serving this page would otherwise report the version it
+  was supposed to be — the exact "the flash looked fine" failure of v3.4.3.
+  `expected` goes back alongside so the UI can flag the mismatch.
+  """
+  running = ""
+  try:
+    with open(_VERSION_FILE) as f:
+      running = f.read().strip()
+  except Exception:
+    pass
+  branch = await _sh("git -C /data/openpilot -c safe.directory='*' rev-parse --abbrev-ref HEAD", timeout=5)
+  return web.json_response({"version": running, "expected": EXPECTED_VERSION, "branch": branch})
+
+
 async def handle_index(request: web.Request) -> web.Response:
   index_path = os.path.join(_STATIC_DIR, "index.html")
   if os.path.exists(index_path):
-    with open(index_path, "r") as f:
+    with open(index_path) as f:
       content = f.read()
     return web.Response(content_type="text/html", text=content)
   return web.Response(text="FunnyPilot Terminal Server", content_type="text/html")
@@ -503,6 +567,7 @@ def main():
   app = web.Application()
   app.router.add_get("/", handle_index)
   app.router.add_get("/ws", handle_ws)
+  app.router.add_get("/api/version", handle_version)
   app.router.add_get("/api/branches", handle_branches)
   app.router.add_post("/api/flash", handle_flash)
   app.router.add_post("/api/diagnostics", handle_diagnostics)

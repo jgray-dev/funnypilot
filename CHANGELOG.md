@@ -1,3 +1,98 @@
+FunnyPilot v3.4.5 (2026-07-26)
+========================
+SLA stops reacting at the sign and starts planning for it. The headline feature
+is a predictive set-speed ramp, but the load-bearing change is a clock-domain
+fix without which that ramp — and the v3.4.0 one before it — was dead code on a
+moving car.
+
+* fix(speed limit): ROOT CAUSE of "it's too late". `speed_limit_resolver.py`
+  computed map-data age as `time.monotonic() - unixTimestampMillis * 1e-3`,
+  subtracting a Unix epoch (~1.8e9) from a since-boot counter (~1e4). On this
+  device the result was about -1.785e9 s, so `distance_to_next_limit` came out
+  near 3.9e10 m at highway speed. Every consumer of that number — SLA's
+  pre-zone gas gate AND the v3.4.0 predictive ramp — was therefore inert while
+  looking perfectly healthy, and what the driver actually felt at the boundary
+  was nothing but the slew cap unwinding at ~9 mph/s.
+  The staleness gate was equally broken: `age > LIMIT_MAX_MAP_DATA_AGE` could
+  never fire for a real fix, so it was an accidental has-ever-had-a-GPS-fix
+  test wearing a freshness test's clothes.
+  Age now comes from `sm.recv_time['liveMapDataSP']`, which SubMaster stamps
+  with the CONSUMER's `time.monotonic()` regardless of what language published
+  the message. `logMonoTime` would NOT have been safe: it is `time.monotonic()`
+  for Python publishers and `CLOCK_BOOTTIME` for C++ ones. Freshness is gated
+  on `sm.valid` (literally `llk.gpsOK`) plus `MAP_MSG_MAX_AGE = 2.0`, wide
+  enough to survive one dropped message on a 1 Hz service.
+* feat(speed limit): predictive set-speed ramp. USER REPORT, verbatim: "it
+  waits until we ENTER the new speed limit, where it quickly spams control
+  commands to adjust speed one by one ... we need to move the logic to start
+  adjusting prior to reaching the new speed limit ... I think 10-15 seconds is
+  a safe range to target ... it needs to feel very natural."
+  `_update_cruise_ramp()` walks the set speed down a distance-parameterised
+  constant-decel envelope `v_set(d) = sqrt(v_next^2 + 2*a*d_eff)`. Distance,
+  not time: no `v_ego` division, so it cannot blow up at standstill, and it is
+  self-correcting — every frame re-solves from the CURRENT distance, so a
+  late-appearing zone, a route change or a slow-down all converge without any
+  timer state to get stuck.
+  The rate is chosen so the whole adjustment spans the user's window:
+  `RATE_NOM = 0.45` m/s per second (~1 mph/s), capped at `RATE_MAX = 1.2`,
+  engagement bounded by `RAMP_T_MAX = 15.0` s and `RAMP_D_MAX = 250.0` m, and
+  the target is reached `RAMP_ARRIVE_EARLY_T = 1.0` s before the boundary.
+  `RATE_MAX` is not a taste value: `CRUISE_MIN_ACCEL = -1.2` in `long_mpc.py`
+  is a structural ceiling, so any faster set-speed slew would be display-only
+  theatre the car never follows.
+* fix(car): `cruise_ext.update_speed_limit_assist_v_cruise_non_pcm` had TWO
+  unchained `if` blocks both assigning `self.v_cruise_kph` — the documented
+  "idempotent boundary snap" and the ramp follow — with the ramp last. The snap
+  was overwritten before it ever reached the car: dead code that read like the
+  authoritative path. SLA now owns the value end to end, and an AST guard keeps
+  the second writer from returning.
+* fix(car): the ramp writes on the DISPLAY GRID (1 kph metric,
+  `IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)` imperial), the same lattice
+  the cruise buttons produce. A raw continuous target would park the set speed
+  somewhere the driver could not have set it, and their next `+` press would
+  snap to the nearest grid point, silently eating part of the change. It is
+  also what makes the ramp read on the cluster as ordinary 1-mph taps.
+* fix(speed limit): ratio re-derivation is now gated on a recent button event
+  (`BUTTON_INTENT_FRAMES`). Mid-approach the cluster sits BETWEEN zones, so
+  re-reading the offset from a cluster change the ramp itself caused would let
+  SLA silently collapse a carried +20% into whatever value the ramp happened to
+  be passing through. This replaces the v3.4.0 `_cluster_change_is_ours()`
+  one-frame history, which could not distinguish the two on a multi-frame ramp.
+* fix(speed limit): `sla_shm.py` gained a timestamp field and `STALE_S = 0.5`.
+  cruise_ext writes this channel's target into `v_cruise_kph` at 100 Hz, so
+  without a freshness check a wedged plannerd left the last value in the file
+  forever and the car kept obeying a process that no longer exists — including
+  reverting the driver's own SET+ press a fraction of a second after they made
+  it. THE FAILURE MODE OF THIS CHANNEL MUST BE "NO REQUEST", NEVER A STUCK ONE.
+* feat(manager): NEW `system/manager/storage_cleanup.py`, called from
+  `manager_init()` on a background thread (never synchronously — a blocking
+  call would add `du` + `git gc` to every boot). USER REPORT: "when I flashed
+  this version I got a 'storage full' message briefly."
+  It is an ALLOW-LIST, not a walk-and-decide: absolute paths only, no globs,
+  and a test asserts `/data`, `/data/openpilot`, `/data/params`, `/data/media`
+  and `/` can never appear in it. `cleanup()` is total — no input makes it
+  raise, because it runs before the car can start. Thresholds sit ABOVE
+  `deleter.py`'s 5 GB / 10% floor so this pass engages before drive logs are
+  eaten, not after.
+* feat(web): the FunnyPilot version is now shown in the web UI title bar,
+  served from a new `/api/version` endpoint reading `FUNNYPILOT_VERSION`. A new
+  `storage` row in Verify reports filesystem use% (read-only) so the next
+  occurrence of the storage message produces evidence instead of a memory.
+* test: 291 green off-device (was 200). Three new suites — the resolver clock
+  guard (11), the shm freshness contract (19), and cruise_ext's ramp half (10)
+  — plus a rewritten storage-cleanup suite. FIVE independent mutation tests
+  were run and confirmed to fail-then-restore: the epoch bug (5 failures), the
+  shm age check (2), the second `v_cruise_kph` writer (1), the missing display
+  quantization (3), and ungated ratio re-derivation (2).
+  Two pre-existing tests were found to be VACUOUS while fixing them up — both
+  ran so few frames that the slew cap dominated and their two branches produced
+  identical values. They now run to settling.
+* NOT VERIFIED ON ROAD / FALSIFIABLE: the ramp now depends on OSM's
+  `speedLimitAheadDistance` being a real metre value. If the next drive still
+  shows the adjustment beginning only at the boundary, check the `storage` and
+  code-marker rows in Verify and the `liveMapDataSP` freshness FIRST — do not
+  retune the ramp constants until the distance is confirmed sane.
+
 FunnyPilot v3.4.4 (2026-07-26)
 ========================
 The longitudinal status dot now answers the question it was actually built to
