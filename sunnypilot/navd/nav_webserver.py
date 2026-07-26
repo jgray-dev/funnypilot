@@ -39,7 +39,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.4.3"
+EXPECTED_VERSION = "3.4.4"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -82,6 +82,10 @@ _CODE_MARKERS = [
   ("class AutoUpdater", "/data/openpilot/sunnypilot/auto_updater/manager.py", "offroad wifi auto-updater"),
   ("def write_sla_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/sla_shm.py", "SLA /dev/shm channel"),
   ("deliberately UNANNOTATED", "/data/openpilot/sunnypilot/selfdrive/car/cruise_ext.py", "capnp union boot fix (v3.4.2)"),
+  ("class BrakeLightPublisher", "/data/openpilot/sunnypilot/selfdrive/car/brake_light_shm.py", "brake-lamp /dev/shm channel"),
+  # plain substring: the marker string is fed to grep inside single quotes, so
+  # keep it free of quotes/metacharacters
+  ("BrakeLight", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/carstate_ext.py", "brake-lamp bit read from CAN"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

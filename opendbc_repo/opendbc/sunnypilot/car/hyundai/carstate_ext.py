@@ -12,6 +12,15 @@ from opendbc.can.parser import CANParser
 from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
+# FunnyPilot v3.4.4: publish the car's own brake-lamp bit for the onroad status
+# dot. The import is guarded because opendbc is meant to stay importable
+# without openpilot on the path (its own test suite does exactly that); on the
+# device card always has it, and elsewhere the publisher degrades to a no-op.
+try:
+  from openpilot.sunnypilot.selfdrive.car.brake_light_shm import BrakeLightPublisher
+except ImportError:  # pragma: no cover - only hit outside the openpilot tree
+  BrakeLightPublisher = None
+
 
 class CarStateExt:
   def __init__(self, CP, CP_SP):
@@ -19,6 +28,8 @@ class CarStateExt:
     self.CP_SP = CP_SP
 
     self.aBasis = 0.0
+    self.brake_light = False
+    self._brake_light_pub = BrakeLightPublisher() if BrakeLightPublisher is not None else None
 
   def update_speed_limit(self, cp, cp_cam) -> float:
     speed_limit = 0
@@ -46,6 +57,16 @@ class CarStateExt:
     cp_cam = can_parsers[Bus.cam]
 
     self.aBasis = cp.vl["TCS13"]["aBasis"]
+
+    # FunnyPilot v3.4.4: TCS13.BrakeLight — the ESC's own brake-lamp output. It
+    # is high whenever the brakes are actually being applied, whoever asked for
+    # it (driver pedal, ACC, AEB), and low when the car is merely off throttle.
+    # That is the one signal that answers "are my brake lights on", which no
+    # threshold on a commanded accel can honestly answer. TCS13 is already
+    # decoded here for aBasis, so this is free.
+    self.brake_light = cp.vl["TCS13"]["BrakeLight"] == 1
+    if self._brake_light_pub is not None:
+      self._brake_light_pub.update(self.brake_light)
 
     if self.CP_SP.flags & HyundaiFlagsSP.NON_SCC:
       cruise_msg = "LABEL11" if self.CP.flags & HyundaiFlags.EV else \

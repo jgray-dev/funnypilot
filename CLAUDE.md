@@ -51,6 +51,82 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.4.4 Changes (based on funnypilot-3.4.3)
+
+The longitudinal status dot answers the question it was BUILT to answer: are my
+brake lights on? User report, verbatim: "it's showing red when we're commanding
+any decceleration ... the dot goes red even if we're still using the throttle
+but at a lower amount." Correct semantics: green = ANY throttle, gray = gas
+gating / long inactive / coasting, red = ANY braking force (lamps lit).
+
+KEY INSIGHT: `actuatorsOutput.accel` (SCC12 `aReqValue`) is a REQUEST to slow
+down. On this platform the ESC alone decides whether to satisfy it by cutting
+throttle or by pressing the brakes, so the sign of the command cannot answer
+"are the lamps on". Any accel threshold that tries to is a coast model — i.e.
+exactly the v3.3.9 mistake. The fix is to stop inferring and ASK THE CAR.
+
+- `opendbc_repo/opendbc/sunnypilot/car/hyundai/carstate_ext.py` — classic-CAN
+  `update()` now also reads `cp.vl["TCS13"]["BrakeLight"]`, the ESC's own
+  brake-lamp output bit (high whenever the brakes are applied by ANY requester
+  — driver pedal, ACC, AEB; low when merely off throttle). TCS13 is already
+  parsed one line above for `aBasis` and the classic parser is built with an
+  empty signal list (= all signals decoded), so this costs nothing on CAN.
+  `BrakeLightPublisher` import is try/except-guarded: opendbc must stay
+  importable without openpilot on the path (its own suite does that), and the
+  publisher degrades to a no-op there.
+- `sunnypilot/selfdrive/car/brake_light_shm.py` — NEW, stdlib-only.
+  `/dev/shm/fp_brake`, one character `"0"`/`"1"`, atomic (mkstemp + os.replace).
+  Same rationale as `sla_shm.py`: NO `cereal/*.capnp` change => no device
+  rebuild (`CarState.brakeLights` exists upstream only as
+  `brakeLightsDEPRECATED`). `BrakeLightPublisher.update()` writes on every
+  transition (UI sees a brake within one frame) plus a `HEARTBEAT_FRAMES = 20`
+  floor (5 Hz at the 100 Hz CarState rate). LOAD-BEARING INVARIANT:
+  `read_brake_light()` returns **None = UNKNOWN**, never False, when the file
+  is missing/garbage or older than `STALE_S = 1.0` — a dead publisher must not
+  become a confident "brakes off".
+- `selfdrive/ui/sunnypilot/onroad/long_status_dot.py` — `classify()` gained a
+  4th arg `brake_light: bool | None`. Precedence: long inactive -> gray; lamp
+  lit -> red (outranks a gate flag, so real braking during an approach is never
+  masked); gas gating -> gray; lamp UNKNOWN + accel < -_EPS -> red (degraded
+  fallback to the old rule, explicit rather than silent); accel > _EPS -> green;
+  else gray. `_BRAKE_FIRM = -0.35` DELETED — it was the last coast-shaped
+  threshold in the file, and a test now asserts it cannot come back. `_EPS`
+  (0.02) is float/actuator noise around zero, not a physical model.
+  KNOWN ASYMMETRY, deliberate and documented in the module docstring: the car
+  publishes a brake lamp but no equally unambiguous "throttle applied" bit, so
+  steady-state cruise holding speed with real throttle but ~zero accel command
+  reads gray, not green. Fixing that honestly needs an engine-torque signal
+  (`EMS16.TQI` / `TCS13.TQI_SCC`) whose "any throttle" boundary is not obvious
+  — do NOT paper over it with another threshold.
+- `opendbc_repo/opendbc/sunnypilot/car/hyundai/tests/test_brake_light_signal.py`
+  — NEW (4 cases). BOOT-PATH GUARD, same class as the cruise_ext import test:
+  `cp.vl[...]` raises KeyError on an unknown signal name, so a typo or an
+  upstream DBC rename would not degrade the dot, it would kill card at 100 Hz
+  = a car that does not drive. Parses `hyundai_kia_generic.dbc` as TEXT (no
+  CANParser, no compiled extension) so it runs anywhere; includes an
+  anti-vacuous self-check and asserts carstate_ext reads the exact name.
+- `sunnypilot/selfdrive/car/tests/test_brake_light_shm.py` — NEW (13 cases):
+  round-trip, garbage/empty -> None, stale -> None **even when the last value
+  was True**, write-on-transition, heartbeat, rate limiting, and
+  `HEARTBEAT_FRAMES/100.0 < STALE_S` (the freshness contract itself).
+- `selfdrive/ui/sunnypilot/onroad/tests/test_long_status_dot.py` — rewritten
+  (was 9 cases). `TestReducedThrottle` is the direct regression guard for this
+  bug report; `TestUnknownLamp` pins None != False; `TestNoInferredPhysics`
+  keeps the v3.3.9 signature guard and adds `_BRAKE_FIRM`/`get_coast_accel`
+  absence.
+- All three new guards MUTATION-TESTED (bug reintroduced -> suite fails ->
+  restored). Import-light suite 200 green (was 179).
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.4"; two new
+  `_CODE_MARKERS` rows (`class BrakeLightPublisher`, and `BrakeLight` in
+  carstate_ext.py), 32 total. Markers are grepped inside single quotes, so they
+  must stay free of quotes/metacharacters.
+- `FUNNYPILOT_VERSION` -> 3.4.4.
+- ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE: this assumes the K5's ESC raises
+  `TCS13.BrakeLight` for ACC-commanded braking, not only for the driver's
+  pedal. If the next drive shows the dot staying gray through obvious
+  openpilot braking, that assumption is dead — next suspects `SCC12.StopReq`
+  and `TCS13.DriverOverride`. Do not add an accel threshold to compensate.
+
 ### v3.4.3 Changes (based on funnypilot-3.4.2)
 
 Recovery + hardening. 3.4.2's annotation fix was correct but had never run on

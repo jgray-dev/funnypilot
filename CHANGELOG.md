@@ -1,3 +1,67 @@
+FunnyPilot v3.4.4 (2026-07-26)
+========================
+The longitudinal status dot now answers the question it was actually built to
+answer: are my brake lights on? It stops calling reduced throttle "braking".
+
+* fix(ui): the status dot went red on ANY commanded deceleration, so lifting to
+  a lower throttle lit it up exactly like a brake application. USER REPORT,
+  verbatim: "it's showing red when we're commanding any decceleration ... so
+  the dot goes red even if we're still using the throttle but at a lower
+  amount. I want it as a true reflection of the vehicles controls status."
+  The premise was wrong, not the threshold: `aReqValue < 0` is a request to
+  slow down, and on this platform the ESC decides whether to satisfy it by
+  cutting throttle or by pressing the brakes. The sign of the command cannot
+  answer the question, at any tuning.
+  New semantics: red = the car's brake lamps are lit, green = throttle
+  commanded, gray = gas gating / off throttle / long control inactive.
+* feat(car): NEW `sunnypilot/selfdrive/car/brake_light_shm.py` + a two-line
+  read in `opendbc/sunnypilot/car/hyundai/carstate_ext.py`. Red now comes from
+  `TCS13.BrakeLight`, a bit the ESC broadcasts about ITS OWN actuator — lamps
+  lit or not, whoever asked (driver pedal, ACC, AEB). TCS13 is already decoded
+  on that exact line for `aBasis`, and the classic-CAN parser is built with an
+  empty signal list, so this costs nothing on the CAN side.
+  NOT A RETURN TO v3.3.9. That version compared the commanded accel against
+  `get_coast_accel(pitch)` and was rejected for making the dot a function of
+  IMU-derived road grade. A reported lamp state is the opposite of inferred
+  physics: no threshold, no coast line, no pitch, no measured acceleration.
+  `_BRAKE_FIRM` — the last fixed coast-ish threshold in the file — is deleted,
+  and a test asserts it cannot come back.
+* feat(car): the bit crosses processes over `/dev/shm/fp_brake`, same reason
+  and same pattern as `sla_shm.py` / `lat_interp`: no `cereal/*.capnp` change,
+  no device rebuild. (`CarState.brakeLights` exists upstream only as
+  `brakeLightsDEPRECATED`.) The publisher writes on every transition and
+  otherwise at 5 Hz, so a steady state costs five atomic writes a second.
+  LOAD-BEARING: the reader returns `None` (UNKNOWN), never `False`, when the
+  file is missing or stale. False means "the car says the brakes are off";
+  None means "nobody told us anything", and classify() falls back to the old
+  commanded-decel rule instead of confidently claiming brakes-off on a car or
+  build that has no publisher.
+* test: 21 new cases, 200 green off-device. `test_long_status_dot.py` rewritten
+  around the new contract, with `TestReducedThrottle` as the direct regression
+  guard for this bug report. NEW `test_brake_light_shm.py` (13 cases: round
+  trip, garbage, staleness, publisher rate limiting, never-raises). NEW
+  `test_brake_light_signal.py` — asserts `BrakeLight` really is a TCS13 signal
+  in `hyundai_kia_generic.dbc` and that carstate_ext spells it that way. That
+  one is a boot-path guard, not a nicety: `cp.vl["TCS13"]["BrakeLight"]` raises
+  KeyError on an unknown name, inside card, at 100 Hz — a typo there is a car
+  that does not drive, the same failure class as v3.4.0/v3.4.1.
+  All three guards were MUTATION-TESTED (bug reintroduced -> suites fail ->
+  restored), per the standing rule.
+* KNOWN ASYMMETRY, deliberate and documented in the module: the car publishes a
+  brake lamp but no equally unambiguous "throttle applied" bit, so green still
+  keys off the commanded accel. A steady cruise that holds speed with real
+  throttle but a ~zero accel command reads gray, not green. Fixing that
+  honestly needs an engine-torque signal (`EMS16.TQI` / `TCS13.TQI_SCC`) whose
+  "any throttle" boundary is not obvious — it is NOT to be papered over with
+  another threshold.
+* ON-ROAD VERIFICATION REQUIRED, and it is directly falsifiable: this assumes
+  the K5's ESC raises `TCS13.BrakeLight` for ACC-commanded braking, not only
+  for the driver's pedal. If the dot never goes red while openpilot brakes,
+  that assumption is dead and the next signal to try is `SCC12.StopReq` /
+  `TCS13.DriverOverride`.
+* chore: `FUNNYPILOT_VERSION` -> 3.4.4, `EXPECTED_VERSION` -> "3.4.4", two new
+  Verify code markers (32 total).
+
 FunnyPilot v3.4.3 (2026-07-25)
 ========================
 Recovery + hardening release. Gets the car off the splash screen, fixes the
