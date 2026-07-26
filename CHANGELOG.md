@@ -1,3 +1,69 @@
+FunnyPilot v3.4.6 (2026-07-26)
+========================
+Fixes the memory leak introduced in v3.4.5: the device reported low memory
+shortly after going onroad, climbed steadily, and eventually died. One change
+is responsible, and it is the `git gc` that v3.4.5's new startup storage
+cleanup ran.
+
+* fix(manager): REMOVED the `_git_gc()` step from
+  `system/manager/storage_cleanup.py`. USER REPORT: "when I enter on road
+  mode, I see low memory and the number creeps up until the device crashes."
+  WHAT IT COST, measured rather than estimated. `git gc --prune=now` on the
+  funnypilot repo (423 MB of packs, 4 cores) peaks at **1.69 GB RSS**:
+  `git gc` shells out to `git repack`, which runs one `pack-objects` per core
+  with an unbounded delta window. On a 4 GB device already running the onroad
+  stack, with no swap, that is an OOM. Bounding it (`pack.threads=1`,
+  `pack.windowMemory=16m`, `pack.deltaCacheSize=16m`) still peaked at 629 MB,
+  so tuning was not a fix — removal is.
+  WHY IT FIRED EVERY SINGLE DRIVE rather than occasionally: the gc sat behind
+  the `low` free-space gate, whose thresholds (6 GB / 12%) are deliberately
+  ABOVE `deleter.py`'s 5 GB / 10% floor. But deleter holds free space AT its
+  floor by design, so free space hovers just under 6 GB forever and `low` is
+  effectively ALWAYS TRUE on any device that has recorded real mileage. The
+  gate that read as "only when space is actually low" was permanently open.
+  WHY THE TIMEOUT DIDN'T SAVE IT: `subprocess.run(timeout=180)` kills only
+  the direct child. `git gc`'s `repack`/`pack-objects` grandchildren survive
+  it and keep allocating, so `GIT_GC_TIMEOUT_S` bounded nothing at all. A
+  time bound is not a memory bound.
+  WHY IT RACED THE DRIVE: `cleanup_async()` starts at `manager_init()`, i.e.
+  seconds before the whole onroad stack comes up — the daemon thread and the
+  car pull away together.
+  TWO MORE REASONS IT CANNOT COME BACK, either one sufficient on its own:
+  upstream openpilot DELIBERATELY disables on-device gc
+  (`system/updated/updated.py:setup_git_options` sets `gc.auto=0` and
+  `gc.autoDetach=false`) — v3.4.5 hand-rolled the thing upstream had switched
+  off; and rewriting `.git` makes `updated.py:init_overlay` see
+  `find .git -newer .overlay_init` come back non-empty, so it tears down and
+  rebuilds the entire overlay on the next boot. The gc cost more disk than it
+  reclaimed, i.e. it made the "storage full" symptom it was written for
+  WORSE.
+  Reclaiming `.git` is offroad maintenance, not a boot task. A device whose
+  `.git` has genuinely run away wants a fresh clone.
+* fix(manager): the rest of the cleanup is UNCHANGED and still runs — the
+  unconditional removal of `/data/safe_staging/old_openpilot` (which is both
+  the biggest reclaim and the thing that blocks every future update), plus
+  `/data/core` and `/tmp/comma_download_cache` when space is low. Those are
+  rmtrees; they are bounded in memory. The module is now stdlib-only in the
+  strong sense: it spawns no processes at all.
+* test: NEW `TestNoSubprocesses` in `system/manager/tests/
+  test_storage_cleanup.py` — asserts on the AST (not on a substring, so a
+  commented-out call cannot satisfy it) that the module imports no
+  `subprocess`/`multiprocessing`/`asyncio`, makes no process-spawning call,
+  never mentions git outside its docstring, and that `_git_gc`,
+  `GIT_GC_MIN_BYTES`, `GIT_GC_TIMEOUT_S` and `BASEDIR` are gone. Plus
+  `test_low_gate_is_not_rare`, which pins the "`low` is always true"
+  consequence next to the threshold assertion that causes it, so the next
+  person to hang work off that gate reads both at once.
+  MUTATION TESTED: re-adding `subprocess.run(["git", ..., "gc"])` to
+  `cleanup()` fails 3 of the new tests and passes none of them; restoring
+  returns 31/31 green.
+* NOT VERIFIED ON ROAD: this removes the leak's source rather than treating
+  the symptom, so the check is simply that memory is flat across a drive. If
+  it still climbs, the next suspect is NOT this module — nothing else added
+  in v3.4.5 allocates per-frame — and the `storage`/`Disk usage` row in
+  Verify plus the code-marker rows should be captured before retuning
+  anything.
+
 FunnyPilot v3.4.5 (2026-07-26)
 ========================
 SLA stops reacting at the sign and starts planning for it. The headline feature

@@ -11,18 +11,40 @@ known offenders on this fork are both created by things we do a lot of:
      wrong direction: launch_chffrplus.sh refuses to install any future
      update while it exists ("openpilot backup found, not updating"). So
      removing it is correct on its own merits and is done UNCONDITIONALLY.
-  2. `.git` bloat in /data/openpilot. Every deploy is `git fetch` +
-     `reset --hard` onto a force-pushed branch, which orphans the previous
-     tip. Those objects stay reachable through the reflog and are never
-     packed away. Reclaimed only when space is actually low, because gc
-     costs real time at boot.
+  2. REMOVED IN v3.4.6 — `.git` bloat in /data/openpilot. v3.4.5 ran
+     `git reflog expire` + `git gc --prune=now` from here. That is the
+     memory leak described in the v3.4.6 changelog and it is not coming
+     back; see NO SUBPROCESSES below for the full reasoning.
 
 DESIGN RULES, all load-bearing:
   - stdlib only, and NOTHING here may raise. This module is imported and
     called from `manager_init()`; an exception here is a car that does not
     start. Every step is individually try/excepted and the top-level entry
     point catches BaseException-minus-the-ones-you-must-not-swallow.
-  - It runs on a DAEMON THREAD. Boot must not wait on `du`/`git gc`.
+  - It runs on a DAEMON THREAD. Boot must not wait on the size walk.
+  - NO SUBPROCESSES (v3.4.6). Everything this module does must be bounded in
+    MEMORY as well as in time, because it runs concurrently with the car
+    going onroad on a device with no swap.
+    `git gc` is the counter-example that forced this rule. Measured on the
+    funnypilot repo (423 MB of packs, 4 cores): `git gc --prune=now` peaks at
+    1.69 GB RSS — `git repack` spawns one `pack-objects` per core and the
+    delta window is unbounded by default. On a 4 GB device already running
+    the onroad stack that is an OOM, and it happens seconds after
+    `manager_init()`, i.e. exactly as the driver pulls away.
+    Three further reasons it can never live here, any one of them sufficient:
+      * `subprocess.run(timeout=...)` kills only the direct child. `git gc`'s
+        `repack`/`pack-objects` grandchildren survive the timeout and keep
+        allocating, so GIT_GC_TIMEOUT_S bounded nothing at all.
+      * upstream openpilot DELIBERATELY disables on-device gc —
+        `system/updated/updated.py:setup_git_options` sets `gc.auto=0` and
+        `gc.autoDetach=false`. Re-adding it by hand overrides a decision that
+        was made for this exact reason.
+      * rewriting `.git` makes `updated.py:init_overlay` see
+        `find .git -newer .overlay_init` non-empty, so it tears down and
+        rebuilds the whole overlay on the next boot — which costs more disk
+        than the gc reclaimed. It made the storage problem worse.
+    Reclaiming `.git` is offroad maintenance, not a boot task. A device whose
+    `.git` has actually run away wants a fresh clone.
   - It NEVER touches: /data/openpilot itself, /data/params, the loggerd log
     root (deleter owns that and has its own retention policy), or
     /data/safe_staging/merged (an active overlayfs MOUNT — `rm -rf` on the
@@ -34,12 +56,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import threading
 
 # Absolute paths only. Anything not on this list is never removed.
 OLD_OPENPILOT = "/data/safe_staging/old_openpilot"
-BASEDIR = "/data/openpilot"
 
 # Paths cleaned only when free space is below LOW_BYTES/LOW_PERCENT. Each is
 # regenerated on demand by whatever wrote it; none is needed to boot.
@@ -51,12 +71,16 @@ LOW_SPACE_TARGETS = (
 # `deleter.py` maintains 5 GB / 10% free by trimming drive segments. We aim a
 # little above it so this pass does work BEFORE deleter starts eating logs the
 # user may still want, not after.
+#
+# NOTE, and it is the reason v3.4.5's leak fired on every single ignition
+# cycle rather than occasionally: because these sit ABOVE deleter's floor,
+# `low` is effectively ALWAYS TRUE on a device that has recorded any real
+# mileage — deleter's steady state IS 5 GB / 10% free, so free space hovers
+# just under 6 GB / 12% forever. That is harmless for the cheap rmtrees below
+# and is why the thresholds are unchanged, but it means `low` must never be
+# read as "rare". Anything expensive gated on it runs every boot.
 LOW_BYTES = 6 * 1024 ** 3
 LOW_PERCENT = 12.0
-
-# Below this, .git isn't worth the gc time.
-GIT_GC_MIN_BYTES = 512 * 1024 ** 2
-GIT_GC_TIMEOUT_S = 180
 
 # Bound the size walk so a pathological tree can't spin the thread.
 _MAX_WALK_ENTRIES = 200_000
@@ -118,28 +142,6 @@ def _rm(path: str) -> int:
   return 0 if os.path.exists(path) else size
 
 
-def _git_gc(basedir: str = BASEDIR) -> int:
-  """Expire the reflog and repack. Returns bytes reclaimed.
-
-  NEVER run under sudo (root-owned files inside .git are what broke the
-  v3.4.3 deploy). A gc that fails or times out is a no-op, not an error.
-  """
-  git_dir = os.path.join(basedir, ".git")
-  before = dir_size(git_dir)
-  if before < GIT_GC_MIN_BYTES:
-    return 0
-  env = dict(os.environ)
-  env["GIT_TERMINAL_PROMPT"] = "0"
-  for cmd in (["git", "-C", basedir, "reflog", "expire", "--expire=now", "--all"],
-              ["git", "-C", basedir, "gc", "--prune=now", "--quiet"]):
-    try:
-      subprocess.run(cmd, env=env, timeout=GIT_GC_TIMEOUT_S,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    except Exception:
-      return 0
-  return max(0, before - dir_size(git_dir))
-
-
 def cleanup(log=None) -> dict:
   """Run one cleanup pass. Returns a summary dict; never raises."""
   report: dict = {"reclaimed": 0, "steps": {}}
@@ -159,9 +161,10 @@ def cleanup(log=None) -> dict:
     low = (0 <= free_b < LOW_BYTES) or (0 <= free_p < LOW_PERCENT)
     report["low"] = low
     if low:
+      # Only cheap, memory-bounded rmtrees may hang off this gate — see the
+      # note on LOW_BYTES: `low` is true on essentially every boot.
       for p in LOW_SPACE_TARGETS:
         note(os.path.basename(p) or p, _rm(p))
-      note("git_gc", _git_gc())
 
     report["free_after"] = free_space()[0]
   except Exception as e:  # pragma: no cover - belt and braces

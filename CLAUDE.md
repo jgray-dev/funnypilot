@@ -142,20 +142,31 @@ zero age. Corollary elsewhere: where the comparand is a WALL-CLOCK value
   the driver's own SET+ press a fraction of a second after they made it.
   THE FAILURE MODE OF THIS CHANNEL MUST BE "NO REQUEST", NEVER A STUCK ONE.
   A legacy 2-field line reads as stale, never as trusted.
-- `system/manager/storage_cleanup.py` — NEW, stdlib-only (an openpilot
-  import here would drag cereal/params onto the boot path before manager has
-  set them up). Called from `manager_init()` via `cleanup_async()` on a
-  background thread — NEVER synchronously, which would add `du` + `git gc`
-  to every boot. It is an ALLOW-LIST, not a walk-and-decide: absolute paths,
-  no globs, and a test asserts `/`, `/data`, `/data/openpilot`,
-  `/data/params`, `/data/media` can never appear in it. `cleanup()` is TOTAL
-  — no input makes it raise, because it runs before the car can start.
+- `system/manager/storage_cleanup.py` — stdlib-only (an openpilot import here
+  would drag cereal/params onto the boot path before manager has set them
+  up). Called from `manager_init()` via `cleanup_async()` on a background
+  thread — NEVER synchronously, which would add the size walk to every boot.
+  It is an ALLOW-LIST, not a walk-and-decide: absolute paths, no globs, and a
+  test asserts `/`, `/data`, `/data/openpilot`, `/data/params`,
+  `/data/media` can never appear in it. `cleanup()` is TOTAL — no input makes
+  it raise, because it runs before the car can start.
+  v3.4.6 — NO SUBPROCESSES. The `_git_gc()` step is GONE and must not return;
+  it was the v3.4.5 memory leak (measured 1.69 GB peak RSS, see the changelog
+  and the module docstring). The rule this leaves behind is the important
+  part: this module runs beside a moving car on a device with no swap, so
+  every step must be bounded in MEMORY, not merely in time. A
+  `subprocess.run` timeout is not a memory bound — it kills only the direct
+  child, and it was `git`'s `pack-objects` grandchildren doing the
+  allocating. `TestNoSubprocesses` pins this on the AST.
   Thresholds (`LOW_BYTES`, `LOW_PERCENT`) sit ABOVE `deleter.py`'s 5 GB/10%
-  floor so this engages BEFORE drive logs get eaten, not after.
+  floor so this engages BEFORE drive logs get eaten, not after. READ THE
+  CONSEQUENCE, which v3.4.5 missed: deleter holds free space AT its floor, so
+  `low` is true on essentially every boot. `low` does not mean "rare", and
+  only cheap rmtrees may hang off it.
   The actual cause of the user's "storage full" message was never diagnosed
   (device offline at the time) — the `storage` Verify row exists so the next
   occurrence produces evidence.
-- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.5"; new
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.6"; new
   `/api/version` endpoint + `_VERSION_FILE`; new `storage` DIAG row (`df`,
   graded on use%); four new `_CODE_MARKERS` rows (`MAP_MSG_MAX_AGE`,
   `RAMP_ARRIVE_EARLY_T`, `BUTTON_INTENT_FRAMES`, `STALE_S`), 36 total.

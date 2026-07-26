@@ -1,6 +1,6 @@
-"""FunnyPilot v3.4.5: guards for the startup storage cleanup.
+"""FunnyPilot v3.4.6: guards for the startup storage cleanup.
 
-TWO CLASSES OF TEST HERE, and the split matters:
+THREE CLASSES OF TEST HERE, and the split matters:
 
   * TestBootPath is the IMPORT guard. storage_cleanup is called from
     manager_init(), so a NameError/ImportError/annotation blowup in it is a
@@ -8,6 +8,12 @@ TWO CLASSES OF TEST HERE, and the split matters:
     v3.4.1) shipped "all tests green" and bricked the car for exactly this
     reason — nothing imported the module on the boot path. Logic tests do
     not substitute for this.
+
+  * TestNoSubprocesses is the RESOURCE guard, added in v3.4.6 after the
+    `git gc` this module used to run turned out to peak at 1.69 GB RSS and
+    OOM the device shortly after it went onroad. This module runs beside a
+    moving car; being bounded in TIME is not the same as being bounded in
+    MEMORY, and only the second one keeps the device alive.
 
   * Everything else pins the SAFETY INVARIANTS. The dangerous failure mode
     of a cleaner is not "it reclaimed too little", it is "it deleted the
@@ -136,9 +142,68 @@ class TestThresholds:
     assert sc.LOW_BYTES > 5 * 1024 ** 3
     assert sc.LOW_PERCENT > 10.0
 
-  def test_gc_is_bounded(self):
-    assert sc.GIT_GC_TIMEOUT_S <= 600
-    assert sc.GIT_GC_MIN_BYTES > 0
+  def test_low_gate_is_not_rare(self):
+    # The flip side of the assertion above, pinned so it cannot be forgotten
+    # again: sitting above deleter's floor means `low` is satisfied on
+    # essentially every boot, because deleter holds free space AT its floor.
+    # v3.4.5 read this gate as "only when space is actually low" and hung a
+    # `git gc` off it; it therefore ran every single ignition cycle. Anything
+    # added under `low` must be as cheap as an rmtree.
+    assert sc.LOW_BYTES > 5 * 1024 ** 3, "deleter's own floor -- see test above"
+
+
+class TestNoSubprocesses:
+  """v3.4.6 regression guard: this module must never shell out.
+
+  `git gc --prune=now` from `cleanup()` is what made the device run out of
+  memory shortly after going onroad — measured 1.69 GB peak RSS on a 423 MB
+  repo, because `git repack` runs one `pack-objects` per core with an
+  unbounded delta window. It ran on every boot (see TestThresholds), it
+  raced the onroad stack coming up, and its `subprocess.run` timeout could
+  not bound it because that only kills the direct child, not the
+  `pack-objects` grandchildren doing the allocating.
+
+  A time bound is not a memory bound. This module runs beside a moving car
+  on a device with no swap, so the invariant is stronger than "it finishes":
+  nothing here may spawn a process whose memory we do not control. Asserted
+  on the AST so a commented-out or string-only mention cannot satisfy it.
+  """
+
+  @staticmethod
+  def _tree():
+    return ast.parse(pathlib.Path(sc.__file__).read_text())
+
+  def test_does_not_import_subprocess(self):
+    names = set()
+    for n in ast.walk(self._tree()):
+      if isinstance(n, ast.Import):
+        names |= {a.name.split(".")[0] for a in n.names}
+      elif isinstance(n, ast.ImportFrom) and n.module:
+        names.add(n.module.split(".")[0])
+    for banned in ("subprocess", "multiprocessing", "asyncio"):
+      assert banned not in names, f"{banned} must not be on the boot-thread cleaner"
+
+  def test_no_process_spawning_calls(self):
+    banned = {"system", "popen", "spawnv", "spawnvp", "spawnl", "spawnlp",
+              "execv", "execvp", "fork", "posix_spawn", "run", "call",
+              "check_call", "check_output", "Popen"}
+    for n in ast.walk(self._tree()):
+      if isinstance(n, ast.Call):
+        fn = n.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        assert name not in banned, f"process spawn `{name}` on the boot-thread cleaner"
+
+  def test_git_is_not_touched(self):
+    # Reclaiming .git is offroad maintenance. Doing it here also forces
+    # updated.py to rebuild the whole overlay on the next boot (it watches
+    # `.git` mtimes), which costs more disk than the gc frees.
+    src = pathlib.Path(sc.__file__).read_text()
+    body = src.split('"""', 2)[-1]  # docstring explains the history; code must be clean
+    assert "git" not in body.lower(), "storage_cleanup must not touch git"
+
+  def test_gc_symbols_are_gone(self):
+    for gone in ("_git_gc", "GIT_GC_MIN_BYTES", "GIT_GC_TIMEOUT_S", "BASEDIR"):
+      assert not hasattr(sc, gone), f"{gone} must not come back"
 
 
 class TestManagerWiring:
@@ -165,7 +230,7 @@ class TestManagerWiring:
     assert self._calls("cleanup_async"), "manager_init must call storage_cleanup.cleanup_async"
 
   def test_cleanup_is_not_called_synchronously(self):
-    # A blocking call here would add `du` + `git gc` to every boot.
+    # A blocking call here would add the size walk to every boot.
     assert not self._calls("cleanup"), "cleanup() must not be called on the boot thread"
 
   def test_module_is_imported(self):
