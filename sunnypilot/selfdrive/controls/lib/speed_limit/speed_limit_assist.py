@@ -117,11 +117,31 @@ BUTTON_INTENT_FRAMES = int(0.5 / DT_MDL)  # 10 frames = 0.5 s
 # worst of both worlds: it looks like the system reacted and it didn't. A test
 # pins RATE_MAX <= abs(CRUISE_MIN_ACCEL) so a future retune cannot break the
 # tie silently.
+#
+# FunnyPilot v3.4.7 — LONGER RUNWAY. With the v3.4.6 clock fix the ramp finally
+# runs on a moving car, and on the road it lands late: the set speed reaches the
+# upcoming target AT the boundary, which is not the same as the CAR being at the
+# new speed when it crosses. The set speed is a request, and the car trails it —
+# the cruise obstacle has to bleed the remaining error off after the number has
+# already stopped moving. So the runway is extended at both ends:
+#
+#   * RAMP_ARRIVE_EARLY_T 1 -> 3 s. This is the one that fixes the reported
+#     symptom. It is TRAVEL time, so at 70 mph the set speed is done ~94 m
+#     before the sign, leaving the car room to actually settle onto it rather
+#     than still be decelerating through the boundary.
+#   * RAMP_D_MAX 250 -> 400 m and RAMP_T_MAX 15 -> 20 s. The early-arrival
+#     margin is subtracted from the distance the envelope gets to work with, so
+#     without widening these bounds it would just buy itself a steeper `a` and
+#     the descent would get harsher instead of earlier. 70 -> 45 mph now engages
+#     ~494 m out over ~15.6 s (was ~281 m / ~9.7 s).
+#
+# RATE_NOM is deliberately NOT touched: 1 mph/s is what was asked for, and it
+# still governs every gentle change, which now simply starts sooner.
 RATE_NOM = 0.45           # m/s^2 ~= 1.0 mph/s — the requested comfortable rate
 RATE_MAX = 1.2            # m/s^2 == abs(long_mpc.CRUISE_MIN_ACCEL); see above
-RAMP_T_MAX = 15.0         # s — upper bound on how long a ramp is allowed to take
-RAMP_D_MAX = 250.0        # m — upper bound on how far ahead a ramp may engage
-RAMP_ARRIVE_EARLY_T = 1.0  # s of TRAVEL (scaled by v_ego) to reach the target early
+RAMP_T_MAX = 20.0         # s — upper bound on how long a ramp is allowed to take
+RAMP_D_MAX = 400.0        # m — upper bound on how far ahead a ramp may engage
+RAMP_ARRIVE_EARLY_T = 3.0  # s of TRAVEL (scaled by v_ego) to reach the target early
 RAMP_UP_DIST = 90.0       # m — window over which the set speed is walked UP into a faster zone
 
 # The upcoming-limit signal comes from OSM through mapd and can flicker for a
@@ -450,18 +470,21 @@ class SpeedLimitAssist:
                        (v0^2 - v1^2) / (2 * RAMP_D_MAX) ),    # distance bound
                   RATE_NOM, RATE_MAX )
 
-    The duration bound says "never take longer than 15 s". The distance bound
-    says "never start further out than 250 m". `max` of the two picks whichever
-    is more demanding, and the final clip means the answer is RATE_NOM (1 mph/s,
-    what the user asked for) whenever both bounds are slack, and never exceeds
-    the MPC's own CRUISE_MIN_ACCEL ceiling.
+    The duration bound says "never take longer than RAMP_T_MAX". The distance
+    bound says "never start further out than RAMP_D_MAX". `max` of the two picks
+    whichever is more demanding, and the final clip means the answer is RATE_NOM
+    (1 mph/s, what the user asked for) whenever both bounds are slack, and never
+    exceeds the MPC's own CRUISE_MIN_ACCEL ceiling.
 
     Worked example, the design case: 70 -> 45 mph is dv = 11.2 m/s, so the
-    duration bound wants 0.745 m/s^2 and the distance bound wants 1.15 m/s^2.
-    a = 1.15, and the envelope reaches v0 at d = (v0^2-v1^2)/(2a) = 250 m —
-    i.e. it engages at exactly RAMP_D_MAX and takes 11.2/1.15 = 9.7 s. A gentler
-    change, 45 -> 35 mph (dv = 4.5), takes the RATE_NOM floor and engages at
-    89 m / 10 s. Both land inside the requested 10-15 s feel.
+    duration bound wants 0.56 m/s^2 and the distance bound wants 0.72 m/s^2.
+    a = 0.72, and the envelope reaches v0 at d_eff = (v0^2-v1^2)/(2a) = 400 m —
+    i.e. it engages at exactly RAMP_D_MAX of USABLE distance and takes
+    11.2/0.72 = 15.6 s. Note that d_eff is what is left after the early-arrival
+    margin, so the ramp actually engages RAMP_ARRIVE_EARLY_T * v_ego further out
+    than that (~494 m here) and is DONE ~94 m before the sign. A gentler change,
+    45 -> 35 mph (dv = 4.5), still takes the RATE_NOM floor: 179 m of envelope
+    over 10 s, engaging ~239 m out.
 
     WHY DISTANCE-PARAMETERISED AND NOT A TIMER: the envelope is re-evaluated
     from the CURRENT d every frame, so it self-corrects. If the car is going

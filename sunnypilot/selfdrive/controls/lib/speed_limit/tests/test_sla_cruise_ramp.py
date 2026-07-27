@@ -78,12 +78,27 @@ class TestRateDerivation:
     assert RATE_MAX <= abs(float(m.group(1))) + 1e-9
 
   def test_design_case_engages_within_the_requested_window(self):
-    """70 -> 45 mph must engage around 250 m and take 10-15 s, per the brief."""
+    """70 -> 45 mph: v3.4.7 widened the runway to ~400 m of envelope / 15-20 s.
+
+    d_engage here is ENVELOPE distance (d_eff). The ramp starts
+    RAMP_ARRIVE_EARLY_T * v_ego earlier than this and finishes that far before
+    the sign -- see test_finishes_the_descent_before_the_boundary.
+    """
     v0, v1 = 70. * MPH, 45. * MPH
     a = min(max(max((v0 - v1) / RAMP_T_MAX, (v0 ** 2 - v1 ** 2) / (2 * RAMP_D_MAX)), RATE_NOM), RATE_MAX)
     d_engage = (v0 ** 2 - v1 ** 2) / (2 * a)
-    assert 240. <= d_engage <= 260.
-    assert 8.0 <= (v0 - v1) / a <= 15.0
+    assert 380. <= d_engage <= 420.
+    assert 12.0 <= (v0 - v1) / a <= 20.0
+
+  def test_finishes_the_descent_before_the_boundary(self):
+    """MUTATION: shrink RAMP_ARRIVE_EARLY_T back toward zero.
+
+    The v3.4.6 complaint was arriving at the sign still slowing down. The set
+    speed is a request the car trails, so the envelope has to bottom out with
+    real distance in hand, not exactly at d = 0.
+    """
+    v0 = 70. * MPH
+    assert RAMP_ARRIVE_EARLY_T * v0 > 75., "too little room for the car to settle onto the set speed"
 
   def test_gentle_change_uses_the_nominal_rate(self):
     v0, v1 = 45. * MPH, 35. * MPH
@@ -125,22 +140,23 @@ class TestCruiseRamp:
     assert sla.v_cruise_target > 0.
     assert abs(sla.v_cruise_target - 45. * MPH) < 0.5
 
-  def test_engages_around_250m_for_the_design_case(self):
+  def test_engage_distance_for_the_design_case(self):
     """MUTATION: drop the distance bound, or the confirmation gate.
 
     Far out the target must still be the CURRENT zone; inside the envelope it
-    must have started moving.
+    must have started moving. v3.4.7: the boundary sits at RAMP_D_MAX plus the
+    early-arrival margin, i.e. 400 + 3 * 31.3 = ~494 m at 70 mph.
     """
     sla = make_sla()
     events = FakeEvents()
     activate(sla, events, cluster_mph=70., limit_mph=70.)
     settle(sla, events, 70., 70.)
 
-    approach(sla, events, 70., 70., 45., 400., n=CONFIRM_N + 2)
+    approach(sla, events, 70., 70., 45., 650., n=CONFIRM_N + 2)
     assert abs(sla.v_cruise_target - 70. * MPH) < 0.2, "must not anticipate beyond RAMP_D_MAX"
 
-    approach(sla, events, 70., 70., 45., 240., n=CONFIRM_N + 2)
-    assert sla.v_cruise_target < 70. * MPH - 0.05, "must be walking down by 240 m"
+    approach(sla, events, 70., 70., 45., 450., n=CONFIRM_N + 2)
+    assert sla.v_cruise_target < 70. * MPH - 0.05, "must be walking down by 450 m"
 
   def test_single_frame_ghost_limit_never_moves_the_set_speed(self):
     """MUTATION: delete the CONFIRM_N gate.
