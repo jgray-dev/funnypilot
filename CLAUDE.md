@@ -51,6 +51,87 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.4.8 Changes (based on funnypilot-3.4.7)
+
+Three defects in the v3.4.5 ramp, all from ONE reported drive into a HIGHER
+zone. Read the gas gate one first — it is the only one that could leave the car
+unable to accelerate on a highway.
+
+THE GATE BUG, generalized: **a gate defined on a COMMAND may not be applied
+without checking the STATE it is supposed to protect.** `gas_gate_active` was
+`v_cruise_target < effective_speed_limit_target` — pure set-speed geometry. The
+gate exists so the car does not add throttle to FIGHT the ramp; when v_ego is
+already at or below the ramp target there is no fight, but it fired anyway and
+pinned `accel_clip[1]` to the coast accel. Symptom: entered a zone below target,
+set speed snapped up, car then coasted ~10 s; the pedal did not help (the gate
+is still there when the override releases) and only cycling SLA cleared it.
+v3.4.7's ~490 m envelope made the trigger condition (a lower zone within the
+envelope right after entering a zone below target) common.
+
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
+  `_update_gas_gate()` rewritten with three narrowings, ALL fail-safe (the gate
+  can now only engage in strictly fewer situations): (1) `GATE_V_MARGIN = 0.5`
+  m/s — v_ego must actually be ABOVE the ramp target; (2) compares against
+  `_clamp_set_speed(effective_speed_limit_target)` — `v_cruise_target` is
+  clamped and the right-hand side was NOT, so any target above
+  `V_CRUISE_MAX_KPH` (a high limit with a carried positive ratio) or below the
+  min set speed made `clamped < unclamped` true FOREVER = a latched gate with no
+  exit; (3) `GATE_MAX_FRAMES = int(30.0 / DT_MDL)` watchdog — a WATCHDOG, not a
+  tuning knob; longest legitimate hold is one descent (~15.6 s).
+  UP-RAMP, a UNIT ERROR: `RAMP_UP_DIST = 90.0` m was a DISTANCE window on an
+  output bounded by a RATE (`RATE_MAX * DT_MDL`), so it truncated whenever
+  `dv > RATE_MAX * (d / v_ego)` — at 55 mph, 90 m = 3.66 s = 9.8 mph of a 15 mph
+  rise, i.e. the reported "arrived in the new zone below target, then it snapped
+  up". DELETED; replaced by `RAMP_UP_T = 5.0`, `RAMP_UP_T_MAX = 8.0`,
+  `RAMP_UP_D_MIN = 40.0` — the window is a TRAVEL TIME sized from the rise
+  (`t = dv / RATE_NOM`), so it means the same thing at any speed.
+  RAMP_UP_T_MAX STILL TRUNCATES LARGE RISES ON PURPOSE: early on the DOWN side
+  is free, early on the UP side is speeding early, and the boundary re-seed
+  already covers the remainder.
+  ENGAGEMENT HYSTERESIS: `CONFIRM_N` guarded ENTRY, nothing guarded
+  CONTINUATION. One dropped mapd frame reset `_confirm_n` to 1 and the ramp fell
+  through to `target = current_target`, driving the set speed the WRONG way for
+  >= CONFIRM_N frames — the reported "flickered down a mph". `liveMapDataSP` is
+  1 Hz, the route match blinks, and `d` reaches 0 before the current limit
+  flips, so this is routine, not exotic. A confirmed zone is now carried through
+  a dropout by DEAD RECKONING (`_engage_target`/`_engage_d`, d closing at
+  v_ego), bounded to 1 s by `ENGAGE_GRACE_FRAMES`. Bounded deliberately: a zone
+  that genuinely vanished must not hold the set speed hostage.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/tests/test_sla_cruise_ramp.py`
+  — `TestGateNeverStrandsTheCar` (3) and `TestEngagementSurvivesDropouts` (1)
+  are the direct regression guards; `up_window()` helper replaces the deleted
+  RAMP_UP_DIST in the up-ramp tests. NOTE the pre-existing gate tests ran only
+  `CONFIRM_N + 6` frames, which is no longer enough for v_ego to fall behind the
+  target — they now run to 60. WATCH FOR THIS SHAPE: a gate test that never lets
+  the plant move cannot see a v_ego term.
+- `FUNNYPILOT_VERSION` -> 3.4.8. **v3.4.7 changed the ramp geometry and never
+  bumped this file**, so a device on funnypilot-3.4.7 reported 3.4.6 — check it
+  when a version readout disagrees with the branch.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.4.8"; four new
+  `_CODE_MARKERS` rows (`GATE_V_MARGIN`, `GATE_MAX_FRAMES`,
+  `ENGAGE_GRACE_FRAMES`, `RAMP_UP_T_MAX`).
+- All three guards MUTATION-TESTED (fail-then-restore). 201 green across the
+  speed-limit, car and controls import-light suites. TESTING NOTE: the suites DO
+  run in a bare container with `--noconftest` (conftest imports `params_pyx`)
+  plus pip installs of pytest/numpy/pycapnp/setproctitle/zstandard; the 3
+  `test_triage_recorder.py::TestWebserverHelpers` failures are a missing
+  `aiohttp` only.
+- ON-ROAD VERIFICATION REQUIRED: the ~10 s coast is diagnosed from code, not
+  from a log (the device was not connected). If it recurs with the gate fix in,
+  the gate is exonerated and the next suspects are the planner's `accel_clip`
+  rate limiter (0.05/frame, and `prev_accel_clip` is NOT reset on `reset_state`)
+  and `LeadGrace`. Do NOT retune the ramp constants for it.
+
+### v3.4.7 Changes (based on funnypilot-3.4.6)
+
+Widened the predictive ramp's runway: `RAMP_ARRIVE_EARLY_T` 1 -> 3 s (the set
+speed must FINISH before the sign, because the car trails the set speed —
+landing the number ON the boundary means still decelerating through it),
+`RAMP_D_MAX` 250 -> 400 m, `RAMP_T_MAX` 15 -> 20 s. 70 -> 45 mph engages
+~494 m / 15.6 s out, was ~281 m / 9.7 s. `RATE_NOM` untouched (1 mph/s was the
+explicit request; it still governs gentle changes, which just start sooner).
+NOTE: this branch did NOT bump `FUNNYPILOT_VERSION` — fixed in 3.4.8.
+
 ### v3.4.5 Changes (based on funnypilot-3.4.4)
 
 SLA plans for the sign instead of reacting to it. But the FEATURE is not the

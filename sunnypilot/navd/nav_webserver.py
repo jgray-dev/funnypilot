@@ -40,7 +40,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.4.6"
+EXPECTED_VERSION = "3.4.8"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -96,6 +96,10 @@ _CODE_MARKERS = [
   ("RAMP_ARRIVE_EARLY_T", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "predictive set-speed ramp (v3.4.5)"),
   ("BUTTON_INTENT_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "button-intent ratio gate"),
   ("STALE_S", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/sla_shm.py", "SLA shm staleness gate"),
+  ("GATE_V_MARGIN", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "gas gate v_ego term (v3.4.8)"),
+  ("GATE_MAX_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "gas gate watchdog"),
+  ("ENGAGE_GRACE_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "ramp dropout hysteresis"),
+  ("RAMP_UP_T_MAX", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "time-based up-ramp window"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

@@ -21,7 +21,8 @@ from cereal import car
 from openpilot.common.constants import CV
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import speed_limit_assist as sla_mod
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import (
-  RATE_NOM, RATE_MAX, RAMP_T_MAX, RAMP_D_MAX, RAMP_UP_DIST, CONFIRM_N,
+  RATE_NOM, RATE_MAX, RAMP_T_MAX, RAMP_D_MAX, CONFIRM_N,
+  RAMP_UP_T, RAMP_UP_T_MAX, RAMP_UP_D_MIN, GATE_V_MARGIN, GATE_MAX_FRAMES,
   LATCH_RELEASE_D, RAMP_ARRIVE_EARLY_T, MIN_SET_SPEED_KPH_METRIC, MIN_SET_SPEED_KPH_IMPERIAL,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.tests.test_speed_limit_assist import (
@@ -36,6 +37,13 @@ DT = 0.05  # planner rate
 def approach(sla, events, cluster_mph, limit_mph, next_limit_mph, dist_m, n=1):
   step(sla, events, cluster_mph=cluster_mph, limit_mph=limit_mph,
        next_limit_mph=next_limit_mph, next_dist=dist_m, n=n)
+
+
+def up_window(v_ego_mph, cur_mph, next_mph):
+  """v3.4.8 up-ramp window in metres — a travel time, so it tracks v_ego."""
+  dv = (next_mph - cur_mph) * MPH
+  t = min(RAMP_UP_T_MAX, max(RAMP_UP_T, dv / RATE_NOM))
+  return max(RAMP_UP_D_MIN, v_ego_mph * MPH * t)
 
 
 def settle(sla, events, cluster_mph, limit_mph):
@@ -247,10 +255,11 @@ class TestCruiseRamp:
     events = FakeEvents()
     activate(sla, events, cluster_mph=35., limit_mph=35.)
     settle(sla, events, 35., 35.)
-    approach(sla, events, 35., 35., 65., RAMP_UP_DIST * 3, n=CONFIRM_N + 2)
+    w = up_window(35., 35., 65.)
+    approach(sla, events, 35., 35., 65., w * 3, n=CONFIRM_N + 2)
     assert abs(sla.v_cruise_target - 35. * MPH) < 0.2
     prev = sla.v_cruise_target
-    for d in (RAMP_UP_DIST * 0.75, RAMP_UP_DIST * 0.5, RAMP_UP_DIST * 0.25, 1.0):
+    for d in (w * 0.75, w * 0.5, w * 0.25, 1.0):
       approach(sla, events, 35., 35., 65., d, n=12)
       assert sla.v_cruise_target >= prev - 1e-6
       prev = sla.v_cruise_target
@@ -386,6 +395,73 @@ class TestRatioPreserved:
     assert abs(sla.dynamic_offset_ratio - ratio0) < 1e-9
 
 
+class TestGateNeverStrandsTheCar:
+  """v3.4.8 regression guards for the reported highway coast.
+
+  Field report: entered a new zone below target, the set speed snapped up, and
+  then the car refused to accelerate for ~10 s -- the pedal did not help and
+  only cycling SLA cleared it. The gate was pure set-speed geometry, so it fired
+  while the car was already SLOWER than the target it was supposedly protecting.
+  """
+
+  def test_gate_off_when_already_below_the_ramp_target(self):
+    """MUTATION: drop the v_ego term from _update_gas_gate.
+
+    Same geometry as test_gate_follows_the_ramp -- the ramp IS holding the set
+    speed down -- but the car is well below the ramp's own target. There is no
+    throttle to take away, and taking it away is what stranded the car.
+    """
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=65., limit_mph=65.)
+    settle(sla, events, 65., 65.)
+    step(sla, events, cluster_mph=65., limit_mph=65., v_ego_mph=25.,
+         next_limit_mph=30., next_dist=200., n=CONFIRM_N + 6)
+    assert sla.v_cruise_target < sla.effective_speed_limit_target - 0.1, "ramp must be holding down"
+    assert sla.v_ego < sla.v_cruise_target, "precondition: car is slower than the target"
+    assert not sla.gas_gate_active
+
+  def test_gate_releases_after_the_watchdog(self):
+    """MUTATION: remove GATE_MAX_FRAMES.
+
+    No legitimate descent holds throttle off for 30 s. If one ever does, the
+    throttle goes back rather than the car coasting indefinitely.
+    """
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=65., limit_mph=65.)
+    settle(sla, events, 65., 65.)
+    approach(sla, events, 65., 65., 30., 200., n=60)
+    assert sla.gas_gate_active
+    approach(sla, events, 65., 65., 30., 200., n=GATE_MAX_FRAMES + 5)
+    assert not sla.gas_gate_active
+
+  def test_gate_margin_is_nonzero(self):
+    assert GATE_V_MARGIN > 0.
+
+
+class TestEngagementSurvivesDropouts:
+  def test_single_dropped_frame_does_not_walk_the_set_speed_backwards(self):
+    """MUTATION: remove the ENGAGE_GRACE dead reckoning.
+
+    The reported flicker. mapd publishes at 1 Hz and the route match can blink;
+    without the grace, _confirm_n resets and the ramp falls through to
+    `target = current_target`, driving the set speed the WRONG way for several
+    frames before it recovers.
+    """
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=65., limit_mph=65.)
+    settle(sla, events, 65., 65.)
+    approach(sla, events, 65., 65., 35., 250., n=CONFIRM_N + 10)
+    before = sla.v_cruise_target
+    assert before < 65. * MPH - 0.1, "precondition: descent is under way"
+
+    # one frame with the upcoming zone missing, then it comes back
+    step(sla, events, cluster_mph=65., limit_mph=65., next_limit_mph=0., next_dist=0., n=1)
+    assert sla.v_cruise_target <= before + 1e-6, "set speed jumped back up on a blink"
+
+
 class TestGasGate:
   def test_gate_is_off_when_the_ramp_is_not_holding_speed_down(self):
     sla = make_sla()
@@ -396,29 +472,39 @@ class TestGasGate:
     assert not sla.gas_gate_active
 
   def test_gate_follows_the_ramp(self):
+    """v3.4.8: run to where the car has genuinely fallen behind the target.
+
+    The gate now needs BOTH conditions, so the first ~1 s of a descent (set
+    speed just below v_ego, no throttle being added anyway) no longer gates.
+    """
     sla = make_sla()
     events = FakeEvents()
     activate(sla, events, cluster_mph=65., limit_mph=65.)
     settle(sla, events, 65., 65.)
-    approach(sla, events, 65., 65., 30., 200., n=CONFIRM_N + 6)
+    approach(sla, events, 65., 65., 30., 200., n=60)
     assert sla.v_cruise_target < sla.effective_speed_limit_target - 0.1
+    assert sla.v_ego > sla.v_cruise_target + GATE_V_MARGIN
     assert sla.gas_gate_active
 
   def test_gate_reads_this_frames_ramp_not_last_frames(self):
     """MUTATION: swap the call order back (gate before ramp) in update().
 
     Driven through the real update() so the ordering is what is under test.
-    On the frame the ramp first pulls the target below the zone, the gate must
-    already be true.
+    On the frame the ramp first pulls the target below the zone AND the car is
+    above it, the gate must already be true -- no one-frame lag either way.
     """
     sla = make_sla()
     events = FakeEvents()
     activate(sla, events, cluster_mph=65., limit_mph=65.)
     settle(sla, events, 65., 65.)
-    for _ in range(60):
+    saw_gate = False
+    for _ in range(120):
       approach(sla, events, 65., 65., 30., 200.)
-      below = sla.v_cruise_target < sla.effective_speed_limit_target - 0.1
-      assert sla.gas_gate_active == below
+      expect = (sla.v_cruise_target < sla.effective_speed_limit_target - 0.1
+                and sla.v_ego > sla.v_cruise_target + GATE_V_MARGIN)
+      assert sla.gas_gate_active == expect
+      saw_gate = saw_gate or sla.gas_gate_active
+    assert saw_gate, "anti-vacuous: the gate must actually have engaged"
 
   def test_gate_off_when_inactive(self):
     sla = make_sla()

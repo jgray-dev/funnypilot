@@ -1,3 +1,55 @@
+FunnyPilot v3.4.8 (2026-07-27)
+========================
+Three defects in the v3.4.5 predictive set-speed ramp, all reported from one
+drive into a HIGHER speed limit: the taper started too late and did not finish,
+the set speed flickered a mph the wrong way mid-taper, and after entering the
+new zone the car refused to accelerate for ~10 s -- the pedal did not help and
+only cycling long control/SLA cleared it.
+
+* fix(SLA): THE GAS GATE NO LONGER STRANDS THE CAR. `_update_gas_gate` tested
+  pure set-speed geometry (`v_cruise_target < effective_speed_limit_target`)
+  and never asked how fast the car was actually going. Its whole justification
+  is "do not add throttle to FIGHT the ramp", and there is no fight when v_ego
+  is already at or below the ramp target -- but the gate fired anyway and
+  clamped `accel_clip[1]` to the coast accel, which is exactly a car that will
+  not accelerate. Entering a zone below target (which the truncated up-ramp
+  below made routine) with any lower zone inside v3.4.7's ~490 m envelope
+  reproduces it. Three narrowings, all fail-safe:
+    - v_ego must exceed the target by GATE_V_MARGIN (0.5 m/s);
+    - compare against the CLAMPED target -- `v_cruise_target` goes through
+      `_clamp_set_speed` and `effective_speed_limit_target` did not, so a
+      target above V_CRUISE_MAX_KPH or below the min set speed made the
+      comparison true FOREVER, a latched gate with no exit;
+    - GATE_MAX_FRAMES (30 s) watchdog. The longest legitimate hold is one
+      descent (~15.6 s); a car coasting on a highway is not an acceptable way
+      to discover a latch.
+
+* fix(SLA): THE UP-RAMP COULD NOT FINISH. It walked the set speed up over a
+  FIXED 90 m while the output is bounded by a RATE (`RATE_MAX * DT_MDL`).
+  Different units, so the window truncates whenever dv > RATE_MAX * (d/v_ego):
+  at 55 mph, 90 m is 3.66 s and 3.66 * 1.2 = 9.8 mph of a 15 mph rise. The
+  window is now a TRAVEL TIME sized from the rise itself (`t = dv / RATE_NOM`,
+  bounded by RAMP_UP_T_MAX = 8 s), so it holds its meaning at any speed.
+  RAMP_UP_T_MAX deliberately still truncates very large rises: finishing is not
+  worth sitting 15 mph over the posted limit 300 m before the sign, and the
+  boundary re-seed picks up the remainder.
+
+* fix(SLA): ENGAGEMENT NOW HAS HYSTERESIS. CONFIRM_N guarded ENTRY but nothing
+  guarded CONTINUATION -- one dropped mapd frame reset `_confirm_n` to 1 and
+  the ramp fell through to `target = current_target`, walking the set speed the
+  WRONG way for several frames. liveMapDataSP is 1 Hz, the route match blinks,
+  and `d` reaches 0 before the current limit flips, so this happens routinely.
+  A confirmed zone is now carried through a dropout by DEAD RECKONING
+  (d closes at v_ego, which is what the car is really doing), bounded to 1 s by
+  ENGAGE_GRACE_FRAMES.
+
+* All three guards MUTATION-TESTED (bug reintroduced -> suite fails ->
+  restored). Import-light speed-limit + car + controls suites: 201 green.
+
+* `FUNNYPILOT_VERSION` -> 3.4.8 (v3.4.7 changed the ramp geometry but never
+  bumped the file, so the device would have reported 3.4.6). nav_webserver
+  `EXPECTED_VERSION` -> "3.4.8" plus four new `_CODE_MARKERS` rows.
+
 FunnyPilot v3.4.6 (2026-07-26)
 ========================
 Fixes the memory leak introduced in v3.4.5: the device reported low memory

@@ -342,12 +342,14 @@ class TestGasGate:
     step(sla, events, cluster_mph=45., limit_mph=45., n=BUTTON_INTENT_FRAMES + 2)
 
   def test_gate_requires_the_ramp_to_be_holding_speed_down(self):
+    # v3.4.8: also requires the car to actually be ABOVE the ramp target, so
+    # this runs long enough for v_ego to fall behind it.
     sla = make_sla()
     events = FakeEvents()
     self._settled_45(sla, events)
     assert not sla.gas_gate_active
     step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=30.,
-         next_dist=120., n=CONFIRM_N + 6)
+         next_dist=120., n=60)
     assert sla.gas_gate_active
 
   def test_no_gate_for_higher_zone(self):
@@ -370,7 +372,7 @@ class TestGasGate:
     events = FakeEvents()
     self._settled_45(sla, events)
     step(sla, events, cluster_mph=45., limit_mph=45., next_limit_mph=30.,
-         next_dist=120., n=CONFIRM_N + 6)
+         next_dist=120., n=60)
     assert sla.gas_gate_active
     # boundary crossed: ahead info gone, current limit is now 30 -> ramp re-seeds
     step(sla, events, cluster_mph=45., limit_mph=30., v_ego_mph=38.)

@@ -142,13 +142,55 @@ RATE_MAX = 1.2            # m/s^2 == abs(long_mpc.CRUISE_MIN_ACCEL); see above
 RAMP_T_MAX = 20.0         # s — upper bound on how long a ramp is allowed to take
 RAMP_D_MAX = 400.0        # m — upper bound on how far ahead a ramp may engage
 RAMP_ARRIVE_EARLY_T = 3.0  # s of TRAVEL (scaled by v_ego) to reach the target early
-RAMP_UP_DIST = 90.0       # m — window over which the set speed is walked UP into a faster zone
+
+# FunnyPilot v3.4.8 — THE UP-RAMP WAS DIMENSIONALLY INCAPABLE OF FINISHING.
+# It walked the set speed up over a FIXED 90 m while the output is bounded by a
+# RATE (RATE_MAX * DT_MDL). Those are different units, so the window silently
+# truncates whenever dv > RATE_MAX * (d / v_ego): at 55 mph, 90 m is 3.66 s of
+# travel, and 3.66 * 1.2 = 4.4 m/s = 9.8 mph of a 15 mph rise. The rest arrived
+# as the boundary re-seed — the reported "we entered the new zone below target,
+# then it snapped up".
+#
+# The window is now a TRAVEL TIME, so it holds its meaning at any speed, and it
+# is sized from the rise itself: t = dv / RATE_NOM, i.e. exactly long enough to
+# complete at the nominal rate. RAMP_UP_T_MAX bounds how early the set speed may
+# go over the current limit, which is the reason this side stays much shorter
+# than the descent: walking DOWN early is free, walking UP early is speeding
+# early. When dv is too large to fit in RAMP_UP_T_MAX the ramp still truncates —
+# deliberately. Finishing the rise is not worth going 15 mph over the posted
+# limit 300 m before the sign; the boundary re-seed picks up the remainder.
+RAMP_UP_T = 5.0           # s of travel over which a rise is walked, at RATE_NOM
+RAMP_UP_T_MAX = 8.0       # s — ceiling on how early the set speed may exceed the current limit
+RAMP_UP_D_MIN = 40.0      # m — floor so the window survives low speed / standstill
 
 # The upcoming-limit signal comes from OSM through mapd and can flicker for a
 # frame when the route match jumps. CONFIRM_N consecutive agreeing frames
 # (150 ms at 20 Hz) are required before a ramp engages, so a one-frame ghost
 # limit can never move the driver's set speed.
 CONFIRM_N = 3
+
+# FunnyPilot v3.4.8 — CONFIRM_N GUARDS ENTRY BUT NOTHING GUARDED CONTINUATION.
+# `engaged` was a cliff: one dropped mapd frame reset _confirm_n to 1, so for at
+# least CONFIRM_N frames the ramp fell through to `target = current_target` and
+# the set speed visibly walked the WRONG WAY before resuming — the reported
+# "flickered down a mph, continued going up". The 1 Hz liveMapDataSP publisher,
+# a route re-match, and `d` reaching 0 before the current limit flips all
+# produce that blink routinely.
+#
+# So an engagement, once confirmed, is carried through a dropout by DEAD
+# RECKONING the remembered zone: d keeps closing at v_ego, which is what the car
+# is actually doing. Bounded at 1 s — long enough to bridge any blink, short
+# enough that a genuinely vanished zone cannot hold the set speed hostage.
+ENGAGE_GRACE_FRAMES = int(1.0 / DT_MDL)  # 20 frames = 1 s
+
+# FunnyPilot v3.4.8 — gas gate guards (see _update_gas_gate for the post-mortem).
+# GATE_V_MARGIN keeps the gate from chattering on either side of the target; the
+# clip rate limiter in the planner (0.05 m/s^2 per frame) smooths what is left.
+# GATE_MAX_FRAMES is a WATCHDOG, not a tuning knob: the longest legitimate hold
+# is one descent, ~15.6 s at the widest v3.4.7 geometry, so anything past 30 s
+# is a latch that should not exist and the throttle goes back to the driver.
+GATE_V_MARGIN = 0.5       # m/s the car must exceed the ramp target before gating
+GATE_MAX_FRAMES = int(30.0 / DT_MDL)
 
 # Monotone-descent latch release. `distance_to_next_limit` legitimately jumps
 # UP when the route changes (a turn onto a different road). Small increases are
@@ -199,6 +241,14 @@ class SpeedLimitAssist:
     self._d_min = float('inf')  # closest approach seen this descent
     self._confirm_val = 0.    # upcoming-limit value being confirmed
     self._confirm_n = 0       # consecutive frames it has agreed
+
+    # v3.4.8 engagement hysteresis: a confirmed upcoming zone is carried through
+    # a signal dropout by dead reckoning rather than collapsing the ramp.
+    self._engage_grace = 0
+    self._engage_target = 0.
+    self._engage_d = 0.
+    # v3.4.8 gas gate watchdog (see _update_gas_gate)
+    self._gate_frames = 0
 
     # Monotonic deadline after any cruise button activity. This is the ONLY
     # discriminator between "the driver adjusted the set speed" and "the ramp
@@ -446,9 +496,49 @@ class SpeedLimitAssist:
     on its own initiative.
 
     MUST be called AFTER _update_cruise_ramp() — it reads that frame's target.
+
+    v3.4.8 — THIS IS THE BUG THAT STRANDED THE CAR. The test above is pure
+    set-speed geometry: it never asked how fast the car was actually going. But
+    the gate's whole justification is "do not add throttle to FIGHT the ramp",
+    and there is no fight when v_ego is already at or below the ramp's own
+    target. Entering a zone below target (which the truncated up-ramp made
+    routine) with any lower zone inside the v3.4.7 ~490 m envelope therefore
+    produced: ramp engaged -> gate on -> accel_clip[1] pinned to coast accel ->
+    a car that will not accelerate, cannot be persuaded by the pedal (the gate
+    is still there when the override releases), and only recovers when SLA is
+    cycled. Reported as ~10 s of coasting on the highway; nothing in the old
+    condition bounded it, which is why "it could have slowed to a stop" was a
+    fair reading.
+
+    Three narrowings, all in the fail-safe direction (the gate can now only
+    engage in strictly fewer situations than before):
+
+      * v_ego must actually be ABOVE the target. This is the fix.
+      * compare against the CLAMPED target. `v_cruise_target` is passed through
+        _clamp_set_speed and `effective_speed_limit_target` was not, so a target
+        above V_CRUISE_MAX_KPH (a high limit with a carried positive ratio) or
+        below the min set speed made `clamped < unclamped` true FOREVER — a
+        latched gate with no exit at all.
+      * a duration backstop. Nothing here should ever hold throttle off for
+        GATE_MAX_S; if something does, it is a bug, and the car coasting on a
+        highway is not an acceptable way to find out about it.
     """
-    self.gas_gate_active = (self.is_active and self.v_cruise_target > 0.
-                            and self.v_cruise_target < self.effective_speed_limit_target - 0.1)
+    if not self.is_active or self.v_cruise_target <= 0.:
+      self.gas_gate_active = False
+      self._gate_frames = 0
+      return
+
+    ceiling = self._clamp_set_speed(self.effective_speed_limit_target)
+    holding_down = self.v_cruise_target < ceiling - 0.1
+    above_target = self.v_ego > self.v_cruise_target + GATE_V_MARGIN
+
+    if not (holding_down and above_target):
+      self.gas_gate_active = False
+      self._gate_frames = 0
+      return
+
+    self._gate_frames += 1
+    self.gas_gate_active = self._gate_frames <= GATE_MAX_FRAMES
 
   # ---------- predictive set-speed ramp (v3.4.5) ----------
 
@@ -493,15 +583,18 @@ class SpeedLimitAssist:
     is no accumulated ramp state to get out of sync with the road, and no
     division by v_ego, so standstill is safe by construction.
 
-    Up into a faster zone: linear over the last RAMP_UP_DIST metres. This DOES
-    raise the set speed slightly before the sign — the explicit intent — and
-    the window is kept short so it reads as a blend, not an early overspeed.
+    Up into a faster zone: linear over a window sized as a TRAVEL TIME (v3.4.8;
+    it used to be a fixed 90 m, which the rate limiter truncated at any real
+    speed — see RAMP_UP_T). This DOES raise the set speed slightly before the
+    sign, the explicit intent, and RAMP_UP_T_MAX keeps that lead short because
+    early on this side means over the posted limit.
     """
     if not self.is_active or self._base_limit <= 0:
       self.v_cruise_target = 0.
       self._latch = 0.
       self._d_min = float('inf')
       self._confirm_n = 0
+      self._engage_grace = 0
       return
 
     current_target = self.effective_speed_limit_target
@@ -521,6 +614,7 @@ class SpeedLimitAssist:
       self._latch = 0.
       self._d_min = float('inf')
       self._confirm_n = 0
+      self._engage_grace = 0
       return
 
     # CONFIRMATION. Require CONFIRM_N agreeing frames before acting on an
@@ -532,9 +626,26 @@ class SpeedLimitAssist:
       self._confirm_val = next_final
       self._confirm_n = 1
 
+    # ENGAGEMENT, with continuation hysteresis (v3.4.8). Confirming is the hard
+    # part; once confirmed, a blink in the signal must not collapse the ramp and
+    # walk the set speed backwards. Dead-reckon the remembered zone instead: the
+    # car really is still closing on it at v_ego. See ENGAGE_GRACE_FRAMES.
     next_target = self.next_zone_target
     d = self._next_distance
-    engaged = self._confirm_n >= CONFIRM_N and next_target > 0. and d > 0.
+    if self._confirm_n >= CONFIRM_N and next_target > 0. and d > 0.:
+      self._engage_grace = ENGAGE_GRACE_FRAMES
+      self._engage_target = next_target
+      self._engage_d = d
+    elif self._engage_grace > 0:
+      self._engage_grace -= 1
+      self._engage_d = max(0.1, self._engage_d - self.v_ego * DT_MDL)
+      next_target = self._engage_target
+      d = self._engage_d
+    else:
+      next_target = 0.
+      d = 0.
+
+    engaged = next_target > 0. and d > 0.
 
     target = current_target
     if engaged and next_target < current_target:
@@ -563,8 +674,16 @@ class SpeedLimitAssist:
     elif engaged and next_target > current_target:
       self._latch = 0.
       self._d_min = float('inf')
-      blend = max(0., min(1., 1. - d / RAMP_UP_DIST))
-      target = current_target + (next_target - current_target) * blend
+      # v3.4.8: window is a travel time sized from the rise, not a fixed 90 m.
+      # t = dv / RATE_NOM completes at the nominal rate; RAMP_UP_T_MAX bounds
+      # how early we may sit above the current limit. RAMP_UP_D_MIN keeps the
+      # window finite at low v_ego (and non-zero at standstill, where the old
+      # form was fine only because it never divided by v_ego).
+      dv = next_target - current_target
+      t_up = min(RAMP_UP_T_MAX, max(RAMP_UP_T, dv / RATE_NOM))
+      d_up = max(RAMP_UP_D_MIN, self.v_ego * t_up)
+      blend = max(0., min(1., 1. - d / d_up))
+      target = current_target + dv * blend
     else:
       self._latch = 0.
       self._d_min = float('inf')
