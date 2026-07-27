@@ -13,12 +13,21 @@ from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_ADAPT_ACC
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_ADAPT_ACC, \
+                                                                    LIMIT_ADAPT_REACTION_TIME, LIMIT_ADAPT_MIN_DISTANCE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
 
 ALL_SOURCES = tuple(SpeedLimitSource.schema.enumerants.values())
+
+
+def get_adapt_distance(v_current: float, v_target: float) -> float:
+  """Runway needed to be travelling at v_target by the time we get there, from v_current."""
+  braking_distance = (v_target ** 2 - v_current ** 2) / (2. * LIMIT_ADAPT_ACC)
+  reaction_distance = v_current * LIMIT_ADAPT_REACTION_TIME
+
+  return max(braking_distance + reaction_distance, LIMIT_ADAPT_MIN_DISTANCE)
 
 
 class SpeedLimitResolver:
@@ -73,6 +82,7 @@ class SpeedLimitResolver:
     self.speed_limit_final = 0.
     self.speed_limit_final_last = 0.
     self.speed_limit_offset = 0.
+    self._adapting_to_speed_limit = 0.
 
   def update_speed_limit_states(self) -> None:
     self.speed_limit_final = self.speed_limit + self.speed_limit_offset
@@ -142,14 +152,25 @@ class SpeedLimitResolver:
     self.limit_solutions[SpeedLimitSource.map] = speed_limit
     self.distance_solutions[SpeedLimitSource.map] = 0.
 
-    # FIXME-SP: this is not working as expected
-    if 0. < next_speed_limit < self.v_ego:
-      adapt_time = (next_speed_limit - self.v_ego) / LIMIT_ADAPT_ACC
-      adapt_distance = self.v_ego * adapt_time + 0.5 * LIMIT_ADAPT_ACC * adapt_time ** 2
+    # drop the latch whenever the upcoming limit changes (or goes away), so a new one is evaluated from scratch
+    if next_speed_limit != self._adapting_to_speed_limit:
+      self._adapting_to_speed_limit = 0.
 
-      if distance_to_speed_limit_ahead <= adapt_distance:
-        self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
-        self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
+    if next_speed_limit <= 0.:
+      return
+
+    # Size the runway off the speed we're being held to, not off v_ego alone. Once we start tapering, v_ego falls
+    # towards the upcoming limit, and keying off v_ego would shrink the runway out from under us and hand the set
+    # speed back to the current limit.
+    v_reference = max(self.v_ego, speed_limit)
+
+    if next_speed_limit < v_reference and distance_to_speed_limit_ahead <= get_adapt_distance(v_reference, next_speed_limit):
+      self._adapting_to_speed_limit = next_speed_limit
+
+    # latched: hold the upcoming limit all the way to the sign, including after we've already settled at it
+    if self._adapting_to_speed_limit > 0.:
+      self.limit_solutions[SpeedLimitSource.map] = self._adapting_to_speed_limit
+      self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
 
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[self.policy]
