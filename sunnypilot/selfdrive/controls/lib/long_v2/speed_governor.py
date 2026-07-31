@@ -3,18 +3,24 @@ FunnyPilot LongV2 — speed governor: applies all v_targets and selects minimum.
 """
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import weather_cap_active, weather_speed_scale
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_fusion import fuse_map_target
 
 _V_CRUISE_MAX_MPS = 58.1  # ~130 mph
 
 
-def gate_map_target(map_v_target: float, vision_is_active: bool) -> float:
-  """v3.3.8: SCC-M may only narrow SCC-V's cap, never introduce one on its
-  own — map route data is far more prone to false positives (mistagged/
-  rounded curve speeds, stale OSM data) than the model's own view of the
-  road. Returns CAP_INACTIVE when vision does not also think a reduction is
-  warranted, regardless of what the map suggests."""
-  return map_v_target if vision_is_active else CAP_INACTIVE
+def gate_map_target(map_v_target: float, vision_is_active: bool, v_cruise: float = 0.0,
+                    vision_corroboration: float = 0.0) -> float:
+  """SCC-M's cap as the governor should see it.
+
+  v3.3.8 made this a binary veto: the map bound only while SCC-V was ACTIVE.
+  v3.4.9 merges the two into one feature — corroboration is continuous and
+  scales the map's authority instead of switching it, so real corners the
+  model sees but has not (yet) crossed its own comfort threshold for stop
+  being missed, while a map point on a straight road is still vetoed outright.
+  See scc_fusion.py for the full rationale; this is a thin alias kept so the
+  governor's import site and the older call shape both still work.
+  """
+  return fuse_map_target(map_v_target, v_cruise, vision_is_active, vision_corroboration)
 
 
 class SpeedGovernor:

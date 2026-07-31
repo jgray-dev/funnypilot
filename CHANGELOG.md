@@ -1,3 +1,186 @@
+FunnyPilot v3.4.9 (2026-07-31)
+========================
+Four requested changes: more lateral interpolation without the old EMA's phase
+cost, a scheduled handback after a driver steering intervention, two SLA
+defects around the predictive ramp, and the SCC-V/SCC-M challenge system merged
+into one feature.
+
+1. LATERAL: MORE INTERPOLATION, PAID FOR BY THE PLAN INSTEAD OF BY LAG
+------------------------------------------------------------------------
+* feat(lat): NEW `selfdrive/controls/lib/knot_filter.py`. `lat_smooth.py` can
+  only shape the path BETWEEN 20 Hz knots; the knot SEQUENCE still delivered
+  every rate change whole inside one 50 ms period, and that step is what is
+  felt in the car. The v3.2.12 attempt to spend the lagd window on this was an
+  EMA, whose implicit process model is "the curvature stays where it is" — so
+  it lagged EVERYTHING, including entirely predictable turn-in, by its time
+  constant, with no bound on how far the command had drifted. That is the
+  "sloppy / the car is between the two places the model wanted" report, and it
+  was reverted in v3.3.2.
+  KnotFilter's process model is THE MODEL'S OWN PUBLISHED PLAN. controlsd
+  already samples the plan one model step past the action horizon
+  (`_model_lookahead_curv`, used since v3.3.6 to aim the spline's exit slope);
+  that sample is by construction a PREDICTION of the next frame's action — the
+  action is the plan at `lat_delay + DT_MDL` and the lookahead is the same plan
+  at `lat_delay + 2*DT_MDL`, i.e. the same absolute instant. So only the
+  INNOVATION (raw action minus what the previous plan said it would be) is
+  damped. MEASURED, not asserted:
+    - perfect prediction (steady turn-in, holding a curve, a scheduled unwind):
+      output is BIT-IDENTICAL to the raw action. Zero phase lag on predicted
+      motion — the property an EMA cannot have.
+    - an UNPREDICTED step at the model's own rate rail is delivered
+      45/32/13/6/2/1% over six model frames instead of 100% in one: the peak
+      frame-to-frame command change drops to 45%.
+    - pure jitter: frame-to-frame command change stdev drops to 52% of raw.
+    - a fully BLIND plan on a sustained rail-rate maneuver (the degenerate
+      worst case) settles 0.104 m/s^2 behind = 42 ms, UNDER ONE MODEL FRAME.
+    - `DEV_MAX_LAT_ACCEL` = 0.15 m/s^2 hard-caps |command - model desire| in
+      lateral acceleration. Max reachable deviation measured at 0.135, so the
+      cap is a real backstop for a WRONG prediction, not the operating point.
+      Even pinned at the cap for a whole convergence the path error is ~3 mm —
+      "the car ends up somewhere the model did not want" is now a number.
+    - a genuinely large surprise (several times what the model's own limiter
+      can produce) passes through with beta == 1, i.e. UNTOUCHED. The v3.3.2
+      requirement that onsets stay decisive is intact.
+  Knot values and knot TIMES are unchanged; the filtered value is handed to
+  LatSmoother exactly as the raw action was, and clip_curvature still enforces
+  the ISO limits downstream. Deviation is published as a fifth field on
+  `/dev/shm/lat_interp` (appended; the dev-UI reader indexes defensively).
+
+2. LATERAL: THE HANDBACK IS A RAMP, AND THE GAP SETS ITS LENGTH
+------------------------------------------------------------------------
+* fix(lat): NEW `selfdrive/controls/lib/lat_handback.py`. REPORTED CYCLE, once
+  per corner: the model asks for more turn than the driver wants -> the driver
+  holds the wheel out -> the override softening cuts torque to 60% -> the
+  driver settles the car and relaxes -> softening releases in ~0.15 s WITH THE
+  MODEL'S DESIRE UNCHANGED and a frozen integrator still holding pre-override
+  wind-up -> the wheel bites -> the driver grabs it again.
+  v3.2.8's OverrideGate fixed the wrong half. Its dwell hysteresis stopped the
+  softening CHATTERING against wheel inertia, and that still works and is
+  reused verbatim. Nothing scheduled the RETURN: it was the same near-step
+  whether the controller was 0.1 or 3 m/s^2 away from what the driver had just
+  established, and the size of that step IS the bite.
+  The return is now a smoothstep RAMP whose duration is interpolated from the
+  desired-vs-measured lateral-accel DIVERGENCE at release: 1.6 s when they are
+  close (the corner case — nothing to correct urgently, so no reason to snatch)
+  down to 0.45 s when they are far apart (evasive — dawdling off the model's
+  path is the wrong trade). The divergence is peak-held with a bleed across the
+  press, because in the reported scenario the driver has ALIGNED the car by the
+  time they relax, so an instantaneous sample would schedule the wrong ramp.
+  For a corner-sized gap the per-frame authority step is under half of what the
+  old 0.15 s release delivered on its FIRST frame.
+* fix(lat): the integrator is the other half of the bite. It was FROZEN while
+  the driver pressed, so it still held whatever it wound up to before the
+  intervention. It is now BLED (1 s time constant) while the driver is actually
+  in charge, and stays frozen through the first half of the return ramp, so the
+  authority coming back is feedforward plus a live proportional term rather
+  than a stored one.
+* Unchanged: the driver always wins physically (panda driver-torque limits and
+  the EPS governor untouched), this only ever scales the request DOWN, and with
+  no intervention it is an exact no-op (scale 1.0 every frame, asserted).
+
+3. SLA: THE UP-RAMP NEVER REACHED LONGITUDINAL CONTROL; A DRIVER ADJUSTMENT
+   MID-RAMP DESTROYED THE CARRIED OFFSET
+------------------------------------------------------------------------
+* fix(SLA): `get_v_target_from_control` NOW RETURNS THE RAMP TARGET. `v_sla`
+  goes into the speed governor's min() next to the cluster set speed, and it
+  was returning `effective_speed_limit_target` — the CURRENT zone's value. So
+  approaching a FASTER zone, SLA itself pinned the car to the old limit for the
+  whole approach: the ramp did its job and walked the cluster up exactly as
+  designed, and this one line threw the result away, because
+  min(rising cluster, old zone target) is the old zone target. Nothing moved
+  until the boundary re-seeded the zone target and the entire rise arrived as
+  one step. Precisely the report: "I see the set speed going up, but the long
+  control doesn't react... then it jumps fully."
+  The DOWN ramp never showed it because there the cluster is the more
+  restrictive of the two, so min() picked the ramp's value by accident — the
+  descent behaviour is bit-identical, and a test pins that.
+* fix(SLA): A CRUISE PRESS DURING A RAMP IS A DELTA, NOT AN ABSOLUTE.
+  `_set_ratio_from_cluster` reads the whole cluster value as "what the driver
+  wants relative to the current limit". True when the cluster is parked on
+  limit*(1+ratio); FALSE for the entire duration of a ramp, because the ramp is
+  what put the cluster there. Worked example, exactly the reported symptom:
+  +30% carried into a 50 mph zone (target 65), descending toward a 30 zone,
+  cluster walked down to 40. One tap of `+` and v3.4.5 stored
+  (41 - 50)/50 = -18%. The carried offset is destroyed, and the 30 zone is then
+  entered at 24.6 mph instead of 39 — "it forgets where SLA was set before so
+  when we get to the new zone it's all buggy."
+  While the ramp has the cluster DISPLACED, the press now moves the ratio by
+  what the driver added ON TOP of the ramp's value. Parked on the zone target
+  (no ramp) the old absolute derivation is still correct and still runs — which
+  is also what keeps the +/-50% RATIO_LIMIT rail enforced.
+* fix(SLA): a press no longer ABORTS the descent. v3.4.5 treated a button event
+  like a boundary crossing: re-seed to `current_target` and clear `_latch` /
+  `_d_min` / `_confirm_n` / `_engage_grace`. Both halves are wrong mid-ramp —
+  re-seeding throws the set speed back UP to the zone target the driver was
+  already descending away from, and clearing the state restarts the descent
+  from scratch on every tap. The ramp now ADOPTS the driver's value, shifts the
+  monotone-descent latch by the same delta so it cannot claw the adjustment
+  back, and keeps the rest of its state.
+* fix(cruise_ext): the post-press ramp hold is 100 -> 60 frames. It has to end
+  at roughly the same time as SLA's own 0.5 s intent window; at 1 s, SLA's ramp
+  was live again for half a second while this side still refused to follow it,
+  so the cluster JUMPED when the hold finally expired.
+
+4. SCC: ONE FEATURE INSTEAD OF A VETO BETWEEN TWO
+------------------------------------------------------------------------
+* feat(SCC): NEW `sunnypilot/.../long_v2/scc_fusion.py`. v3.3.8 made SCC-M's
+  cap conditional on SCC-V being independently ACTIVE. The protection that
+  bought is real and is PRESERVED EXACTLY — a map point on a straight road
+  still cannot brake the car. But the veto did not ask "does the model see a
+  corner?", it asked "has the model's own corner controller crossed its
+  activation threshold?", which the map can rarely clear when it matters: a
+  corner pulling 1.5 m/s^2 is a real corner and nowhere near activating vision,
+  and the map reasons to 400 m while the model's plan reaches ~240 m at 30 m/s
+  — so the veto was hardest exactly where the map's early, gentle reduction was
+  most useful. Result: missed slowdowns.
+  Corroboration is now CONTINUOUS and scales the map's AUTHORITY instead of
+  switching it: vision active -> map passes through unchanged; vision sees a
+  corner -> map takes a proportional share of the reduction it asked for,
+  bounded by MAP_SOLO_MAX_CUT (~15 mph) so a partially-corroborated map error
+  has a bounded cost; vision sees a straight road -> vetoed outright.
+* fix(SCC-V): THE SELECTION MASK WAS ASKING THE MODEL'S OPINION OF ITS OWN
+  PLAN. A plan point counted as a corner only when `orientationRate.z *
+  velocity.x` exceeded the comfort limit — but `velocity.x` is what the model
+  INTENDS to be doing there, and the model plans to slow for corners. So a real
+  corner the model had already planned around read as "under the limit, nothing
+  to do", while in `acc` mode the car never follows that planned velocity, so
+  nothing slowed it. The corner SPEED never had this problem
+  (v_i*sqrt(a/(rate*v_i)) is algebraically sqrt(a/curvature), independent of
+  the planned velocity) — only the mask. A point now binds when its comfortable
+  corner speed is below the speed we are ACTUALLY carrying,
+  max(v_ego, v_cruise). The cruise term is load-bearing: with v_ego alone the
+  mask empties the moment the car has slowed TO the corner speed, releasing the
+  cap and oscillating inside the corner.
+* tune(SCC): `a_lat_target` 2.4 -> 2.1 m/s^2 and the SCC-V horizon 7 -> 8 s.
+  2.4 is brisk for a corner taken by a machine rather than by a driver who
+  chose the line; at 30 m/s, 2.1 first constrains a ~430 m radius, a genuine
+  sweeper rather than lane-keeping wander. The `+ A_DECEL_APPROACH * t` term
+  already de-weights distant points, so the wider horizon costs no authority
+  and buys earlier corroboration.
+
+TESTS
+------------------------------------------------------------------------
+* NEW `test_knot_filter.py` (16) and `test_lat_handback.py` (16); SCC, SLA and
+  cruise_ext suites extended. 261 green (was 197 on v3.4.8). Import-light
+  throughout.
+* Every load-bearing guard MUTATION-TESTED: publishing the zone target again,
+  absolute ratio re-derivation mid-ramp, masking on the model's planned
+  velocity, binary corroboration / unbounded solo cut, damping the raw action
+  (becoming an EMA), a fixed release time constant, and the 1 s cruise_ext ramp
+  hold — each reintroduction makes the suite fail, and each removal makes it
+  pass again.
+* fix(lat): while here — `_model_lookahead_curv` was measuring its horizon from
+  `liveDelay.lateralDelay`, but with the lagd toggle on modeld_v2 places the
+  ACTION at the CACHED lagd value. The lookahead is defined as one model step
+  past the action horizon, so with an inflated lagd value it could land BEHIND
+  the action and hand the v3.3.6 spline a reversed exit slope (bounded by the
+  Fritsch-Carlson clamp, but wrong). It now reads the same `get_lat_delay`
+  answer ControlsExt already computes, falling back to the live estimate.
+* PRE-EXISTING and untouched: `test_physics.py` (17) and
+  `test_triage_recorder.py` (3) fail on this branch as they did on v3.4.8.
+* `FUNNYPILOT_VERSION` -> 3.4.9; nav_webserver `EXPECTED_VERSION` -> "3.4.9",
+  two new `_FEEL_FILES` rows and eight new `_CODE_MARKERS` rows.
+
 FunnyPilot v3.4.8 (2026-07-27)
 ========================
 Three defects in the v3.4.5 predictive set-speed ramp, all reported from one

@@ -14,6 +14,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_curvature_from_plan, MAX_CURVATURE
 from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother
+from openpilot.selfdrive.controls.lib.knot_filter import KnotFilter
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
@@ -57,6 +58,16 @@ class Controls(ControlsExt):
     # between knots (SPLINE default in lat_smooth.py; the knot values/times and
     # every safety invariant are unchanged from the validated v3.2.10 scheme).
     self.lat_smooth = LatSmoother()
+
+    # FunnyPilot v3.4.9: MORE interpolation, without the v3.2.12 EMA's phase
+    # cost. LatSmoother can only shape the path BETWEEN knots; the knot
+    # sequence itself still delivers each rate change inside one 50 ms period,
+    # which is the step that is felt in the car. KnotFilter damps the part of
+    # each knot the model's own published plan did NOT predict — so a steady
+    # turn-in passes through bit-unchanged while jitter is spread over several
+    # model frames — and hard-caps the resulting command-vs-desire deviation at
+    # 0.15 m/s^2 of lateral accel (millimetres of path). See knot_filter.py.
+    self.knot_filter = KnotFilter()
 
     # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
     # recurring "smoothing feels off after sitting parked" report. Viewable and
@@ -169,11 +180,24 @@ class Controls(ControlsExt):
     # nothing can silently stall.
     if not CC.latActive:
       self.lat_smooth.reset(self.curvature)
+      self.knot_filter.reset()
       new_desired_curvature = self.curvature
     else:
-      next_est = self._model_lookahead_curv(model_v2, lat_delay, CS.vEgo) if self.sm.updated['modelV2'] else None
-      new_desired_curvature = self.lat_smooth.update(model_v2.action.desiredCurvature,
-                                                     self.sm.updated['modelV2'], time.monotonic(), next_est)
+      new_knot = self.sm.updated['modelV2']
+      next_est = self._model_lookahead_curv(model_v2, self._model_action_delay(lat_delay), CS.vEgo) if new_knot else None
+      # v3.4.9: `next_est` is the plan one model step past the ACTION horizon,
+      # i.e. a prediction of the NEXT frame's action. The spline has used it to
+      # aim its exit slope since v3.3.6; KnotFilter now also uses the PREVIOUS
+      # frame's copy of it as the process model that decides how much of this
+      # knot is new information. Same free read of the plan inside the lagd
+      # window, no filtering of past outputs, no shift of any knot time.
+      model_curv = model_v2.action.desiredCurvature
+      if new_knot:
+        model_curv = self.knot_filter.update(model_curv, CS.vEgo)
+
+      new_desired_curvature = self.lat_smooth.update(model_curv, new_knot, time.monotonic(), next_est)
+      if new_knot:
+        self.knot_filter.set_prediction(next_est)
     # Dev-UI heartbeat, written at the 20 Hz model rate. v3.3.8: now
     # "n,authority,pitch,limited" — n is the realized control-frames-per-
     # model-frame (kept for triage compat), authority is the MIN EPS-governor
@@ -202,8 +226,13 @@ class Controls(ControlsExt):
       try:
         n = round(self.lat_smooth.health_frames) if CC.latActive else 0
         limited_frac = self._eps_limited_frames / max(self._eps_total_frames, 1)
+        # v3.4.9 appends a FIFTH field, `dev`: the KnotFilter's current
+        # command-vs-model-desire deviation in m/s^2 of lateral accel (hard
+        # capped at DEV_MAX_LAT_ACCEL). Appended rather than inserted, and the
+        # dev-UI reader indexes defensively, so older readers are unaffected.
+        dev = self.knot_filter.deviation
         with open('/dev/shm/lat_interp', 'w') as _f:
-          _f.write(f"{n},{self._eps_auth_min:.2f},{self._pitch_max:.1f},{limited_frac:.2f}")
+          _f.write(f"{n},{self._eps_auth_min:.2f},{self._pitch_max:.1f},{limited_frac:.2f},{dev:.3f}")
       except Exception:
         pass
       self._eps_auth_min = 1.0
@@ -257,6 +286,20 @@ class Controls(ControlsExt):
         setattr(actuators, p, 0.0)
 
     return CC, lac_log
+
+  def _model_action_delay(self, live_lat_delay):
+    # FunnyPilot v3.4.9: the delay MODELD used to place the action, which is not
+    # always liveDelay.lateralDelay — with the lagd toggle on, modeld_v2 samples
+    # its plan at the cached lagd value (sunnypilot/livedelay/helpers.py) while
+    # this file was reading the raw estimate. The lookahead below is defined as
+    # "one model step past the ACTION horizon", so it has to be measured from
+    # the same delay the action was, or the exit slope aims at the wrong point
+    # and (v3.4.9) the knot prediction is biased. ControlsExt already computes
+    # this via the SAME get_lat_delay helper for the torque controller; fall
+    # back to the live estimate when it has not been read yet (first frames) or
+    # for non-torque tunes where it is never set.
+    d = getattr(self, 'lat_delay', None)
+    return float(d) if isinstance(d, Number) and math.isfinite(d) and d > 0.0 else live_lat_delay
 
   def _model_lookahead_curv(self, model_v2, lat_delay, vego):
     # FunnyPilot v3.3.6: estimate where the model's desired curvature is heading

@@ -16,7 +16,12 @@ class LongV2Tuning:
   # v3.2.6e: comfort lateral acceleration target for curve speed control [m/s^2].
   # SCC-V slows so predicted lat accel stays under this; SCC-M uses it only to
   # estimate the displayed corner radius. Friction trims it by at most +/-30%.
-  a_lat_target: float = 2.4
+  # v3.4.9: 2.4 -> 2.1. 2.4 m/s^2 is brisk for a corner taken by a machine
+  # rather than a driver who chose the line, and it is one of the two reasons
+  # corners were being missed (the other, the selection mask, is fixed in
+  # scc_vision_v2.py). At 30 m/s, 2.1 m/s^2 first constrains a ~430 m radius —
+  # a genuine sweeper, not lane-keeping wander.
+  a_lat_target: float = 2.1
   # v3.2.6e: direct multiplier on mapd's suggested curve speeds (<1 = slower).
   sccm_speed_trim: float = 0.95
   # DEPRECATED (pre-3.2.6e sqrt(fric*g) formulas) — kept so existing

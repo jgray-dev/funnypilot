@@ -192,6 +192,14 @@ ENGAGE_GRACE_FRAMES = int(1.0 / DT_MDL)  # 20 frames = 1 s
 GATE_V_MARGIN = 0.5       # m/s the car must exceed the ramp target before gating
 GATE_MAX_FRAMES = int(30.0 / DT_MDL)
 
+# FunnyPilot v3.4.9 — how far the ramp target must sit from this zone's own
+# target before the cluster is considered DISPLACED, i.e. before a driver's
+# cruise press has to be read as a delta on the ramp rather than as an absolute
+# statement about the current zone. One display unit is 0.447 m/s (1 mph) /
+# 0.278 m/s (1 kph); 0.2 m/s is comfortably under both, so a set speed parked on
+# the zone target still takes the plain absolute derivation.
+RAMP_DISPLACED_TH = 0.2   # m/s
+
 # Monotone-descent latch release. `distance_to_next_limit` legitimately jumps
 # UP when the route changes (a turn onto a different road). Small increases are
 # GPS noise and must not un-do a descent already committed to; a sustained
@@ -278,6 +286,12 @@ class SpeedLimitAssist:
 
     # Dynamic offset ratio: the SLA "value" carried between zones
     self._ratio = 0.0
+
+    # v3.4.9: pending driver set-speed delta, in m/s, measured against the
+    # value the RAMP had the cluster at. See _apply_driver_set_speed_change.
+    self._driver_delta = 0.
+    self._driver_adjust = False
+    self._driver_displaced = False
 
     # confirm-press detection (fed at carState rate by update_car_state,
     # consumed at 20 Hz): monotonic deadline until which a release is valid
@@ -394,6 +408,50 @@ class SpeedLimitAssist:
       ratio = (self.v_cruise_cluster - self._base_limit) / self._base_limit
       self._ratio = max(-RATIO_LIMIT, min(RATIO_LIMIT, ratio))
 
+  @property
+  def _ramp_displaced(self) -> bool:
+    """True while the ramp is holding the cluster somewhere other than this
+    zone's own target — i.e. the cluster value is NOT a statement of driver
+    intent about the current zone."""
+    if self.v_cruise_target <= 0. or self._base_limit <= 0.:
+      return False
+    return abs(self.v_cruise_target - self._clamp_set_speed(self.effective_speed_limit_target)) > RAMP_DISPLACED_TH
+
+  def _apply_driver_set_speed_change(self) -> None:
+    """FunnyPilot v3.4.9 — a cruise adjustment DURING a ramp is a DELTA, not an
+    absolute statement of the driver's offset for this zone.
+
+    THE BUG THIS FIXES. `_set_ratio_from_cluster` reads the whole cluster value
+    as "what the driver wants relative to the current limit". That is true when
+    the cluster is parked on limit*(1+ratio) and FALSE for the entire duration
+    of a ramp, because the ramp is what put the cluster where it is. Concretely:
+    +10% carried into a 45 mph zone (target 49.5), descending toward a 25 zone,
+    cluster currently walked down to 35. One tap of `+` and the old code
+    re-derived ratio = (36 - 45)/45 = -20%. The carried offset is destroyed and
+    the new zone is then entered at 25 * 0.8 = 20 mph — the reported "it forgets
+    where SLA was set before, and it's all buggy when we get to the new zone".
+
+    So: while the ramp has the cluster displaced, the driver's press moves the
+    ratio by exactly what they added ON TOP of the ramp's value; parked on the
+    zone target (no ramp), the old absolute derivation is still correct and is
+    what runs. Either way `_driver_delta` records the move so the ramp can adopt
+    the driver's value without restarting its descent.
+    """
+    self._driver_adjust = True
+    self._driver_displaced = False
+    if self._base_limit <= 0. or self.v_cruise_cluster <= 0.:
+      self._driver_delta = 0.
+      return
+
+    if self._ramp_displaced:
+      self._driver_displaced = True
+      self._driver_delta = self.v_cruise_cluster - self.v_cruise_target
+      ratio = self._ratio + self._driver_delta / self._base_limit
+      self._ratio = max(-RATIO_LIMIT, min(RATIO_LIMIT, ratio))
+    else:
+      self._driver_delta = 0.
+      self._set_ratio_from_cluster()
+
   def _active_or_adapting(self) -> int:
     # compute the offset fresh: the ratio may have been (re)derived this frame
     self.v_offset = self.effective_speed_limit_target - self.v_ego
@@ -443,8 +501,11 @@ class SpeedLimitAssist:
         # Mid-approach the cluster sits BETWEEN zones (the ramp is walking it),
         # so re-deriving there would collapse a carried +20% to whatever value
         # the ramp happened to be passing through.
+        # v3.4.9: mid-ramp the cluster sits where the RAMP put it, so an
+        # absolute re-derivation reads our own displacement as the driver's
+        # offset. _apply_driver_set_speed_change handles both cases.
         if self.v_cruise_cluster_changed and self._button_event_recent():
-          self._set_ratio_from_cluster()
+          self._apply_driver_set_speed_change()
         self.state = self._active_or_adapting()
         self._clear_releases()  # presses while active are plain speed adjustments
 
@@ -595,26 +656,63 @@ class SpeedLimitAssist:
       self._d_min = float('inf')
       self._confirm_n = 0
       self._engage_grace = 0
+      self._driver_delta = 0.
+      self._driver_adjust = False
+      self._driver_displaced = False
       return
 
     current_target = self.effective_speed_limit_target
 
-    # RE-SEED. Three cases where continuity with the previous frame is wrong
-    # and the slew cap must be bypassed rather than fought:
+    # RE-SEED. Two cases where continuity with the previous frame is wrong and
+    # the slew cap must be bypassed rather than fought:
     #   * a zone boundary was crossed — current_target just stepped, and the
     #     ramp should be AT the new value, not crawling toward it;
-    #   * the driver pressed a cruise button — their intent outranks ours, and
-    #     the ratio has just been re-derived from where they put it;
     #   * first active frame — there is no previous value to be continuous with.
-    # Seeding also clears the descent latch: a driver press mid-descent must be
-    # able to raise the set speed again.
-    if (self.speed_limit_final_last_changed or self._button_event_recent()
-        or self.v_cruise_target <= 0.):
+    if self.speed_limit_final_last_changed or self.v_cruise_target <= 0.:
       self.v_cruise_target = self._clamp_set_speed(current_target)
       self._latch = 0.
       self._d_min = float('inf')
       self._confirm_n = 0
       self._engage_grace = 0
+      self._driver_delta = 0.
+      self._driver_adjust = False
+      self._driver_displaced = False
+      return
+
+    # DRIVER ADJUSTMENT (v3.4.9). The v3.4.5 form treated a button press like a
+    # boundary crossing: seed to `current_target` and clear the descent state.
+    # Both halves of that are wrong mid-ramp. Seeding to `current_target` throws
+    # the set speed back UP to the full zone target the driver was already
+    # descending away from, and clearing `_latch` / `_d_min` / `_confirm_n`
+    # restarts the descent from scratch — so a driver who taps twice on the way
+    # into a zone gets the ramp aborted and re-derived twice, which is the other
+    # half of the reported buggy behaviour.
+    #
+    # Instead: ADOPT the value the driver just set (the cluster IS their intent,
+    # whatever the ramp had been doing), shift the monotone-descent latch by the
+    # same delta so it does not immediately claw the adjustment back, and keep
+    # every other piece of ramp state. The ramp is then HELD for the rest of the
+    # intent window so their press can settle through card -> carState without
+    # us writing over it.
+    if self._button_event_recent():
+      if self._driver_adjust:
+        if self._driver_displaced:
+          # RAMP DISPLACED: adopt the value the driver just set and carry the
+          # descent, shifting the latch by the same amount so the monotone
+          # guard does not immediately claw their adjustment back.
+          self.v_cruise_target = self._clamp_set_speed(self.v_cruise_target + self._driver_delta)
+          if self._latch > 0.:
+            self._latch = self._clamp_set_speed(self._latch + self._driver_delta)
+        else:
+          # NOT displaced: the cluster was a plain statement about this zone and
+          # the ratio has just been re-derived (and RATIO_LIMIT-clamped) from
+          # it, so seed to the clamped target — that is what enforces the rail.
+          self.v_cruise_target = self._clamp_set_speed(current_target)
+          self._latch = 0.
+          self._d_min = float('inf')
+        self._driver_adjust = False
+        self._driver_displaced = False
+        self._driver_delta = 0.
       return
 
     # CONFIRMATION. Require CONFIRM_N agreeing frames before acting on an
@@ -714,7 +812,31 @@ class SpeedLimitAssist:
   # ---------- outputs ----------
 
   def get_v_target_from_control(self) -> float:
+    """FunnyPilot v3.4.9 — THIS IS THE RAMP TARGET, NOT THE ZONE TARGET.
+
+    THE BUG. `v_sla` goes into the speed governor's min() alongside the cluster
+    set speed. Returning `effective_speed_limit_target` — the CURRENT zone's
+    value — meant SLA itself pinned the car to the old zone for the whole
+    approach to a FASTER one. The ramp did its job (the cluster visibly walked
+    up, exactly as designed) and then this line threw the result away: the
+    governor picked min(rising cluster, old zone target) = old zone target, so
+    the long control did not react at all until the boundary crossing re-seeded
+    `effective_speed_limit_target` and the whole rise arrived as one step. That
+    is precisely the reported "I see the set speed going up but it stays at the
+    previous speed, then jumps fully when we enter the zone".
+
+    The DOWN ramp never showed it because there the cluster is the more
+    restrictive of the two, so min() picked the ramp's value by accident.
+
+    `v_cruise_target` IS the speed SLA is asking for right now, in both
+    directions, and it is already clamped by `_clamp_set_speed`. Publishing it
+    makes SLA's own governor entry agree with the number on the cluster instead
+    of fighting it, and leaves the descent behaviour bit-identical (there the
+    two values are the same thing).
+    """
     if self.is_active and self._base_limit > 0:
+      if self.v_cruise_target > 0.:
+        return self.v_cruise_target
       return self.effective_speed_limit_target
     return V_CRUISE_UNSET
 

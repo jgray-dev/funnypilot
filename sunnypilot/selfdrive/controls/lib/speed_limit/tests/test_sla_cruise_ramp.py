@@ -362,23 +362,100 @@ class TestRatioPreserved:
       approach(sla, events, cluster_mph, 45., 25., 200.)
     assert abs(sla.dynamic_offset_ratio - ratio1) < 1e-9
 
-  def test_button_press_mid_descent_reseeds_and_clears_latch(self):
-    """MUTATION: keep the latch across a driver press.
+  def test_button_press_mid_descent_is_a_delta_not_an_absolute(self):
+    """v3.4.9. MUTATION: re-derive the ratio absolutely from the cluster while
+    the ramp is displacing it (the v3.4.5 behaviour), or fail to shift the
+    monotone latch by the driver's own delta.
 
-    A latched descent that survives a press means the driver raises the set
-    speed and watches it get pulled straight back down.
+    Mid-descent the cluster reads whatever the RAMP walked it to, so an absolute
+    re-derivation reads OUR displacement as THEIR offset: +30% carried into a 50
+    zone, walked down to 40 mph on the way to a 30 zone, one tap of `+` and the
+    old code stored (41 - 50)/50 = -18%. That is the reported "it forgets where
+    SLA was set before, and the new zone is all buggy" — the 30 zone would then
+    be entered at 24.6 mph instead of 39.
     """
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=65., limit_mph=50.)  # +30% carried
+    ratio0 = sla.dynamic_offset_ratio
+    settle(sla, events, 65., 50.)
+    for d in (200., 150., 120.):
+      approach(sla, events, sla.v_cruise_target / MPH, 50., 30., d, n=CONFIRM_N + 2)
+    target_before = sla.v_cruise_target
+    latch_before = sla._latch
+    assert target_before < 65. * MPH, "ramp must be descending for this test to mean anything"
+    assert latch_before > 0.
+
+    driver_mph = target_before / MPH + 3.
+    press(sla, ButtonType.accelCruise)
+    approach(sla, events, driver_mph, 50., 30., 120., n=1)
+
+    # the driver's value is ADOPTED, not overwritten by the zone target
+    assert abs(sla.v_cruise_target - driver_mph * MPH) < 0.5
+    # ...and read as a DELTA: the carried offset goes UP, never negative
+    assert sla.dynamic_offset_ratio > ratio0
+    assert sla.dynamic_offset_ratio > 0.
+    # ...and the latch moves with them, so it cannot claw the raise back down
+    assert sla._latch > latch_before + 1.0
+
+  def test_press_mid_descent_lands_the_new_zone_on_the_carried_offset(self):
+    """v3.4.9. The end-to-end version of the bug: what the driver actually sees
+    is not the ratio, it is where the set speed ends up after the boundary."""
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=65., limit_mph=50.)  # +30%
+    settle(sla, events, 65., 50.)
+    for d in (200., 150., 120.):
+      approach(sla, events, sla.v_cruise_target / MPH, 50., 30., d, n=CONFIRM_N + 2)
+
+    driver_mph = sla.v_cruise_target / MPH + 2.
+    press(sla, ButtonType.accelCruise)
+    approach(sla, events, driver_mph, 50., 30., 120., n=1)
+    ratio = sla.dynamic_offset_ratio
+
+    # cross into the 30 zone
+    step(sla, events, cluster_mph=driver_mph, limit_mph=30., n=1)
+    assert abs(sla.v_cruise_target - 30. * MPH * (1. + ratio)) < 0.5
+    # the whole point: still comfortably ABOVE the posted limit, as carried
+    assert sla.v_cruise_target > 30. * MPH
+
+
+class TestUpRampReachesLongitudinalControl:
+  """v3.4.9. The up-ramp moved the cluster and nothing else. `output_v_target`
+  is SLA's entry in the speed governor's min(), and it returned the CURRENT
+  zone's target, so SLA itself pinned the car to the old limit for the whole
+  approach and the rise arrived as one step at the boundary."""
+
+  def test_published_target_follows_the_up_ramp(self):
+    """MUTATION: return `effective_speed_limit_target` from
+    get_v_target_from_control."""
+    sla = make_sla()
+    events = FakeEvents()
+    activate(sla, events, cluster_mph=45., limit_mph=45.)
+    settle(sla, events, 45., 45.)
+    zone_target = sla.effective_speed_limit_target
+
+    d = up_window(45., 45., 60.)
+    seen_above = False
+    for _ in range(120):
+      approach(sla, events, sla.v_cruise_target / MPH, 45., 60., d, n=1)
+      d = max(1., d - sla.v_ego * DT)
+      if sla.output_v_target > zone_target + 0.3:
+        seen_above = True
+    assert seen_above, "long control never saw the rise before the boundary"
+    assert abs(sla.output_v_target - sla.v_cruise_target) < 1e-9
+
+  def test_published_target_follows_the_down_ramp_unchanged(self):
+    """The descent must be bit-identical: there the ramp target IS the more
+    restrictive of the two, which is why the bug only ever showed going up."""
     sla = make_sla()
     events = FakeEvents()
     activate(sla, events, cluster_mph=65., limit_mph=65.)
     settle(sla, events, 65., 65.)
-    for d in (200., 150., 120.):
-      approach(sla, events, 65., 65., 30., d, n=CONFIRM_N + 2)
-    assert sla.v_cruise_target < 65. * MPH
-    press(sla, ButtonType.accelCruise)
-    approach(sla, events, 70., 65., 30., 120., n=1)
-    assert sla._latch == 0.
-    assert abs(sla.v_cruise_target - sla.effective_speed_limit_target) < 0.5
+    for d in (300., 250., 200., 150.):
+      approach(sla, events, sla.v_cruise_target / MPH, 65., 30., d, n=CONFIRM_N + 2)
+    assert sla.output_v_target < sla.effective_speed_limit_target
+    assert abs(sla.output_v_target - sla.v_cruise_target) < 1e-9
 
   def test_ratio_survives_five_zones_with_quantization(self):
     """MUTATION: any re-derivation drift. Rounding the set speed to the display

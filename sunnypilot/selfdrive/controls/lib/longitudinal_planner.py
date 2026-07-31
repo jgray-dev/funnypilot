@@ -88,11 +88,16 @@ class LongitudinalPlannerSP:
     # LongV2: SCC-Map v2
     self._scc_map_v2.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise, self._fric)
 
-    # LongV2: Speed governor selects minimum of all v_targets. SCC-M requires
-    # SCC-V agreement to bind (gate_map_target) — vision alone retains full
-    # authority to slow the car; map alone cannot.
+    # LongV2: Speed governor selects minimum of all v_targets. v3.4.9 merges
+    # SCC-V and SCC-M into one feature: vision alone still has full authority,
+    # and the map's authority is now SCALED by how much lateral action the model
+    # predicts (continuous corroboration) instead of being switched by whether
+    # SCC-V independently activated. A map point on a straight road is still
+    # vetoed outright; a real corner no longer has to clear vision's own comfort
+    # threshold before the map may act on it. See long_v2/scc_fusion.py.
     v_scc_vision = self._scc_vision_v2.output_v_target
-    v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active)
+    v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active,
+                                v_cruise, self._scc_vision_v2.corroboration)
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
     # Speed limit info for road cap logic

@@ -179,7 +179,15 @@ class VCruiseHelperSP:
     sla_active = self.sla_state in SLA_ACTIVE_STATES and self.prev_sla_state in SLA_ACTIVE_STATES
 
     if CS is not None and any(b.pressed for b in CS.buttonEvents):
-      self._ramp_hold_frames = 100  # ~1 s at the 100 Hz card rate
+      # FunnyPilot v3.4.9: 100 -> 60 frames. This hold and SLA's own
+      # BUTTON_INTENT_FRAMES window (0.5 s) have to end at roughly the same
+      # time. At 1 s they did not: for the half second in between, SLA's ramp
+      # was running again while this side was still refusing to follow it, so
+      # when the hold finally expired the cluster JUMPED to wherever the ramp
+      # had walked to meanwhile. 0.6 s clears SLA's window (so the driver's
+      # value has been adopted, v3.4.9) with a frame or two of margin, and
+      # nothing moves at the handover.
+      self._ramp_hold_frames = 60  # ~0.6 s at the 100 Hz card rate
 
     if self._ramp_hold_frames > 0:
       self._ramp_hold_frames -= 1

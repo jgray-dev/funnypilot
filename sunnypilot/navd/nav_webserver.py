@@ -32,6 +32,8 @@ _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
 _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
+  "/data/openpilot/selfdrive/controls/lib/knot_filter.py",
+  "/data/openpilot/selfdrive/controls/lib/lat_handback.py",
   "/data/openpilot/selfdrive/controls/lib/eps_limit.py",
   "/data/openpilot/selfdrive/controls/lib/bump_damper.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
@@ -40,7 +42,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.4.8"
+EXPECTED_VERSION = "3.4.9"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -76,7 +78,7 @@ _CODE_MARKERS = [
   ("class LagdElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "lagd dev UI readout"),
   ("class EpsLimitElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "EPS/TBAR/BUMP dev UI readout"),
   ("class SuspensionBumpElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "bump/pitch-rate dev UI readout"),
-  ("gate_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "SCC-M requires SCC-V confirm"),
+  ("gate_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "SCC map/vision arbitration"),
   ("class BumpDamper", "/data/openpilot/selfdrive/controls/lib/bump_damper.py", "bump/weight-transfer error damper"),
   ("_update_cruise_ramp", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA predictive set-speed ramp"),
   ("class LongStatusDotRenderer", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/long_status_dot.py", "long command status dot"),
@@ -100,6 +102,15 @@ _CODE_MARKERS = [
   ("GATE_MAX_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "gas gate watchdog"),
   ("ENGAGE_GRACE_FRAMES", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "ramp dropout hysteresis"),
   ("RAMP_UP_T_MAX", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "time-based up-ramp window"),
+  # v3.4.9
+  ("class KnotFilter", "/data/openpilot/selfdrive/controls/lib/knot_filter.py", "predictive knot damping"),
+  ("knot_filter", "/data/openpilot/selfdrive/controls/controlsd.py", "knot filter wired into controlsd"),
+  ("class LatHandback", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "divergence-scheduled handback"),
+  ("_handback", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "handback owns the override scale"),
+  ("RAMP_DISPLACED_TH", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA driver adjust is a delta"),
+  ("v_cruise_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA publishes the ramp target"),
+  ("def fuse_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "merged SCC arbitration"),
+  ("corroboration", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py", "SCC-V corroboration signal"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

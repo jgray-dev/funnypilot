@@ -154,6 +154,29 @@ class TestWriteGating:
       h.update_speed_limit_assist_v_cruise_non_pcm()
     assert abs(h.v_cruise_kph - 43 * ce.IMPERIAL_INCREMENT) < 1e-6
 
+  def test_hold_outlasts_slas_own_intent_window(self):
+    """v3.4.9. MUTATION: put the hold back to 100 frames (1 s), or shorten it
+    below SLA's window.
+
+    The two holds have to end together. SLA suspends its ramp for
+    BUTTON_INTENT_FRAMES (0.5 s at 20 Hz) and adopts the driver's value there;
+    this side must resume writing only AFTER that, or (too short) it overwrites
+    the press before SLA has seen it, or (too long, the v3.4.5 state) SLA's ramp
+    runs for half a second while nothing follows it and the cluster JUMPS when
+    the hold finally expires.
+    """
+    from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import BUTTON_INTENT_FRAMES
+    h = make_helper()
+    CS = car.CarState.new_message()
+    be = CS.init('buttonEvents', 1)
+    be[0].type = ce.ButtonType.accelCruise
+    be[0].pressed = True
+    h.update_speed_limit_assist_v_cruise_non_pcm(CS)
+    hold_s = (h._ramp_hold_frames + 1) / 100.        # this side runs at 100 Hz
+    sla_window_s = BUTTON_INTENT_FRAMES * 0.05       # SLA runs at 20 Hz
+    assert hold_s > sla_window_s
+    assert hold_s < sla_window_s + 0.35, "a long overhang is what made the cluster jump"
+
   def test_target_is_clamped_to_the_cruise_range(self):
     h = make_helper()
     h.sla_v_cruise_target = 400. * MPH
