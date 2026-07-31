@@ -18,10 +18,6 @@ def get_fric(sm) -> float:
     return _FRIC_DEFAULT
 
 
-def comfort_scale(fric: float) -> float:
-  return max(0.4, min(1.0, fric / _FRIC_DEFAULT))
-
-
 def weather_cap_active(fric: float) -> bool:
   return fric < _FRIC_WET_THRESHOLD
 

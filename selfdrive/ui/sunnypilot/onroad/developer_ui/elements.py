@@ -228,23 +228,6 @@ class AEgoElement:
     return UiElement(value, "ACC.", self.unit, rl.WHITE)
 
 
-class LeadSpeedElement(LeadInfoElement):
-  def __init__(self):
-    self.unit = "km/h"
-
-  def update(self, sm, is_metric: bool) -> UiElement:
-    lead_status, _, lead_v_rel = self.get_lead_status(sm)
-    v_ego = sm['carState'].vEgo
-
-    self.unit = "km/h" if is_metric else "mph"
-
-    conversion = CV.MS_TO_KPH if is_metric else CV.MS_TO_MPH
-    value = f"{(lead_v_rel + v_ego) * conversion:.0f}" if lead_status else "-"
-    color = self.get_lead_color(0, lead_v_rel, use_v_rel=True) if lead_status else rl.WHITE
-
-    return UiElement(value, "L.S.", self.unit, color)
-
-
 class FrictionCoefficientElement:
   def __init__(self):
     self.unit = ""

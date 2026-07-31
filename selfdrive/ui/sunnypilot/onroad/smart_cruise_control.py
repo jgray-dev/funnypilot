@@ -48,10 +48,17 @@ def _lerp_color(a: rl.Color, b: rl.Color, t: float) -> rl.Color:
 
 
 class _BadgeState:
+  # v3.4.9: there were TWO __init__ definitions here. The second one won (as
+  # Python always does), so runtime behaviour is unchanged by deleting the
+  # first — but the first was the BROKEN one: it never set `_from`, which
+  # tick() reads on the frame after any set_target(). Anyone who "fixed" the
+  # duplication by keeping the earlier definition would have shipped an
+  # AttributeError into the onroad UI on the first badge colour change.
   def __init__(self):
-    self.color = _COLOR_DISABLED
+    self._from = _COLOR_DISABLED
     self._target = _COLOR_DISABLED
     self._frame = _TRANSITION_FRAMES
+    self.color = _COLOR_DISABLED
 
   def set_target(self, target: rl.Color) -> None:
     if (target.r, target.g, target.b) != (self._target.r, self._target.g, self._target.b):
@@ -66,12 +73,6 @@ class _BadgeState:
       self.color = _lerp_color(self._from, self._target, t)
     else:
       self.color = self._target
-
-  def __init__(self):
-    self._from = _COLOR_DISABLED
-    self._target = _COLOR_DISABLED
-    self._frame = _TRANSITION_FRAMES
-    self.color = _COLOR_DISABLED
 
 
 class SmartCruiseControlRenderer(Widget):

@@ -65,7 +65,7 @@ def test_no_capnp_union_annotations_in_cruise_ext():
   import pathlib
   import re
   src = (pathlib.Path(__file__).resolve().parents[1] / 'cruise_ext.py').read_text()
-  pattern = re.compile(r'(?:\b(?:car|custom|log)\.[A-Za-z_.]+\s*\|\s*None)'
+  pattern = re.compile(r'(?:\b(?:car|custom|log)\.[A-Za-z_.]+\s*\|\s*None)' +
                        r'|(?:\bNone\s*\|\s*(?:car|custom|log)\.[A-Za-z_.]+)')
   bad = []
   for n, line in enumerate(src.splitlines(), 1):

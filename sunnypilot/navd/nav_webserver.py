@@ -131,8 +131,8 @@ _UPDATER_CMD = (
 # evidence rather than a guess. `du -sh` on a handful of named suspects only;
 # no whole-filesystem walk (that would take minutes on the drive log tree).
 _STORAGE_CMD = (
-  "df -h /data | tail -1; "
-  "du -sh /data/media/0/realdata /data/openpilot/.git /data/safe_staging/old_openpilot "
+  "df -h /data | tail -1; " +
+  "du -sh /data/media/0/realdata /data/openpilot/.git /data/safe_staging/old_openpilot " +
   "/data/core /data/funnypilot_triage 2>/dev/null"
 )
 
@@ -298,13 +298,13 @@ async def handle_flash(request: web.Request) -> web.Response:
     # (unmount the updater overlay first) so the reboot below can't swap in
     # code that was finalized before this flash.
     script = (
-      f"cd /data/openpilot && "
-      f"sudo git -c http.sslVerify=false fetch funnypilot {branch} && "
-      f"sudo git checkout {branch} && "
-      f"sudo git reset --hard funnypilot/{branch} && "
-      f"{{ sudo umount -l /data/safe_staging/merged 2>/dev/null; "
-      f"sudo rm -rf /data/safe_staging; "
-      f"sudo reboot; }}"
+      "cd /data/openpilot && " +
+      f"sudo git -c http.sslVerify=false fetch funnypilot {branch} && " +
+      f"sudo git checkout {branch} && " +
+      f"sudo git reset --hard funnypilot/{branch} && " +
+      "{ sudo umount -l /data/safe_staging/merged 2>/dev/null; " +
+      "sudo rm -rf /data/safe_staging; " +
+      "sudo reboot; }"
     )
     proc = await asyncio.create_subprocess_exec(
       "/bin/bash", "-c", script,

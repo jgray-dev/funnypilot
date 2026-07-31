@@ -1,6 +1,16 @@
 """
 FunnyPilot LongV2 tuning parameters — all constants in one place.
 Override by writing JSON to Params key "LongV2Tuning".
+
+v3.4.9: this dataclass is now EXACTLY the fields control code reads. It had
+accumulated seven more — k_sccv/k_sccm (the pre-3.2.6e sqrt(fric*g) corner
+formulas), thw_default/d_standstill/jerk_limit_*/decel_comfort/accel_comfort
+(FollowingControllerV2, deleted in v3.2.6e when the MPC took back the
+following problem) and speed_limit_offsets (never read; the resolver has its
+own _offset_for_limit). They were kept "so existing param JSON blobs still
+parse", but get_tuning() already drops unknown keys, so a stored blob
+containing them parses fine either way — they bought nothing and read as
+live tuning knobs, which is the expensive kind of dead code.
 """
 import json
 from dataclasses import dataclass, field, asdict
@@ -24,33 +34,6 @@ class LongV2Tuning:
   a_lat_target: float = 2.1
   # v3.2.6e: direct multiplier on mapd's suggested curve speeds (<1 = slower).
   sccm_speed_trim: float = 0.95
-  # DEPRECATED (pre-3.2.6e sqrt(fric*g) formulas) — kept so existing
-  # LongV2Tuning param JSON blobs still parse; no longer read by control code.
-  k_sccv: float = 0.72
-  k_sccm: float = 0.78
-  # Default time headway [s]
-  thw_default: float = 2.7
-  # Standstill gap [m]
-  d_standstill: float = 5.0
-  # Normal jerk limit [m/s³]
-  jerk_limit_normal: float = 0.5
-  # Safety jerk limit [m/s³]
-  jerk_limit_safety: float = 3.0
-  # Comfort deceleration [m/s²]
-  decel_comfort: float = 1.8
-  # Comfort acceleration [m/s²]
-  accel_comfort: float = 1.5
-  # Speed limit offsets by road type [m/s]
-  speed_limit_offsets: dict[str, float] = field(default_factory=lambda: {
-    "motorway": 3.13,       # +7 mph
-    "trunk": 2.24,          # +5 mph
-    "primary": 2.24,        # +5 mph
-    "secondary": 2.24,      # +5 mph
-    "tertiary": 0.89,       # +2 mph
-    "residential": 0.89,    # +2 mph
-    "living_street": 0.0,
-    "service": 0.0,
-  })
   # Road type hard caps [m/s]
   road_type_caps: dict[str, float] = field(default_factory=lambda: {
     "living_street": 8.94,  # 20 km/h
@@ -79,8 +62,3 @@ def get_tuning() -> LongV2Tuning:
       pass
   _tuning_cache = LongV2Tuning()
   return _tuning_cache
-
-
-def reset_tuning_cache() -> None:
-  global _tuning_cache
-  _tuning_cache = None

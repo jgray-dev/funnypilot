@@ -230,7 +230,7 @@ class HomeLayout(Widget):
     # FunnyPilot: Show both FunnyPilot version and upstream sunnypilot version
     funnypilot_version = ""
     try:
-      with open("/data/openpilot/FUNNYPILOT_VERSION", "r") as f:
+      with open("/data/openpilot/FUNNYPILOT_VERSION") as f:
         funnypilot_version = f.read().strip()
     except Exception:
       pass

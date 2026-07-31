@@ -140,7 +140,7 @@ def test_no_capnp_unions_in_evaluated_annotations():
   so it bypasses every runtime test and can brick the boot. See module docstring."""
   offenders = sorted(o for p in _python_files() for o in _offenders_in(p))
   assert not offenders, (
-    "capnp module objects do not support `|`; these annotations raise TypeError at "
+    "capnp module objects do not support `|`; these annotations raise TypeError at " +
     "import time and will prevent the device from booting:\n  " + "\n  ".join(offenders)
     + "\n\nFix: drop the union (`CS=None` or plain `CS: car.CarState`)."
   )

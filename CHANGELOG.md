@@ -1,9 +1,10 @@
 FunnyPilot v3.4.9 (2026-07-31)
 ========================
-Four requested changes: more lateral interpolation without the old EMA's phase
-cost, a scheduled handback after a driver steering intervention, two SLA
+Four requested changes -- more lateral interpolation without the old EMA's
+phase cost, a scheduled handback after a driver steering intervention, two SLA
 defects around the predictive ramp, and the SCC-V/SCC-M challenge system merged
-into one feature.
+into one feature -- plus a dead-code sweep that takes the suite to zero known
+failures and ruff to zero warnings.
 
 1. LATERAL: MORE INTERPOLATION, PAID FOR BY THE PLAN INSTEAD OF BY LAG
 ------------------------------------------------------------------------
@@ -158,11 +159,45 @@ into one feature.
   already de-weights distant points, so the wider horizon costs no authority
   and buys earlier corroboration.
 
+5. DEAD CODE SWEEP
+------------------------------------------------------------------------
+Everything here was verified unreferenced by an AST scan across the repo
+before deletion, not by eye.
+
+* chore: DELETED `sunnypilot/selfdrive/controls/lib/smart_cruise_control/` —
+  the legacy v1 SCC package (6 files, 841 lines). `long_v2/` superseded it in
+  v3.2.6e when the planner stopped importing it; it has had zero importers
+  since and was shipping to the device every update. (The UI file
+  `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` is a DIFFERENT file
+  and is alive.)
+* chore: DELETED `long_v2/jerk_filter.py` — its only consumer was
+  `following_v2.py`, deleted in v3.2.6e.
+* chore: DELETED `long_v2/tests/test_physics.py`. It defined `k*sqrt(fric*g)`
+  corner formulas LOCALLY and asserted on those, so it tested nothing in the
+  codebase — and it had been failing 17 cases since v3.2.6e replaced the real
+  formulas. A test that keeps its own copy of the maths cannot fail when the
+  real maths changes, only when the copy drifts.
+* chore: DELETED seven dead `LongV2Tuning` fields (`k_sccv`, `k_sccm`,
+  `thw_default`, `d_standstill`, `jerk_limit_normal`, `jerk_limit_safety`,
+  `decel_comfort`, `accel_comfort`, `speed_limit_offsets`), `fric.comfort_scale`,
+  `tuning.reset_tuning_cache` and `elements.LeadSpeedElement`. The tuning
+  fields were kept "so existing param JSON still parses", but `get_tuning()`
+  already drops unknown keys — they bought nothing and read as live knobs.
+* fix(ui): `_BadgeState` had TWO `__init__` definitions. The second wins (as
+  always in Python) and is the CORRECT one — the first never set `_from`, which
+  `tick()` reads on the frame after any `set_target()`. Deleting the first is a
+  runtime no-op; resolving the duplication the other way would have shipped an
+  AttributeError into the onroad UI on the first badge colour change.
+* chore: ruff is now CLEAN across `selfdrive/ sunnypilot/ system/ common/`
+  (was 13 errors: the banned `pytest.main`, an unused import, a duplicate
+  `__init__`, an unnecessary `open(..., "r")` mode, and nine implicit
+  multi-line string concatenations this repo's own config bans). A zero
+  baseline is the only one where a new warning means anything.
+
 TESTS
 ------------------------------------------------------------------------
 * NEW `test_knot_filter.py` (16) and `test_lat_handback.py` (16); SCC, SLA and
-  cruise_ext suites extended. 261 green (was 197 on v3.4.8). Import-light
-  throughout.
+  cruise_ext suites extended. Import-light throughout.
 * Every load-bearing guard MUTATION-TESTED: publishing the zone target again,
   absolute ratio re-derivation mid-ramp, masking on the model's planned
   velocity, binary corroboration / unbounded solo cut, damping the raw action
@@ -176,8 +211,12 @@ TESTS
   the action and hand the v3.3.6 spline a reversed exit slope (bounded by the
   Fritsch-Carlson clamp, but wrong). It now reads the same `get_lat_delay`
   answer ControlsExt already computes, falling back to the live estimate.
-* PRE-EXISTING and untouched: `test_physics.py` (17) and
-  `test_triage_recorder.py` (3) fail on this branch as they did on v3.4.8.
+* THE KNOWN-FAILURE LIST IS NOW EMPTY. v3.4.8 shipped with 20 red: 17 in
+  `test_physics.py` (deleted above — it tested formulas the codebase no longer
+  contains) and 3 in `test_triage_recorder.py::TestWebserverHelpers`, which
+  turned out to be nothing but a missing `aiohttp` in the bare test container
+  and pass as soon as it is installed. Off-device the import-light suite is
+  348 green, 0 failed. If something fails now, it is real.
 * `FUNNYPILOT_VERSION` -> 3.4.9; nav_webserver `EXPECTED_VERSION` -> "3.4.9",
   two new `_FEEL_FILES` rows and eight new `_CODE_MARKERS` rows.
 

@@ -51,6 +51,158 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.4.9e Changes (based on funnypilot-3.4.8)
+
+Four requested behaviour changes plus a dead-code sweep. Read the KnotFilter
+entry first — it is the one that finally makes the lagd window pay for
+smoothness without paying in phase.
+
+- `selfdrive/controls/lib/knot_filter.py` — NEW, stdlib-only. `lat_smooth.py`
+  can only shape the path BETWEEN 20 Hz knots; the knot SEQUENCE still handed
+  every rate change over whole inside one 50 ms period, which is the step the
+  driver feels. THE RULE THIS ENCODES, and the reason it is not the v3.2.12 EMA
+  that had to be reverted: **an EMA's process model is "the curvature stays put",
+  so it lags EVERYTHING, including motion the model had already announced.**
+  KnotFilter's process model is the MODEL'S OWN PUBLISHED PLAN. controlsd
+  already samples the plan one model step past the action horizon; because the
+  action is the plan at `lat_delay + DT_MDL` and the lookahead is the same plan
+  at `lat_delay + 2*DT_MDL`, that sample IS a prediction of the next frame's
+  action. Only the INNOVATION (raw minus prediction) is damped. Measured, not
+  claimed: perfect prediction is BIT-IDENTICAL passthrough; an unpredicted step
+  at the model's own rate rail is spread 45/32/13/6/2/1% over six frames (peak
+  frame-to-frame command change -> 45%); jitter -> 52%; the degenerate blind
+  case settles 42 ms behind, UNDER ONE MODEL FRAME. `DEV_MAX_LAT_ACCEL = 0.15`
+  hard-caps |command - desire| in m/s^2 (~3 mm of path); max REACHABLE deviation
+  is 0.135, so the cap is a backstop for a wrong prediction, not the operating
+  point. Large surprises get beta == 1 = untouched (the v3.3.2 "onsets stay
+  decisive" requirement).
+- `selfdrive/controls/controlsd.py` — KnotFilter wired between
+  `action.desiredCurvature` and `LatSmoother.update`; `set_prediction(next_est)`
+  after each knot. NEW `_model_action_delay()`: `_model_lookahead_curv` measured
+  its horizon from `liveDelay.lateralDelay`, but with the lagd toggle ON
+  modeld_v2 places the ACTION at the CACHED lagd value, so the "lookahead" could
+  land BEHIND the action and hand the v3.3.6 spline a REVERSED exit slope
+  (bounded by the Fritsch-Carlson clamp, but wrong). It now reads the same
+  `get_lat_delay` answer ControlsExt computes, with a getattr fallback (the attr
+  is only set for torque tunes, and not before the first `get_params_sp`).
+  `/dev/shm/lat_interp` gained a FIFTH field, the filter's deviation in m/s^2
+  (appended; the dev-UI reader indexes defensively so old readers are fine).
+- `selfdrive/controls/lib/lat_handback.py` — NEW, stdlib-only. THE REPORTED
+  LIMIT CYCLE: driver holds the wheel out of the model's line -> softening cuts
+  torque to 60% -> driver settles the car and relaxes -> softening releases in
+  ~0.15 s with the model's desire UNCHANGED and a frozen integrator still
+  holding pre-override wind-up -> bite -> grab again, once per corner.
+  GENERALIZED LESSON: **v3.2.8's OverrideGate fixed the ENGAGE side (chatter)
+  and nobody looked at the RELEASE side.** A dwell hysteresis says WHEN to hand
+  back; it says nothing about HOW FAST, and the release was the same near-step
+  whether the two desires were 0.1 or 3 m/s^2 apart. The return is now a
+  smoothstep ramp whose duration interpolates on the desired-vs-measured
+  lateral-accel DIVERGENCE: `T_SOFT` 1.6 s when close (the corner case — nothing
+  to correct, so no reason to snatch) to `T_FIRM` 0.45 s when far (evasive).
+  Divergence is PEAK-HELD with a bleed across the press, deliberately: in the
+  reported scenario the driver has ALIGNED the car by the time they relax, so an
+  instantaneous sample reads ~0 and would schedule the wrong ramp. OverrideGate
+  is reused verbatim as the dwell primitive.
+- `selfdrive/controls/lib/latcontrol_torque.py` — `_handback` replaces
+  `_override_gate` + `_override_filter` and owns the whole scale; computed at
+  the TOP of the active branch because it also gates the integrator.
+  `INTEGRATOR_BLEED_TAU = 1.0`: while the driver is actually in charge the
+  integrator is BLED, not merely frozen — a frozen one still holds the
+  pre-override wind-up, and dumping that back in is the other half of the bite.
+  `soft_integrator` keeps it frozen through the first half of the return ramp.
+  `_OVERRIDE_MIN_SCALE` is kept as an alias of `lat_handback.PRESS_SCALE` (the
+  nav_webserver marker greps it).
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` — TWO
+  SLA defects. (1) `get_v_target_from_control` returned the CURRENT ZONE's
+  target. That value is SLA's entry in the speed governor's `min()`, so on an
+  approach to a FASTER zone the ramp walked the cluster up exactly as designed
+  and this one line threw the result away — `min(rising cluster, old zone
+  target)` is the old zone target, and the whole rise then arrived as a step at
+  the boundary. GENERALIZED: **a feature that publishes a ramp must publish the
+  RAMPED value to every consumer, not just the visible one.** The descent never
+  showed it because there the cluster is the more restrictive of the two, so
+  `min()` picked the ramp's value by accident. (2) NEW
+  `_apply_driver_set_speed_change` + `RAMP_DISPLACED_TH`: a cruise press DURING
+  a ramp was read as an ABSOLUTE statement about the current zone, but the ramp
+  is what put the cluster there — +30% in a 50 zone walked down to 40 became
+  -18% on one tap, and the next zone was entered ~20 mph low ("it forgets where
+  SLA was set"). A press while DISPLACED now moves the ratio by what the driver
+  added on top of the ramp; parked on the zone target the absolute derivation
+  still runs (that is what enforces the +/-50% RATIO_LIMIT rail). The press also
+  no longer ABORTS the descent — `_latch` shifts by the same delta and
+  `_d_min`/`_confirm_n`/`_engage_grace` survive.
+- `sunnypilot/selfdrive/car/cruise_ext.py` — `_ramp_hold_frames` 100 -> 60. It
+  has to expire at roughly the same time as SLA's own 0.5 s intent window; at
+  1 s, SLA's ramp ran for half a second while this side still refused to follow
+  it, so the cluster JUMPED when the hold expired. A test pins the relationship
+  (not the number).
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — NEW. The v3.3.8
+  binary veto asked "has SCC-V ACTIVATED", not "does the model see a corner".
+  GENERALIZED: **a confirmation gate must be defined on the EVIDENCE, not on
+  another controller's ACTION threshold.** The map reasons to 400 m and the
+  plan reaches ~240 m at 30 m/s, so the veto was hardest exactly where the map's
+  early gentle reduction was most useful. Corroboration is now CONTINUOUS and
+  SCALES the map's authority, bounded by `MAP_SOLO_MAX_CUT` (~15 mph); a
+  straight road still vetoes outright, so the bad-map-data protection is fully
+  intact. `speed_governor.gate_map_target` is a thin alias (old 2-arg call shape
+  still works and still vetoes).
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py` — THE SELECTION
+  MASK WAS ASKING THE MODEL'S OPINION OF ITS OWN PLAN. A point counted as a
+  corner only when `orientationRate.z * velocity.x` exceeded the comfort limit,
+  but `velocity.x` is what the model INTENDS to do there and the model plans to
+  slow for corners — so a real corner read as "nothing to do", while in `acc`
+  mode the car never follows that planned velocity. The corner SPEED never had
+  the bug (`v_i*sqrt(a/(rate*v_i))` is algebraically `sqrt(a/curvature)`); only
+  the mask did. Points now bind on corner speed < `max(v_ego, v_cruise)`. The
+  cruise term is LOAD-BEARING: with v_ego alone the mask empties the moment the
+  car has slowed TO the corner speed, releasing the cap and oscillating inside
+  the corner. Also publishes `corroboration` for scc_fusion. `_MAX_HORIZON_T`
+  7 -> 8 s.
+- `sunnypilot/selfdrive/controls/lib/long_v2/tuning.py` — `a_lat_target`
+  2.4 -> 2.1 m/s^2, and the dataclass is now EXACTLY the fields control code
+  reads (`a_lat_target`, `sccm_speed_trim`, `road_type_caps`).
+- DEAD CODE SWEEP (v3.4.9e). All of it verified unreferenced by AST scan before
+  deletion, not by eye:
+  * `sunnypilot/selfdrive/controls/lib/smart_cruise_control/` DELETED (6 files,
+    841 lines) — the legacy v1 SCC package, superseded by `long_v2/` in v3.2.6e
+    when the planner stopped importing it. Zero importers since. NOTE the UI
+    file `selfdrive/ui/sunnypilot/onroad/smart_cruise_control.py` is a DIFFERENT
+    file and is very much alive; do not confuse the two.
+  * `long_v2/jerk_filter.py` DELETED — its only consumer was `following_v2.py`,
+    deleted in v3.2.6e.
+  * `long_v2/tests/test_physics.py` DELETED — it re-defined `k*sqrt(fric*g)`
+    corner formulas LOCALLY and asserted on them, so it tested nothing in the
+    codebase and had been failing (17 cases) since v3.2.6e replaced those
+    formulas. WATCH FOR THIS SHAPE: a test that defines its own copy of the
+    maths cannot fail when the real maths changes, only when the copy drifts.
+  * seven dead `LongV2Tuning` fields, `fric.comfort_scale`,
+    `tuning.reset_tuning_cache`, `elements.LeadSpeedElement`.
+  * `_BadgeState` in the SCC UI had TWO `__init__` definitions. The second won
+    (as always), and the second is the CORRECT one — the first never set
+    `_from`, which `tick()` reads after any `set_target()`. Deleting the first
+    is a runtime no-op; "fixing" the duplication the other way would have
+    shipped an AttributeError into the onroad UI.
+  * ruff is now CLEAN across `selfdrive/ sunnypilot/ system/ common/` (was 13
+    errors). Keep it there — a zero baseline is the only one where a new warning
+    means anything.
+- `FUNNYPILOT_VERSION` -> 3.4.9; nav_webserver `EXPECTED_VERSION` -> "3.4.9",
+  two new `_FEEL_FILES` rows, eight new `_CODE_MARKERS` rows.
+- TESTS: **348 green, 0 failed** (was 197 green + 20 failed). NEW
+  `test_knot_filter.py` (16), `test_lat_handback.py` (16); SCC/SLA/cruise_ext
+  suites extended. Seven guards MUTATION-TESTED fail-then-restore: publishing
+  the zone target, absolute ratio re-derivation mid-ramp, masking on the
+  planned velocity, binary corroboration, unbounded solo cut, damping the raw
+  action (becoming an EMA), a fixed release time constant, the 1 s ramp hold.
+- ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE: (1) if the lateral still feels
+  under-damped, the honest next lever is `N_FULL_LAT_ACCEL` / `CARRY` in
+  knot_filter.py — NOT a filter on past outputs, ever. (2) if the handback still
+  bites, read the divergence schedule before retuning: a bite with a SMALL gap
+  means the ramp is not the mechanism and the next suspect is the friction relay
+  (see the v3.3.8 BumpDamper notes). (3) if SCC now slows for things it should
+  not, `a_lat_target` and `CORROB_FRAC` are the two knobs; a map-only slowdown
+  on a straight road would mean the corroboration veto has broken and is a BUG,
+  not a tuning issue.
+
 ### v3.4.8 Changes (based on funnypilot-3.4.7)
 
 Three defects in the v3.4.5 ramp, all from ONE reported drive into a HIGHER
@@ -423,8 +575,11 @@ pycapnp, setproctitle, zstandard, aiohttp, requests. Full command:
 `cd /tmp && PYTHONPATH=<repo> <py311> -m pytest --noconftest -q -p no:cacheprovider -o addopts="" <paths>`
 DEVICE-ONLY, always `--ignore` these (they need compiled extensions):
 `test_cruise_mode.py`, `test_custom_cruise.py`, `test_speed_limit_resolver.py`,
-`test_auto_lane_change.py`, `test_lane_turn_desire.py`. Known pre-existing
-failure to ignore: `long_v2/tests/test_physics.py`.
+`test_auto_lane_change.py`, `test_lane_turn_desire.py`.
+v3.4.9: THERE IS NO LONGER A "KNOWN FAILURE" LIST. `long_v2/tests/test_physics.py`
+was it, and it was deleted — it tested `k * sqrt(fric*g)` formulas that no
+control code has used since v3.2.6e. Off-device with the deps above the
+import-light suite is **348 green, 0 failed**. If something fails, it is real.
 Both boot guards were MUTATION-TESTED (bug reintroduced -> suites fail ->
 restored), per the "make the test fail with the bug present" rule.
 
