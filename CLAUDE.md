@@ -119,6 +119,38 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.2 Changes (based on funnypilot-3.5.1)
+
+Minimap only; the rest of 3.5.1 is byte-identical.
+
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — NEW pure
+  `expected_speed_at(ref, zone_limit, sla_ratio, sla_active)`. THE TINT IS NO
+  LONGER MEASURED AGAINST THE POSTED LIMIT: a 35 mph curve in a 55 zone read
+  red even with a 45 set speed, i.e. it shouted about a drop that was never
+  going to happen. Now `expected = min(set speed, zone limit there x (1+SLA
+  offset) if SLA on)`, so (a) set speed 45 into a 35 curve is 10 mph and reads
+  amber, and (b) where SLA will have slowed us by the time we arrive, the
+  comparison already happens at the reduced speed. `min()` NOT `max()` — a
+  carried +20% offset must never raise the reference above a chosen set speed
+  (mutation-tested). Route points now stored RAW (v + zone limit); the delta is
+  computed per frame because the reference is live while the poll is 1 Hz.
+- Same file — PLATE REMOVED. Contrast is applied AT the ribbon (`HALO_PX`,
+  dark stroke under the colour) rather than as a box behind it. TWO PASSES OVER
+  THE WHOLE RIBBON, not two strokes per segment: per-segment ordering lets the
+  next halo overpaint the previous colour at each joint and it reads as a
+  dashed line. NEW `_draw_ego` — haloed disc at the projection origin plus a
+  heading wedge; the old bare triangle did not read as "you are here".
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — minimap is a FULL-HEIGHT
+  strip, `MAP_W` 240, `MAP_H` gone (uses `rect.height`). Still 24 px clear of
+  the dev column — verify any change here with arithmetic, never by eye.
+  NEW `_update_map_reference()` supplies set speed in **m/s** (`vCruiseCluster
+  * KPH_TO_MS`); `self.set_speed` is in DISPLAY units and mixing it with mapd's
+  m/s is the unit error that would look plausible on screen.
+- `RANGE_M` 300 -> 400 to match `scc_map_v2`'s lookahead exactly; `BEHIND_M`
+  60 -> 90 so the travelled road has room to fade.
+- TESTS: 521 green. NEW `TestExpectedSpeedAt` (8), both reported cases pinned
+  verbatim; three guards mutation-tested.
+
 ### v3.5.1 Changes (based on funnypilot-3.5.0e) — STABLE
 
 Onroad refinements after the first drive, plus one real defect.

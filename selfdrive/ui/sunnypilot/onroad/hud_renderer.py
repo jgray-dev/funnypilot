@@ -68,8 +68,10 @@ X_GUTTER = 46
 Y_TOP = 40
 SET_X = X_GUTTER
 SIGN_X = X_GUTTER + stations.SET_W + 26
-MAP_W = 190
-MAP_H = 400
+# v3.5.2: the minimap is a FULL-HEIGHT STRIP down the right side. It has no
+# container of its own any more (see hud/route_map.py), so height costs nothing
+# but visibility — and at 400 m of range it now shows exactly SCC-M's horizon.
+MAP_W = 240
 # The minimap sits to the LEFT of the dev-UI right column's slot, not above it.
 # That slot is reserved whether or not the dev UI is on, so toggling the dev UI
 # never moves the map. Keyed off the dev-UI constants rather than hard-coded so
@@ -133,6 +135,10 @@ class HudRendererSP(HudRenderer):
     self.speed_conv: float = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
 
     self._accel: float = 0.0
+    # v3.5.2 minimap colour reference — see hud/route_map.expected_speed_at
+    self._map_ref_mps: float = 0.0
+    self._sla_ratio: float = 0.0
+    self._sla_on: bool = False
     self._glow_phase: float = 0.0
     self._long_state: str = 'gray'
     self._pills: list = []
@@ -180,6 +186,27 @@ class HudRendererSP(HudRenderer):
                                      read_brake_light())
 
     self._pills = self._build_pills(gas_gating, sla_gate)
+    self._update_map_reference()
+
+  def _update_map_reference(self) -> None:
+    """What the minimap's colours are measured against. v3.5.2.
+
+    THE SET SPEED, not the posted limit — and the current speed when cruise is
+    not set, because then nothing is holding us to anything else. Kept in m/s:
+    `self.set_speed` has already been through the base renderer's display-unit
+    conversion, and mixing that with mapd's m/s velocities is exactly the kind
+    of unit error that looks plausible on screen.
+    """
+    try:
+      cs = ui_state.sm['carState']
+      self._map_ref_mps = (float(cs.vCruiseCluster) * CV.KPH_TO_MS
+                           if self.is_cruise_set else float(cs.vEgo))
+      slr = self.speed_limit_renderer
+      states = _sla_states()
+      self._sla_on = slr.speed_limit_assist_state in (states.active, states.adapting)
+      self._sla_ratio = float(slr.sla_dynamic_offset)
+    except Exception:
+      self._map_ref_mps, self._sla_ratio, self._sla_on = 0.0, 0.0, False
 
   def _build_pills(self, scc_gate: bool, sla_gate: bool) -> list:
     """The status strip. A source that is not saying anything is simply absent —
@@ -324,7 +351,8 @@ class HudRendererSP(HudRenderer):
     except Exception:
       return
     x = rect.x + rect.width - MAP_W - MAP_RIGHT_INSET
-    self._route_map.render(rl.Rectangle(x, rect.y + Y_TOP, MAP_W, MAP_H))
+    self._route_map.render(rl.Rectangle(x, rect.y, MAP_W, rect.height),
+                           self._map_ref_mps, self._sla_ratio, self._sla_on)
 
   def _draw_vitals(self, rect: rl.Rectangle) -> None:
     if ui_state.rocket_fuel:

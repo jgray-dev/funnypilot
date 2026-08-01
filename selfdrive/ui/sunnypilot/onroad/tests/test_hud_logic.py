@@ -91,6 +91,67 @@ class TestEdgeFade:
     assert edge_fade(1000, 700, r) == 0.0
 
 
+MPH = 1.0 / 2.23694   # mph -> m/s
+expected_speed_at = _rm.expected_speed_at
+
+
+class TestExpectedSpeedAt:
+  """v3.5.2. The minimap's tint used to be measured against the POSTED LIMIT,
+  which answers the wrong question: a 35 mph curve in a 55 zone glowed red even
+  when your set speed was 45 and you were only ever going to drop 10.
+
+  It is now measured against the speed we expect to be doing AT THAT POINT.
+  """
+
+  def test_the_reported_case_set_speed_below_the_limit(self):
+    """35 curve, 55 zone, set speed 45 -> a 10 mph drop, not 20."""
+    ref = 45 * MPH
+    exp = expected_speed_at(ref, 55 * MPH, 0.0, sla_active=False)
+    delta_mph = (exp - 35 * MPH) * 2.23694
+    assert delta_mph == pytest.approx(10.0, abs=0.1)
+    assert ramp_color(delta_mph) != ramp_color(20.0), "must not read like the old 20 mph delta"
+
+  def test_sla_lowers_the_reference_at_the_corner(self):
+    """The corner sits in a slower zone SLA will have walked us down into, so
+    the comparison happens at the reduced speed — the drop you will actually
+    feel, not the one measured from here."""
+    ref = 55 * MPH
+    free = expected_speed_at(ref, 35 * MPH, 0.0, sla_active=False)
+    with_sla = expected_speed_at(ref, 35 * MPH, 0.0, sla_active=True)
+    assert free == pytest.approx(ref)
+    assert with_sla == pytest.approx(35 * MPH)
+    assert with_sla < free
+
+  def test_sla_offset_ratio_is_honoured(self):
+    """A carried +20% means SLA settles 20% over the sign, not on it."""
+    out = expected_speed_at(60 * MPH, 40 * MPH, 0.20, sla_active=True)
+    assert out == pytest.approx(48 * MPH, rel=1e-6)
+
+  def test_it_only_ever_lowers_the_reference(self):
+    """MUTATION: max() instead of min(). A driver's +50% offset must never be
+    able to raise the expected speed above a set speed they chose."""
+    ref = 45 * MPH
+    out = expected_speed_at(ref, 55 * MPH, 0.50, sla_active=True)
+    assert out == pytest.approx(ref)
+
+  def test_sla_off_ignores_the_zone_entirely(self):
+    """Nothing is going to slow us for a sign we are not obeying."""
+    assert expected_speed_at(55 * MPH, 25 * MPH, 0.0, False) == pytest.approx(55 * MPH)
+
+  def test_no_zone_data_falls_back_to_the_reference(self):
+    for lim in (0.0, -1.0, float('nan'), float('inf')):
+      assert expected_speed_at(50 * MPH, lim, 0.0, True) == pytest.approx(50 * MPH)
+
+  def test_a_garbage_reference_yields_nothing_rather_than_a_wild_tint(self):
+    for ref in (0.0, -5.0, float('nan'), float('inf')):
+      assert expected_speed_at(ref, 30 * MPH, 0.0, True) == 0.0
+
+  def test_a_nonsense_ratio_cannot_invert_the_speed(self):
+    """A ratio below -100% would make the expected speed negative, which would
+    paint the whole route red."""
+    assert expected_speed_at(50 * MPH, 30 * MPH, -5.0, True) > 0.0
+
+
 class TestRampColor:
   """The tint answers 'how much slower than the posted limit does the map want
   us here', not 'how fast'. A 35 mph curve in a 35 zone must look like nothing."""

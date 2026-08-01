@@ -1,3 +1,70 @@
+FunnyPilot v3.5.2 (2026-08-01)
+========================
+Minimap only. Everything else in v3.5.1 is byte-identical.
+
+1. THE TINT NOW MEANS SOMETHING
+------------------------------------------------------------------------
+It used to be measured against the POSTED LIMIT:
+
+    delta = limit_there - map_target_velocity_there
+
+which answers the wrong question. A 35 mph curve in a 55 zone glowed red even
+when your set speed was 45 -- the map was shouting about a 20 mph drop you were
+never going to take.
+
+It is now measured against THE SPEED WE EXPECT TO BE DOING AT THAT POINT:
+
+    expected = min(set speed, zone limit there x (1 + SLA offset) if SLA on)
+    delta    = expected - map_target_velocity_there
+
+* Set speed 45 into a 35 curve is a 10 mph drop and reads amber, not red.
+* If the bend sits in a slower zone that SLA will have walked you down into by
+  the time you arrive, the comparison already happens AT THE REDUCED SPEED --
+  so the colour shows the drop you will actually feel, not the one from here.
+* `min()`, never `max()`: SLA can only be one more thing lowering the ceiling,
+  and a driver's carried +20% offset must not raise the expected speed above a
+  set speed they deliberately chose. Mutation-tested, along with the zone term
+  and the ratio floor that stops a nonsense offset inverting the speed.
+* The reference is the SET SPEED when cruise is set, otherwise the current
+  speed -- nothing is holding you to anything else when cruise is off. Kept in
+  m/s throughout: `self.set_speed` has already been through the base renderer's
+  display-unit conversion, and mixing that with mapd's m/s velocities is
+  exactly the kind of unit error that looks plausible on screen.
+* Route points are now stored RAW (velocity + zone limit) rather than as a
+  baked-in delta, because the comparison depends on live values that change
+  every frame while the poll is 1 Hz.
+
+2. NO CONTAINER, FULL HEIGHT, AND YOU ARE HERE
+------------------------------------------------------------------------
+* The plate is gone. What makes a thin ribbon legible is contrast AT the
+  ribbon, not a rectangle behind it, so each segment is stroked twice: a wider
+  dark transparent pass, then the colour. That backdrop follows the road
+  instead of framing it. Drawn as TWO PASSES OVER THE WHOLE RIBBON, not two
+  strokes per segment -- per-segment ordering lets the next halo paint over the
+  previous colour at every joint, which reads as a dashed line.
+* The strip is now full screen height down the right side, 240 px wide, still
+  24 px clear of the dev-UI column. Range raised 300 -> 400 m, matching
+  `scc_map_v2`'s own lookahead exactly, so the map shows precisely the horizon
+  SCC-M reasons over. Checked with arithmetic, not by eye (the v3.5.0 lesson):
+  ego sits 184 px off the bottom at ~2.0 px/m, giving 92 m of travelled road
+  behind and 60 m of lateral half-width.
+* NEW ego marker. The old bare white triangle did not read as the car's
+  position because nothing distinguished it from the route itself. It is now a
+  dark-haloed disc AT the exact projection origin with a heading wedge above
+  it: the disc says where, the wedge says which way, the halo separates both
+  from the ribbon underneath.
+* "ADV" and "NO FIX" carry their own shadows now -- with the plate gone there
+  is nothing behind them but road.
+
+TESTS
+------------------------------------------------------------------------
+* 521 green, 0 failed. NEW `TestExpectedSpeedAt` (8) including both reported
+  cases verbatim.
+* Three guards MUTATION-TESTED: min()->max() (the SLA offset raising the
+  reference above set speed), the zone term dropped entirely, and the ratio
+  floor removed so a bad offset inverts the expected speed.
+* ON-DEVICE VERIFICATION REQUIRED: none of the drawing runs off-device.
+
 FunnyPilot v3.5.1 (2026-08-01)
 ========================
 First stable cut of the v3.5 UI, after a drive. Onroad refinements from that

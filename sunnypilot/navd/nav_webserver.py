@@ -44,7 +44,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.1"
+EXPECTED_VERSION = "3.5.2"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -132,6 +132,9 @@ _CODE_MARKERS = [
   ("def edge_fade", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap edge fade"),
   ("POSE_TAU", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap pose smoothing"),
   ("INFORMATIONAL BANNERS ARE SUPPRESSED", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "info banner filter"),
+  # v3.5.2
+  ("def expected_speed_at", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tint vs expected speed"),
+  ("def _draw_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ego marker"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

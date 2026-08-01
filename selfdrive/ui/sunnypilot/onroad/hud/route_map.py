@@ -9,15 +9,24 @@ offline OSM database ourselves on the UI thread, and it would have shown the
 driver geometry the controller cannot see — the opposite of a debug tool. So
 the map is one road, which is also why it stays minimal.
 
-THE TINT is the point. Each segment is coloured by how far below the POSTED
-LIMIT the map wants you to be there:
+THE TINT is the point, and v3.5.2 changed what it is measured against.
 
-    delta = limit_in_force_there - map_target_velocity_there
+It used to be the POSTED LIMIT: `delta = limit_there - map_target_there`. That
+answers "how much slower than the sign", which is not the question. A 35 mph
+curve in a 55 zone glowed red even when your set speed was 45 — the map was
+shouting about a 20 mph drop you were never going to take.
 
-so a 35 mph curve in a 35 zone stays neutral and a 35 mph curve in a 55 zone
-glows. Neutral -> amber -> orange -> red across DELTA_LO..DELTA_HI mph. That
-is the question you actually ask about SCC-M — not "how fast", but "how much
-slower than it should be here".
+It is now measured against THE SPEED WE EXPECT TO BE DOING AT THAT POINT:
+
+    expected = min(set speed, zone limit there x (1 + SLA offset) if SLA on)
+    delta    = expected - map_target_velocity_there
+
+Two things fall out of that, and both were asked for. Set speed 45 into a 35
+curve is a 10 mph drop and reads amber, not red. And if SLA is going to have
+taken 8 mph off you by the time you reach the bend — because the bend is in a
+slower zone — the comparison already happens at the reduced speed, so the
+colour shows the drop you will ACTUALLY feel, not the one from here.
+See `expected_speed_at()`, which is pure and unit-tested.
 
 THE MARKER is `argmin(v_allowed)`: the single point SCC-M is braking for. It
 is NOT recomputed here. plannerd publishes it over /dev/shm/fp_scc (see
@@ -44,11 +53,25 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
 
 MPS_TO_MPH = 2.23694
 
-RANGE_M = 300.0        # how far up the box the route runs
-BEHIND_M = 60.0        # keep this much of the road already driven, to fade out
+# v3.5.2: 400 m, matching scc_map_v2's own lookahead exactly. The strip is now
+# full screen height, so the extra range costs nothing and the map shows
+# precisely the horizon SCC-M reasons over — no more, no less.
+RANGE_M = 400.0        # how far up the strip the route runs
+BEHIND_M = 90.0        # keep this much of the road already driven, to fade out
 POLL_S = 1.0           # source data is 1 Hz; parsing faster buys nothing
 MAX_POINTS = 400       # hard bound on how much JSON we will walk
-RING_M = (100.0, 200.0)
+RING_M = (100.0, 200.0, 300.0)
+
+# v3.5.2 — NO CONTAINER. The plate (62% scrim + hairline border) was a box on
+# the road view; what makes a thin ribbon legible is contrast AT the ribbon, not
+# a rectangle behind it. Each segment is stroked twice: a wider, dark, partly
+# transparent pass, then the colour on top. That is the "transparent dark
+# backdrop around the road" — it follows the road instead of framing it, and it
+# costs one extra draw_line_ex per segment.
+HALO_PX = 7.0
+HALO_ALPHA = 0.55
+
+EGO_FROM_BOTTOM = 0.82   # where "you are here" sits, as a fraction of height
 
 # v3.5.1 — THE JITTER, and why it is fixed here rather than by polling faster.
 # The source (mapd's LastGPSPosition) updates at 1 Hz, so the ego pose the route
@@ -89,6 +112,28 @@ def ramp_color(delta_mph: float) -> tuple[int, int, int]:
       k = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
       return tuple(int(c0[j] + (c1[j] - c0[j]) * k) for j in range(3))
   return _RAMP[-1][1]
+
+
+def expected_speed_at(ref_mps: float, zone_limit_mps: float,
+                      sla_ratio: float, sla_active: bool) -> float:
+  """The speed we expect to be doing where a route point is. v3.5.2.
+
+  `ref_mps` is what we hold now — the set speed when cruise is set, otherwise
+  the current speed. If SLA is active it will have walked us onto the limit of
+  whatever zone is in force AT THAT POINT (plus the driver's carried offset
+  ratio) by the time we get there, so that becomes the ceiling.
+
+  `min()`, never `max()`: SLA can only be one more thing lowering the ceiling,
+  and a driver's +20% offset must not be able to raise the expected speed above
+  a set speed they deliberately chose.
+  """
+  ref = float(ref_mps)
+  if not T.finite(ref) or ref <= 0.0:
+    return 0.0
+  if sla_active and T.finite(zone_limit_mps) and zone_limit_mps > 0.0:
+    ratio = float(sla_ratio) if T.finite(sla_ratio) else 0.0
+    ref = min(ref, zone_limit_mps * (1.0 + max(-0.9, ratio)))
+  return ref
 
 
 def to_ego_frame(lat: float, lon: float, lat0: float, lon0: float, bearing_deg: float):
@@ -226,10 +271,11 @@ class RouteMap:
         v = float(p["velocity"])
       except Exception:
         continue
-      # which zone is in force at this point
+      # which zone is in force at this point. Stored RAW, not folded into a
+      # delta: since v3.5.2 the comparison depends on the live set speed and
+      # SLA offset, which change every frame while this poll is 1 Hz.
       lim = nxt_limit if (nxt_fwd is not None and nxt_limit > 0 and fwd > nxt_fwd) else limit_now
-      delta = (lim - v) * MPS_TO_MPH if lim > 0 else 0.0
-      pts.append((plat, plon, delta))
+      pts.append((plat, plon, v, lim))
     self._raw = pts
 
     # the controller's own choice, not ours
@@ -289,25 +335,24 @@ class RouteMap:
       east = (plon - lon0) * _M_PER_DEG * clat
       return north * cb + east * sb, -north * sb + east * cb
 
-    pts = [(*to_ego(plat, plon), d) for plat, plon, d in self._raw]
+    pts = [(*to_ego(plat, plon), v, lim) for plat, plon, v, lim in self._raw]
     gov = None
     if self._gov_ll is not None:
       gf, gr = to_ego(self._gov_ll[0], self._gov_ll[1])
       gov = (gf, gr, self._gov_ll[2])
     return pts, gov
 
-  def render(self, rect: rl.Rectangle) -> None:
+  def render(self, rect: rl.Rectangle, ref_mps: float = 0.0,
+             sla_ratio: float = 0.0, sla_active: bool = False) -> None:
     now = time.monotonic()
     self._poll(now)
     self._ease_pose(now)
     pts, gov = self._project()
 
-    T.plate(rect, 0.10)
-
-    pad_b = rect.height * 0.11
+    # v3.5.2: NO PLATE. See HALO_PX — contrast is applied at the ribbon.
     cx = rect.x + rect.width / 2
-    y0 = rect.y + rect.height - pad_b
-    scale = (rect.height - pad_b - rect.height * 0.06) / RANGE_M
+    y0 = rect.y + rect.height * EGO_FROM_BOTTOM
+    scale = (rect.height * EGO_FROM_BOTTOM - rect.height * 0.04) / RANGE_M
 
     def px(fwd: float, right: float):
       return cx + right * scale, y0 - fwd * scale
@@ -317,26 +362,36 @@ class RouteMap:
     # disables the test — it does not restore an outer region. Nesting one here
     # would silently un-clip every widget drawn after this on the frame.
     # v3.5.1: instead of dropping out-of-box segments (which made the road
-    # already driven blink out of existence at the bottom edge) the alpha eases
-    # to zero over the last FADE_PX, so the ribbon leaves the box by fading.
+    # already driven blink out of existence at the edge) the alpha eases to zero
+    # over the last FADE_PX, so the ribbon leaves the strip by fading.
     y0b = rect.y + 2
 
     for r in RING_M:
       rr = r * scale
       if y0 - rr > y0b:
-        rl.draw_ring(rl.Vector2(cx, y0), rr - 1.0, rr, 200, 340, 28, rl.Color(255, 255, 255, 22))
+        rl.draw_ring(rl.Vector2(cx, y0), rr - 1.0, rr, 200, 340, 28, rl.Color(255, 255, 255, 20))
 
-    for i in range(1, len(pts)):
-      f0, r0, _ = pts[i - 1]
-      f1, r1, d1 = pts[i]
-      a, b = px(f0, r0), px(f1, r1)
-      edge = min(edge_fade(a[0], a[1], rect), edge_fade(b[0], b[1], rect))
-      if edge <= 0.0:
-        continue
-      c = ramp_color(d1)
-      depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
-      w = max(3.0, rect.width * 0.085 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
-      rl.draw_line_ex(a, b, w, rl.Color(c[0], c[1], c[2], int(depth * edge * 255)))
+    # TWO PASSES over the whole ribbon, not two strokes per segment: drawing
+    # halo-then-colour per segment would let the next segment's halo paint over
+    # the previous segment's colour at every joint, which reads as a dashed
+    # line. All the dark first, then all the colour.
+    for _pass in (0, 1):
+      for i in range(1, len(pts)):
+        f0, r0, _v0, _l0 = pts[i - 1]
+        f1, r1, v1, lim1 = pts[i]
+        a, b = px(f0, r0), px(f1, r1)
+        edge = min(edge_fade(a[0], a[1], rect), edge_fade(b[0], b[1], rect))
+        if edge <= 0.0:
+          continue
+        depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
+        w = max(3.0, rect.width * 0.075 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
+        if _pass == 0:
+          rl.draw_line_ex(a, b, w + HALO_PX * 2, rl.Color(0, 0, 0, int(HALO_ALPHA * edge * 255)))
+        else:
+          expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
+          delta = (expected - v1) * MPS_TO_MPH if expected > 0 else 0.0
+          c = ramp_color(delta)
+          rl.draw_line_ex(a, b, w, rl.Color(c[0], c[1], c[2], int(depth * edge * 255)))
 
     if gov is not None:
       gf, gr, auth = gov
@@ -352,19 +407,39 @@ class RouteMap:
             rl.draw_ring(rl.Vector2(g[0], g[1]), rad - 3.0, rad, a0 + 12, a0 + 78, 10,
                          rl.Color(255, 255, 255, 210))
 
+    # Text now carries its own shadow: with the plate gone there is nothing
+    # behind it but the road.
     if self._advisory:
-      T.text_at(T.font_bold(), "ADV", rect.x + 12, rect.y + 10, T.SZ_MICRO,
-                rl.Color(0xFF, 0xB4, 0x54, 220), 1.6)
+      T.text_shadowed(T.font_bold(), "ADV", rect.x + 12, rect.y + 10, T.SZ_MICRO,
+                      rl.Color(0xFF, 0xB4, 0x54, 230), 1.6)
 
     if not self._have_fix:
-      T.text_centered(T.font_med(), "NO FIX", cx, rect.y + rect.height / 2 - 14,
-                      T.SZ_MICRO, T.FAINT, 2.0)
+      T.text_centered_shadowed(T.font_med(), "NO FIX", cx, rect.y + rect.height / 2 - 14,
+                               T.SZ_MICRO, T.FAINT, 2.0)
 
-    # ego marker. draw_triangle_fan takes plain (x, y) tuples in this repo (see
-    # onroad/model_renderer.py's lead chevrons) — matching the proven call shape
-    # rather than guessing at pyray's Vector2 coercion. A fan also sidesteps
-    # draw_triangle's winding-order sensitivity, which silently draws nothing.
-    t = rect.width * 0.05
-    rl.draw_triangle_fan([(cx, y0 - t * 1.15),
-                          (cx + t * 0.72, y0 + t * 0.62),
-                          (cx - t * 0.72, y0 + t * 0.62)], 3, T.WHITE)
+    self._draw_ego(cx, y0, rect.width)
+
+  @staticmethod
+  def _draw_ego(cx: float, y0: float, width: float) -> None:
+    """"YOU ARE HERE". v3.5.2 — the old bare white triangle did not read as the
+    car's position, because nothing distinguished it from the route itself. It
+    is now a dark-haloed disc AT the exact ego origin with a heading wedge above
+    it: the disc says where, the wedge says which way, and the halo separates
+    both from whatever the ribbon is doing underneath.
+
+    draw_triangle_fan takes plain (x, y) tuples in this repo (see
+    onroad/model_renderer.py's lead chevrons) — the proven call shape, and a fan
+    sidesteps draw_triangle's winding-order sensitivity, which silently draws
+    nothing when wrong.
+    """
+    r = max(7.0, width * 0.055)
+    t = r * 1.5
+    # heading wedge, dark pass then white
+    rl.draw_triangle_fan([(cx, y0 - t * 1.55), (cx + t * 0.80, y0 - t * 0.10),
+                          (cx - t * 0.80, y0 - t * 0.10)], 3, rl.Color(0, 0, 0, 165))
+    rl.draw_triangle_fan([(cx, y0 - t * 1.30), (cx + t * 0.62, y0 - t * 0.18),
+                          (cx - t * 0.62, y0 - t * 0.18)], 3, T.WHITE)
+    # the disc marks the origin the whole projection is built on
+    rl.draw_circle(int(cx), int(y0), r + 4.0, rl.Color(0, 0, 0, 175))
+    rl.draw_circle(int(cx), int(y0), r, T.WHITE)
+    rl.draw_circle(int(cx), int(y0), r * 0.42, rl.Color(0x0B, 0x0F, 0x14, 255))
