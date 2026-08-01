@@ -4,6 +4,38 @@ First stable cut of the v3.5 UI, after a drive. Onroad refinements from that
 drive plus ONE REAL DEFECT: a spurious "TAKE CONTROL IMMEDIATELY" for a car
 that never put a wheel wrong.
 
+0. HOTFIX: THE FIRST PUSH OF THIS BRANCH DID NOT BOOT
+------------------------------------------------------------------------
+    Manager failed to start
+    TypeError: unsupported operand type(s) for |: 'function' and 'NoneType'
+    torque_bar.py:151  warm_color: rl.Color | None = None
+
+pyray's `rl.Color` is a cffi FACTORY FUNCTION, not a Python type, so the union
+evaluates `function.__or__(None)` when the `def` runs -- at import -- and
+raises. That kills the UI module, which kills manager.
+
+THE RULE THIS CORRECTS. v3.4.2 recorded "never put a capnp type in a `|`
+union". That wording was too narrow and is why this happened again: capnp was
+just the first library to bite us. The rule is **no non-type may be a direct
+operand of `|` in an evaluated annotation**, from any library.
+
+pyray is the worst case because THE NAME TELLS YOU NOTHING: `rl.Rectangle` is
+a real cdata class and unions fine (upstream `system/ui/widgets/__init__.py`
+has shipped it forever), `rl.Color` is a function and does not.
+
+* fix: the two parameters are unannotated, with a comment saying why -- the
+  same treatment cruise_ext.py got after v3.4.2.
+* `sunnypilot/tests/test_capnp_annotations.py` now scans pyray too. Banned by
+  default; `PYRAY_TYPE_ALLOWLIST = {Rectangle}` is opt-in and may only be
+  extended after verifying a name ON A DEVICE. Mutation-tested by pasting the
+  exact failing line back in.
+* WHY NOTHING CAUGHT IT, which is the part worth remembering: the local AST
+  guard in `test_hud_imports.py` only scanned the `hud/` package, and
+  torque_bar.py lives under `selfdrive/ui/mici/`. And no RUNTIME test could
+  ever have caught it -- the UI suite stubs pyray, and a MagicMock supports `|`
+  perfectly happily. Off-device, a static scan is the only instrument that
+  works.
+
 1. THE COMMS ALERT -- diagnosed, and it was ours
 ------------------------------------------------------------------------
 Reported: one full-screen orange "Communication Issue between Processes" with

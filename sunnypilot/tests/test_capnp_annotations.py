@@ -48,6 +48,29 @@ import pytest
 # capnp schema modules whose attributes are _StructModule objects, not types
 CAPNP_ROOTS = {'car', 'custom', 'log', 'legacy'}
 
+# FunnyPilot v3.5.1 — WIDENED AFTER A SECOND BOOT FAILURE.
+#
+# v3.4.2's rule was "never put a capnp type in a `|` union". Too narrow: the
+# device failed to boot again on
+#     warm_color: rl.Color | None = None
+#     TypeError: unsupported operand type(s) for |: 'function' and 'NoneType'
+# `rl.Color` is a cffi FACTORY FUNCTION, not a type. THE REAL RULE IS: NO
+# NON-TYPE MAY BE A DIRECT OPERAND OF `|` IN AN EVALUATED ANNOTATION, whatever
+# library it came from.
+#
+# pyray is the nastiest case because NOTHING IN THE NAME TELLS YOU WHICH IT IS:
+# `rl.Rectangle` is a real cdata class and unions fine, `rl.Color` is a factory
+# function and raises. So pyray names are banned by DEFAULT and allowed only
+# once someone has verified the specific name on a device.
+PYRAY_ROOTS = {'rl', 'pyray'}
+
+# Empirically verified to be real types: these ship in upstream code that boots
+# (system/ui/widgets/__init__.py). ONLY ADD A NAME HERE AFTER CONFIRMING ON THE
+# DEVICE that `<name> | None` does not raise — a wrong entry here is a car that
+# does not start, and the test suite cannot tell you because pyray is stubbed
+# off-device.
+PYRAY_TYPE_ALLOWLIST = {'Rectangle'}
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 # vendored / generated / not-ours trees
@@ -80,7 +103,12 @@ def _capnp_union_names(annotation: ast.AST | None) -> list[str]:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
       for side in (node.left, node.right):
         # a nested BinOp (`A | B | None`) is reached by ast.walk in its own right
-        if isinstance(side, ast.Attribute) and _root_name(side) in CAPNP_ROOTS:
+        if not isinstance(side, ast.Attribute):
+          continue
+        root = _root_name(side)
+        if root in CAPNP_ROOTS:
+          found.append(ast.unparse(side))
+        elif root in PYRAY_ROOTS and side.attr not in PYRAY_TYPE_ALLOWLIST:
           found.append(ast.unparse(side))
   return found
 
@@ -140,9 +168,11 @@ def test_no_capnp_unions_in_evaluated_annotations():
   so it bypasses every runtime test and can brick the boot. See module docstring."""
   offenders = sorted(o for p in _python_files() for o in _offenders_in(p))
   assert not offenders, (
-    "capnp module objects do not support `|`; these annotations raise TypeError at " +
-    "import time and will prevent the device from booting:\n  " + "\n  ".join(offenders)
-    + "\n\nFix: drop the union (`CS=None` or plain `CS: car.CarState`)."
+    "these operands are not Python types, so `|` raises TypeError at IMPORT time " +
+    "and the device will not boot:\n  " + "\n  ".join(offenders)
+    + "\n\nFix: drop the union (`CS=None`, or a plain `CS: car.CarState`)."
+    + "\nIf a pyray name is genuinely a type, verify `<name> | None` ON THE DEVICE"
+    + " and add it to PYRAY_TYPE_ALLOWLIST."
   )
 
 
@@ -174,6 +204,16 @@ def test_scan_actually_covers_the_repo():
   ('def f(x: dict[str, car.CarState] | None = None): pass', False),
   # ...but a bare capnp operand alongside a subscripted one is still fatal
   ('def f(x: list[int] | car.CarState | None = None): pass', True),
+  # v3.5.1 — pyray. rl.Color is a cffi FACTORY FUNCTION and this exact line
+  # stopped the car booting; rl.Rectangle is a real cdata class and is fine.
+  # Nothing in the two names distinguishes them, which is why the default is
+  # "banned" and the allow-list is opt-in-after-verification.
+  ('def f(warm_color: rl.Color | None = None): pass', True),
+  ('def f(c: pyray.Color | None = None): pass', True),
+  ('def f() -> rl.Color | None: pass', True),
+  ('def f(rect: rl.Rectangle | None = None): pass', False),
+  ('def f(c: rl.Color): pass', False),                      # no union, no evaluation of `|`
+  ('class C:\n  def __init__(self):\n    self.c: rl.Color | None = None', False),
 ])
 def test_detector_semantics(source, expected, tmp_path):
   """The detector must match Python's real evaluation rules — including NOT

@@ -118,6 +118,19 @@ two beat against each other and coincided occasionally.
   FILTER IS ON `alertStatus`, NOT on a list of event names: `normal` is
   openpilot's own word for "nothing is wrong", so new upstream events classify
   themselves and nobody has to maintain a list. `AlertSize.full` always shows.
+- `selfdrive/ui/mici/onroad/torque_bar.py` — HOTFIX, the branch did NOT boot as
+  first pushed. `warm_color: rl.Color | None = None` raised at import and took
+  manager with it. Params are now DELIBERATELY UNANNOTATED with a comment
+  saying why (same treatment as cruise_ext.py after v3.4.2). See the amended
+  union rule in the v3.4.2 section — it is the most important line in this file.
+- `sunnypilot/tests/test_capnp_annotations.py` — the repo-wide AST guard now
+  covers pyray as well as capnp: `PYRAY_ROOTS` banned by default,
+  `PYRAY_TYPE_ALLOWLIST = {Rectangle}` opt-in. Mutation-tested by pasting the
+  exact line from the failure back in. WHY THE EXISTING GUARDS MISSED IT: the
+  local copy in `test_hud_imports.py` only scanned `hud/` (torque_bar.py lives
+  under `selfdrive/ui/mici/`) and only knew about capnp roots; and no runtime
+  test can catch it because the UI suite STUBS pyray and a MagicMock supports
+  `|` perfectly happily. A static scan is the only thing that works here.
 - `FUNNYPILOT_VERSION` -> 3.5.1; EXPECTED_VERSION -> "3.5.1"; four new
   `_CODE_MARKERS` rows.
 - TESTS: **506 green.** NEW `bearing_lerp`/`edge_fade` cases and the
@@ -857,7 +870,21 @@ THE REAL ROOT CAUSE of the unbootable car, after 3.4.1 guessed wrong:
     def update_speed_limit_assist_v_cruise_non_pcm(self, CS: car.CarState | None = None)
     TypeError: unsupported operand type(s) for |: '_StructModule' and 'NoneType'
 
-RULE: **never put a capnp type in a `|` union.** `car.CarState`,
+RULE (AMENDED IN v3.5.1 — THE ORIGINAL WORDING WAS TOO NARROW AND THE DEVICE
+FAILED TO BOOT A SECOND TIME BECAUSE OF IT): **nothing that is not a real
+Python type may be a direct operand of `|` in an evaluated annotation.** Not
+"no capnp" — capnp was merely the first library it bit us with. v3.5.1 hit
+`warm_color: rl.Color | None` in torque_bar.py: pyray's `rl.Color` is a cffi
+FACTORY FUNCTION, so the union raises `TypeError: unsupported operand type(s)
+for |: 'function' and 'NoneType'` when the `def` executes. NOTHING IN THE NAME
+TELLS YOU WHICH IT IS — `rl.Rectangle` is a real cdata class and unions fine,
+which is why `test_capnp_annotations.py` now bans pyray names by default with
+an opt-in `PYRAY_TYPE_ALLOWLIST` that may only be extended after verifying the
+specific name ON A DEVICE. Note the off-device suite CANNOT catch this at
+runtime: the UI tests stub pyray, and a MagicMock happily supports `|`.
+
+The original v3.4.2 wording follows, still true as a special case:
+**never put a capnp type in a `|` union.** `car.CarState`,
 `custom.X`, `log.X` are capnp _StructModule objects, not Python types, and
 `|` on them raises. Function PARAMETER annotations are evaluated when the
 `def` executes (i.e. at import), so this kills the module at import time —
