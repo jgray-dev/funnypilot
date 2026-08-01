@@ -44,7 +44,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.0e"
+EXPECTED_VERSION = "3.5.1"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -127,6 +127,11 @@ _CODE_MARKERS = [
   ("class CornerObserver", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py", "corner-dip observer"),
   ("def fuse_learned_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "learned cap authority"),
   ("scc_learn", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "SCC-Learn wired into plannerd"),
+  # v3.5.1
+  ("def _spawn_write", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "store writes off the planner thread"),
+  ("def edge_fade", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap edge fade"),
+  ("POSE_TAU", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap pose smoothing"),
+  ("INFORMATIONAL BANNERS ARE SUPPRESSED", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "info banner filter"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

@@ -1,3 +1,125 @@
+FunnyPilot v3.5.1 (2026-08-01)
+========================
+First stable cut of the v3.5 UI, after a drive. Onroad refinements from that
+drive plus ONE REAL DEFECT: a spurious "TAKE CONTROL IMMEDIATELY" for a car
+that never put a wheel wrong.
+
+1. THE COMMS ALERT -- diagnosed, and it was ours
+------------------------------------------------------------------------
+Reported: one full-screen orange "Communication Issue between Processes" with
+the chime, mid-drive, while the software kept driving perfectly throughout.
+
+WHAT THAT ALERT ACTUALLY MEANS. selfdrived marks a service dead when nothing
+has arrived for 10x its period (`cereal/messaging/__init__.py`: `alive[s] =
+(cur_time - recv_time[s]) < 10./frequency`). `longitudinalPlan` is 20 Hz, so
+the budget is 500 ms. Missing it once raises `commIssue`, which is a
+SOFT_DISABLE -- the full-screen prompt -- and the moment plannerd catches up
+the alert clears and control continues. "Alarming and self-clearing, with no
+loss of control" is precisely the signature of a planner frame that ran long,
+not of a process that died.
+
+WHAT RAN LONG. v3.5.0's SCC-Learn store called `maybe_flush()` from
+`update_targets`, i.e. from plannerd's 20 Hz loop, and that did real IO on
+/data: `os.path.getsize`, `os.statvfs`, `os.makedirs`, then an append. loggerd
+is writing megabytes to the same eMMC beside us. Any one of those can block for
+hundreds of milliseconds when the device is busy, and 500 ms is all it takes.
+The flush period was also exactly 60 s -- the same as loggerd's segment
+rotation -- so the two beat against each other and coincided occasionally,
+which is a good description of "it happened once on that drive".
+
+THE RULE THIS LEAVES BEHIND: **nothing in a 20 Hz control-loop process may
+touch /data.** Not "nothing slow" -- nothing at all, because on a shared eMMC
+you do not get to know which call is the slow one.
+
+* fix: every write in `long_v2/scc_learn_store.py` now happens on a SHORT-LIVED
+  daemon thread handed a finished list of lines. Short-lived rather than a
+  long-running worker with a queue, deliberately: it owns no shared mutable
+  state (so no lock and no race with the planner mutating `corners`), at most
+  one exists at a time (so a stalled disk cannot pile threads up), and it holds
+  one bounded list and then dies -- which is what the v3.4.6 rule asks for
+  (bounded in MEMORY, not merely in time). A dropped flush costs at most one
+  drive of learning, the same price every other failure path here already pays.
+* `maybe_flush` now makes NO SYSCALLS AT ALL. The journal-size check reads a
+  tracked `_journal_bytes` counter instead of `stat`ing the file.
+  `test_the_flush_path_makes_no_syscalls` pins this on the AST, because the
+  natural way to write this function is the way that caused the bug.
+* The startup compaction (`_rewrite`) is off-thread too. It is the biggest
+  write the module ever makes; the READ stays synchronous because the planner
+  needs the data before it can do anything with it.
+* `FLUSH_S` 60 -> 47 s, so nothing here is phase-locked to loggerd. Belt and
+  braces given the thread, and free.
+* FALSIFIABLE: if the alert recurs, `cloudlog.event("commIssue", ...)` in
+  selfdrived names the exact service in `not_alive`. If it is not
+  `longitudinalPlan`/`longitudinalPlanSP`, this diagnosis is wrong and the
+  planner is exonerated -- do not tune anything here for it.
+
+2. ONROAD REFINEMENTS
+------------------------------------------------------------------------
+* feat(sign): the upcoming limit and the SLA percentage moved to a column to
+  the RIGHT of the current sign, tab above sign. The station is now one sign
+  tall instead of three deep, so it stops growing down into the road view, and
+  "here is the limit, here is what is changing about it" reads as one object.
+* fix(minimap): the ribbon no longer jitters. The cause was not the drawing --
+  the source (`LastGPSPosition`) updates at 1 Hz, so the ego pose the route was
+  projected from changed in one step per second and the whole ribbon snapped
+  with it. Polling faster cannot help; there is no new data to read. The route
+  is now kept in raw lat/lon and re-projected EVERY FRAME from a pose that
+  eases toward each new fix (`POSE_TAU` 0.35 s), with a `POSE_SNAP_M` guard so
+  a GPS relock snaps instead of dragging the map across the box for a second.
+  `bearing_lerp` takes the short way round, or a wrap past north would spin the
+  route through 358 degrees.
+* fix(minimap): the road already driven fades out of the box instead of
+  vanishing at its edge. `edge_fade` eases alpha to zero over the last 26 px,
+  which also replaces the old hard `inside()` test -- and that matters because
+  there is no scissor available here (nesting one un-clips every widget drawn
+  after it, see v3.5.0). `BEHIND_M` keeps 60 m of travelled road so there is
+  something to fade.
+* fix(glow): the state glow is even on all four edges. It was four full-span
+  gradients, so the top and left overlapped in the corner and composited twice
+  -- and because the overlap is `depth` square while the rails are thousands of
+  pixels long, the eye read it as the rails fading unevenly toward the corners
+  rather than as a bright corner. It is now nested rectangle outlines: every
+  pixel belongs to exactly one ring and its alpha is a function of distance
+  from the nearest edge, which is the definition of an even falloff.
+* feat(speed): the unit label is gone. It never changes on a given car, so it
+  carried no information -- and sitting beside the number it pushed the number
+  off centre by half its width, breaking alignment with the road name above and
+  the status pills below. The hero speed is now centred on the same axis as
+  everything else in that column.
+* feat: the longitudinal state dot moved to the bottom-left corner with a 20 px
+  margin, and still clears the dev-UI bottom rail when that is on.
+* feat(torque bar): quieter and fixed-height. `TorqueBar` gained `opacity`,
+  `grow`, `warm_color` and `hot_color`, all defaulting to the previous
+  behaviour so the mici HUD is untouched. The fork passes `grow=False` -- the
+  height ramp made the bar grow INTO the road view exactly when the driver is
+  looking through it, and it duplicated what the colour already said. The
+  colour ramp starts earlier (0.60 rather than 0.75) since it is now the only
+  channel, and uses the HUD's own amber/red rather than its private palette.
+* feat: no driver-monitoring face. DM is disabled on this fork (24 h timeouts,
+  and selfdrived does not subscribe to `driverMonitoringState`), so the widget
+  was drawing a readout for a system that cannot act. The renderer is still
+  CONSTRUCTED -- that is what keeps driverStateV2 flowing -- only the draw is
+  skipped under the sunnypilot UI.
+* feat(alerts): informational banners are suppressed. The design rule for this
+  HUD is that state is implied by something already on screen: the set speed is
+  visible in the set-speed station, a lane change in the turn-signal chevrons,
+  SLA's intent in the halo on the sign. A banner for those covers the road to
+  say something the screen is already saying, and it trains the driver to
+  ignore banners -- which is what you cannot afford when a real one arrives.
+  THE FILTER IS ON `alertStatus`, NOT ON A LIST OF EVENT NAMES: `normal` is
+  openpilot's own word for "nothing is wrong", so new upstream events are
+  classified correctly without anyone remembering to update a list here.
+  `AlertSize.full` is always shown whatever its status.
+
+TESTS
+------------------------------------------------------------------------
+* 506 green, 0 failed. NEW: `bearing_lerp` and `edge_fade` cases in
+  `test_hud_logic.py`; `test_the_flush_path_makes_no_syscalls` in
+  `test_scc_learn.py`.
+* ON-DEVICE VERIFICATION REQUIRED for every visual change above -- none of the
+  drawing can be exercised off-device. Geometry was checked with arithmetic
+  (the v3.5.0 lesson), not by eye.
+
 FunnyPilot v3.5.0e (2026-08-01)
 ========================
 The onroad UI, rebuilt on one design system; advisory speed limits wired into

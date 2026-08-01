@@ -51,6 +51,78 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.1 Changes (based on funnypilot-3.5.0e) — STABLE
+
+Onroad refinements after the first drive, plus one real defect.
+
+THE COMMS ALERT WAS OURS, and the rule it leaves behind is the important part:
+**nothing in a 20 Hz control-loop process may touch /data.** Not "nothing
+slow" — nothing, because on an eMMC shared with loggerd you do not get to know
+which call is the slow one. selfdrived marks a service dead after 10 missed
+periods (`alive[s] = (now - recv_time) < 10./freq`), which for 20 Hz
+`longitudinalPlan` is 500 ms; missing it once raises `commIssue`, a
+SOFT_DISABLE, i.e. the full-screen orange "TAKE CONTROL IMMEDIATELY" — and it
+clears the moment plannerd catches up. ALARMING + SELF-CLEARING + NO LOSS OF
+CONTROL IS THE SIGNATURE OF A LATE FRAME, not of a dead process. v3.5.0's
+`maybe_flush()` ran `getsize`/`statvfs`/`makedirs`/append from the planner
+loop, at exactly 60 s — the same period as loggerd's segment rotation, so the
+two beat against each other and coincided occasionally.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py` — all writes
+  now on a SHORT-LIVED daemon thread handed a finished list of lines. Short-
+  lived rather than a worker+queue on purpose: no shared mutable state (no lock,
+  no race with the planner mutating `corners`), at most one alive at a time
+  (`_writer_busy`), holds one bounded list then dies — the v3.4.6 memory rule.
+  `maybe_flush` makes NO SYSCALLS AT ALL; the journal size is a tracked
+  `_journal_bytes` counter, and `test_the_flush_path_makes_no_syscalls` pins
+  that on the AST because the natural way to write the function is the way that
+  caused the bug. `_rewrite` (startup compaction, the biggest write) is
+  off-thread too; the READ stays synchronous because the planner needs it.
+  `FLUSH_S` 60 -> 47 so nothing is phase-locked to loggerd.
+  FALSIFIABLE: `cloudlog.event("commIssue", ...)` names the service in
+  `not_alive`. If it is not longitudinalPlan*, this diagnosis is wrong.
+- `selfdrive/ui/sunnypilot/onroad/hud/chrome.py` — the state glow is NESTED
+  RECTANGLE OUTLINES, not four full-span gradients. The gradients overlapped in
+  the corners and composited twice; because the overlap is `depth` square while
+  the rails are thousands of px long, that reads as the RAILS fading unevenly
+  toward the corners (exactly as reported), not as a bright corner. With rings,
+  every pixel belongs to one ring and its alpha is a function of distance to
+  the nearest edge — even by construction.
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — jitter fixed at the
+  cause: `LastGPSPosition` is 1 Hz, so the projection origin stepped once a
+  second and the ribbon snapped with it. Polling faster cannot help (no new
+  data). Route is now kept RAW (lat/lon) and re-projected EVERY FRAME from an
+  eased pose (`POSE_TAU` 0.35 s, `POSE_SNAP_M` so a relock snaps instead of
+  dragging). `bearing_lerp` goes the short way — a wrap past north would
+  otherwise spin the route 358°. `edge_fade` replaces the hard `inside()` test
+  so travelled road FADES out of the box (there is still no scissor available
+  here — see the v3.5.0 nesting rule); `BEHIND_M` keeps 60 m to fade.
+- `selfdrive/ui/sunnypilot/onroad/hud/speed_sign.py` — L-shaped column: SLA %
+  tab and the upcoming sign now sit to the RIGHT of the main sign, tab on top.
+  Station is one sign tall; `width()` added, `height()` is now just SIGN_H.
+- `selfdrive/ui/sunnypilot/onroad/hud/stations.py` — `draw_speed` lost the unit
+  argument (it never changes on a car, and beside the number it pushed the
+  number off-centre by half its width, breaking the centre column's alignment).
+  `draw_long_dot` takes a CENTRE now — it lives in the bottom-left corner.
+- `selfdrive/ui/mici/onroad/torque_bar.py` — NEW kwargs `opacity`, `grow`,
+  `warm_color`, `hot_color`, ALL defaulting to previous behaviour so the mici
+  HUD is byte-identical in effect. The fork passes `grow=False` (the height
+  ramp grew the bar into the road view exactly when you are looking through it,
+  and duplicated what colour already said) and the HUD's own amber/red. Colour
+  ramp starts at 0.60 instead of 0.75 since it is now the only channel.
+- `selfdrive/ui/onroad/augmented_road_view.py` — driver-monitoring face NOT
+  DRAWN under sunnypilot UI. DM is disabled on this fork, so it was a readout
+  for a system that cannot act. The renderer is still CONSTRUCTED (keeps
+  driverStateV2 flowing); only the draw is skipped.
+- `selfdrive/ui/onroad/alert_renderer.py` — informational banners suppressed.
+  FILTER IS ON `alertStatus`, NOT on a list of event names: `normal` is
+  openpilot's own word for "nothing is wrong", so new upstream events classify
+  themselves and nobody has to maintain a list. `AlertSize.full` always shows.
+- `FUNNYPILOT_VERSION` -> 3.5.1; EXPECTED_VERSION -> "3.5.1"; four new
+  `_CODE_MARKERS` rows.
+- TESTS: **506 green.** NEW `bearing_lerp`/`edge_fade` cases and the
+  no-syscalls AST guard.
+
 ### v3.5.0e Changes (based on funnypilot-3.4.9e)
 
 Onroad UI rewritten on one design system; advisory limits into SCC-M;

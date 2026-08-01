@@ -102,7 +102,14 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._draw_edge_treatment()
     self._hud_renderer.render(self._content_rect)
     self.alert_renderer.render(self._content_rect)
-    self.driver_state_renderer.render(self._content_rect)
+    # FunnyPilot v3.5.1: no driver-monitoring face. Driver monitoring is
+    # disabled on this fork (selfdrive/monitoring/helpers.py sets 24 h
+    # timeouts, and selfdrived does not subscribe to driverMonitoringState),
+    # so the widget was drawing a permanently-inattentive-looking readout for a
+    # system that cannot act. The renderer is still CONSTRUCTED — it is what
+    # keeps driverStateV2 flowing and the icons loaded — only the draw is gone.
+    if not gui_app.sunnypilot_ui():
+      self.driver_state_renderer.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds

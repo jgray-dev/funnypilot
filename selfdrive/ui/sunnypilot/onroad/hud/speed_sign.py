@@ -39,6 +39,12 @@ SIGN_W = 155
 SIGN_H = 205
 NEXT_SCALE = 0.62
 GAP = 14
+# v3.5.1 — the column is now L-shaped, not a stack. The main sign keeps the
+# left; the SLA offset tab and the upcoming sign share a narrower column to its
+# right, tab on top. That reads as "this is the sign, and here is what is
+# changing about it", and it stops the station growing downward into the road.
+TAB_H = 34
+SIDE_W = int(SIGN_W * NEXT_SCALE)
 
 HALO_FAR_M = 400.0     # where the halo first becomes visible
 HALO_MIN = 0.12        # proximity floor, so "confirmed but distant" still shows
@@ -77,8 +83,13 @@ class SpeedSign:
 
   def height(self) -> int:
     """Reserved height. Constant whether or not a second sign is showing —
-    nothing below this station may move when one appears."""
-    return SIGN_H + GAP + int(SIGN_H * NEXT_SCALE) + GAP + 34
+    nothing below this station may move when one appears. Since v3.5.1 the
+    extras sit BESIDE the sign, so the station is exactly one sign tall."""
+    return SIGN_H
+
+  def width(self) -> int:
+    """Reserved width, likewise constant."""
+    return SIGN_W + GAP + SIDE_W
 
   def render(self, x: float, y: float, *, limit: float, next_limit: float, dist_m: float,
              sla_active: bool, pre_active: bool, offset_ratio: float,
@@ -98,15 +109,14 @@ class SpeedSign:
 
     self._face(sign_rect, limit, metric, overspeed, primary=True)
 
-    ny = y + SIGN_H + GAP
-    if next_limit and next_limit > 0 and abs(next_limit - (limit or 0)) >= 1:
-      nw, nh = SIGN_W * NEXT_SCALE, SIGN_H * NEXT_SCALE
-      nx = x + (SIGN_W - nw) / 2
-      self._face(rl.Rectangle(nx, ny, nw, nh), next_limit, metric, False, primary=False)
-
+    # ── the side column: offset tab on top, upcoming sign beneath it ────────
+    sx = x + SIGN_W + GAP
     if sla_active:
-      ty = y + SIGN_H + GAP + int(SIGN_H * NEXT_SCALE) + GAP
-      self._offset_tab(x, ty, offset_ratio)
+      self._offset_tab(sx, y, offset_ratio)
+
+    if next_limit and next_limit > 0 and abs(next_limit - (limit or 0)) >= 1:
+      nw, nh = SIDE_W, SIGN_H * NEXT_SCALE
+      self._face(rl.Rectangle(sx, y + TAB_H + GAP, nw, nh), next_limit, metric, False, primary=False)
 
     if pre_active:
       self._chevron(sign_rect, next_limit, limit)
@@ -164,9 +174,10 @@ class SpeedSign:
       s = "0%"
     else:
       s = f"+{round(pct)}%" if pct > 0 else f"{round(pct)}%"
-    from openpilot.system.ui.lib.text_measure import measure_text_cached
-    w = measure_text_cached(T.font_bold(), s, T.SZ_LABEL, T.TRACK_LABEL).x + 28
-    rect = rl.Rectangle(x + (SIGN_W - w) / 2, y, w, 34)
+    # Fills the side column's width rather than shrink-wrapping the text: it
+    # sits directly above the upcoming sign and the two must line up.
+    rect = rl.Rectangle(x, y, SIDE_W, TAB_H)
+    w = SIDE_W
     rl.draw_rectangle_rounded(rect, T.R_PILL, 10, rl.Color(CYAN.r, CYAN.g, CYAN.b, 40))
     rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, rl.Color(CYAN.r, CYAN.g, CYAN.b, 140))
     T.text_centered(T.font_bold(), s, rect.x + w / 2, y + 5, T.SZ_LABEL, CYAN, T.TRACK_LABEL)

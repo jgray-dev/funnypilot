@@ -48,6 +48,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 
 STORE_DIR = "/data/funnypilot_scc_learn"
@@ -69,7 +70,12 @@ MAX_JOURNAL_BYTES = 8 << 20   # hard cap on the on-disk journal between compacti
 # which costs the oldest un-compacted appends and nothing else.
 MAX_JOURNAL_LINES = 120_000
 MIN_FREE_BYTES = 512 << 20    # never write when /data is this tight; deleter owns that space
-FLUSH_S = 60.0                # batch dirty records; a long drive writes a few tens of KB
+# v3.5.1: 47, not 60. loggerd rotates a segment every 60 s, so a 60 s flush
+# period beats against it and lands on a busy eMMC every time the two phases
+# coincide — which is a good description of "it happened once on that drive".
+# The writer thread below makes this a non-issue either way; the odd period is
+# belt and braces, and free.
+FLUSH_S = 47.0                # batch dirty records; a long drive writes a few tens of KB
 
 # How the estimate moves when a corner is seen again. Asymmetric ON PURPOSE:
 # rising (we took it faster than we thought) is adopted quickly, falling (we
@@ -145,6 +151,10 @@ class LearnStore:
     self._dirty: set[str] = set()
     self._last_flush = 0.0
     self._journal_full = False
+    # Tracked rather than stat()ed: `maybe_flush` runs in plannerd's 20 Hz loop
+    # and must make no syscalls at all (see the writer block).
+    self._journal_bytes = 0
+    self._writer: threading.Thread | None = None
     self.loaded = False
     if autoload:
       self.load()
@@ -187,7 +197,10 @@ class LearnStore:
 
     self._evict()
     self._reindex()
-    # rewrite so the journal starts each drive at its compacted size
+    # rewrite so the journal starts each drive at its compacted size. The READ
+    # above is synchronous because the planner needs the data; the WRITE is
+    # handed to the writer thread, because it is the biggest one we ever make.
+    self._journal_bytes = sum(len(c.to_json(k)) + 1 for k, c in self.corners.items())
     self._rewrite()
 
   def _evict(self) -> None:
@@ -205,20 +218,61 @@ class LearnStore:
     except Exception:
       return False
 
-  def _rewrite(self) -> None:
-    """Atomic full dump. Startup only."""
+  # ── writing, which does NOT happen on the caller's thread ────────────────
+  #
+  # THE v3.5.1 FIX, and the rule behind it: NOTHING IN plannerd's 20 Hz LOOP
+  # MAY TOUCH /data. selfdrived marks a service dead after 10 missed frames —
+  # 0.5 s for a 20 Hz publisher — and raises `commIssue`, which is a
+  # SOFT_DISABLE: a full-screen orange "TAKE CONTROL IMMEDIATELY" for a car
+  # that is in fact still driving perfectly, because the planner simply
+  # returned late and then caught up. A single append to a busy eMMC (loggerd
+  # is writing megabytes beside us, and `statvfs`/`makedirs`/`open` can all
+  # block on it) is enough.
+  #
+  # THE SHAPE IS DELIBERATE — a SHORT-LIVED thread per flush, handed a
+  # finished list of lines, not a long-lived worker with a queue:
+  #   * it owns no shared mutable state, so there is no lock and no race with
+  #     the planner mutating `corners` underneath it;
+  #   * at most one exists at a time (`_writer` is checked before spawning), so
+  #     a stalled disk cannot pile threads up;
+  #   * it holds one bounded list and then dies, which satisfies the v3.4.6
+  #     rule that anything running beside a moving car is bounded in MEMORY,
+  #     not merely in time.
+  # A dropped flush costs at most one drive of learning, which is the same
+  # price every other failure path here pays.
+
+  def _writer_busy(self) -> bool:
+    w = self._writer
+    return w is not None and w.is_alive()
+
+  def _spawn_write(self, lines: list, append: bool) -> bool:
+    """Hand a finished payload to a short-lived daemon thread. Never blocks."""
+    if self._writer_busy():
+      return False
+    try:
+      self._writer = threading.Thread(target=self._write_blocking, args=(lines, append),
+                                      name="scc_learn_store", daemon=True)
+      self._writer.start()
+      return True
+    except Exception:
+      self._writer = None
+      return False
+
+  def _write_blocking(self, lines: list, append: bool) -> None:
+    """Runs on the writer thread ONLY. Every path is best-effort."""
     try:
       os.makedirs(self.directory, exist_ok=True)
       if not self._have_space():
         return
+      if append:
+        with open(self.path, "a") as f:
+          f.writelines(lines)
+        return
       fd, tmp = tempfile.mkstemp(dir=self.directory, prefix=".corners")
       try:
         with os.fdopen(fd, "w") as f:
-          for key, c in self.corners.items():
-            f.write(c.to_json(key) + "\n")
+          f.writelines(lines)
         os.replace(tmp, self.path)
-        self._journal_full = False
-        self._dirty.clear()
       except Exception:
         try:
           os.unlink(tmp)
@@ -226,6 +280,19 @@ class LearnStore:
           pass
     except Exception:
       pass
+
+  def _rewrite(self) -> None:
+    """Compacted full dump. Startup only, and off-thread like everything else —
+    this one is the biggest write the module ever makes."""
+    self._journal_full = False
+    self._dirty.clear()
+    self._spawn_write([c.to_json(key) + "\n" for key, c in self.corners.items()], append=False)
+
+  def join_writes(self, timeout: float = 2.0) -> None:
+    """Tests only: wait for the writer so the file can be asserted on."""
+    w = self._writer
+    if w is not None:
+      w.join(timeout)
 
   # ── write path ──────────────────────────────────────────────────────────
 
@@ -300,41 +367,33 @@ class LearnStore:
     return key
 
   def maybe_flush(self, now: float) -> bool:
-    """Append dirty records. Called every planner frame; does work at most
-    once per FLUSH_S and only when there is something to write."""
+    """Hand dirty records to the writer thread. Called every planner frame.
+
+    DOES NO IO ITSELF — see the writer block above. Everything on this path is
+    dict/str work in memory; the only syscall-shaped thing left is the journal
+    size check, and that is a cached `_journal_bytes` estimate rather than a
+    `stat`, for the same reason.
+    """
     if not self._dirty or now - self._last_flush < FLUSH_S:
       return False
     self._last_flush = now
-    if self._journal_full:
-      self._dirty.clear()
+    if self._journal_full or self._writer_busy():
       return False
-    try:
-      if os.path.getsize(self.path) > MAX_JOURNAL_BYTES:
-        # Compaction is a startup job and plannerd restarts every drive, so
-        # stopping here costs at most one drive of learning and never risks a
-        # multi-megabyte rewrite next to a moving car.
-        self._journal_full = True
-        self._dirty.clear()
-        return False
-    except OSError:
-      pass
-
-    if not self._have_space():
+    if self._journal_bytes > MAX_JOURNAL_BYTES:
+      # Compaction is a startup job and plannerd restarts every drive, so
+      # stopping here costs at most one drive of learning and never risks a
+      # multi-megabyte rewrite next to a moving car.
+      self._journal_full = True
       self._dirty.clear()
       return False
 
-    try:
-      os.makedirs(self.directory, exist_ok=True)
-      with open(self.path, "a") as f:
-        for key in self._dirty:
-          c = self.corners.get(key)
-          if c is not None:
-            f.write(c.to_json(key) + "\n")
-      self._dirty.clear()
-      return True
-    except Exception:
-      self._dirty.clear()
+    lines = [c.to_json(key) + "\n" for key in self._dirty
+             if (c := self.corners.get(key)) is not None]
+    self._dirty.clear()
+    if not lines:
       return False
+    self._journal_bytes += sum(len(ln) for ln in lines)
+    return self._spawn_write(lines, append=True)
 
   # ── read path ───────────────────────────────────────────────────────────
 

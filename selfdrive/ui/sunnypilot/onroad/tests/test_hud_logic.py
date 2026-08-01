@@ -14,6 +14,8 @@ Covered:
 """
 import math
 
+import pytest
+
 from openpilot.selfdrive.ui.sunnypilot.onroad.tests.test_hud_imports import _load
 
 _rm = _load('route_map')
@@ -22,7 +24,71 @@ _tok = _load('tokens')
 
 ramp_color = _rm.ramp_color
 to_ego_frame = _rm.to_ego_frame
+bearing_lerp = _rm.bearing_lerp
+edge_fade = _rm.edge_fade
 halo_spec = _ss.halo_spec
+
+
+class _Rect:
+  """Stand-in for rl.Rectangle — pyray is stubbed in this harness."""
+  def __init__(self, x, y, w, h):
+    self.x, self.y, self.width, self.height = x, y, w, h
+
+
+class TestBearingLerp:
+  """v3.5.1. The map's pose is eased between 1 Hz fixes; a heading that eases
+  the long way round spins the whole route through 358 degrees on a wrap."""
+
+  def test_it_takes_the_short_way_across_north(self):
+    out = bearing_lerp(359.0, 1.0, 0.5)
+    assert out == pytest.approx(0.0, abs=1e-6) or out == pytest.approx(360.0, abs=1e-6)
+
+  def test_it_takes_the_short_way_the_other_direction(self):
+    assert bearing_lerp(1.0, 359.0, 0.5) == pytest.approx(0.0, abs=1e-6)
+
+  def test_alpha_zero_holds_and_alpha_one_arrives(self):
+    assert bearing_lerp(90.0, 200.0, 0.0) == pytest.approx(90.0)
+    assert bearing_lerp(90.0, 200.0, 1.0) == pytest.approx(200.0)
+
+  def test_output_is_always_a_heading(self):
+    for cur in (0.0, 90.0, 180.0, 270.0, 359.9):
+      for tgt in (0.0, 45.0, 179.0, 181.0, 359.0):
+        out = bearing_lerp(cur, tgt, 0.3)
+        assert 0.0 <= out < 360.0
+
+
+class TestEdgeFade:
+  """v3.5.1. The road already driven used to blink out of existence the instant
+  it crossed the box boundary. There is no scissor available here, so the fade
+  reaching zero BEFORE the edge is also what keeps the ribbon in its box."""
+
+  def test_well_inside_is_untouched(self):
+    r = _Rect(0, 0, 200, 400)
+    assert edge_fade(100, 200, r) == 1.0
+
+  def test_it_is_zero_at_every_edge(self):
+    r = _Rect(0, 0, 200, 400)
+    assert edge_fade(0, 200, r) == 0.0
+    assert edge_fade(200, 200, r) == 0.0
+    assert edge_fade(100, 0, r) == 0.0
+    assert edge_fade(100, 400, r) == 0.0
+
+  def test_it_is_zero_outside(self):
+    r = _Rect(0, 0, 200, 400)
+    assert edge_fade(-50, 200, r) == 0.0
+    assert edge_fade(100, 900, r) == 0.0
+
+  def test_it_ramps_monotonically_inward(self):
+    r = _Rect(0, 0, 200, 400)
+    vals = [edge_fade(100, y, r) for y in range(int(_rm.FADE_PX) + 1)]
+    assert vals == sorted(vals)
+    assert vals[-1] == pytest.approx(1.0)
+
+  def test_it_respects_the_rect_origin(self):
+    """A rect that does not start at 0,0 is the normal case on this screen."""
+    r = _Rect(1000, 500, 200, 400)
+    assert edge_fade(1100, 700, r) == 1.0
+    assert edge_fade(1000, 700, r) == 0.0
 
 
 class TestRampColor:

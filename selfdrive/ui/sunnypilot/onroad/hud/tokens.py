@@ -62,6 +62,11 @@ MUTED = rl.Color(255, 255, 255, 130)
 FAINT = rl.Color(255, 255, 255, 108)
 
 # ── form ──────────────────────────────────────────────────────────────────
+# v3.5.1 — the steering indicator is ambient, not a readout. It sits at the
+# bottom of the frame under the driver's line of sight, so it is held well
+# below full strength; its job is to be noticed, not read.
+TORQUE_OPACITY = 0.55
+
 R_PLATE = 0.26      # roundness for chips and plates
 R_PILL = 0.5        # full
 BORDER_W = 2

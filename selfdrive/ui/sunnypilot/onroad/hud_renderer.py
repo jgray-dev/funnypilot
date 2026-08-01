@@ -81,6 +81,7 @@ SPEED_Y = 44
 ROADNAME_Y = 6
 STRIP_Y = 290
 SPINE_X = 14
+DOT_MARGIN = 20   # v3.5.1: the long-state dot's clearance from both edges
 
 _STATE_COLORS = {
   UIStatus.ENGAGED: T.ENGAGED,
@@ -116,7 +117,11 @@ class HudRendererSP(HudRenderer):
     self.speed_limit_renderer = SpeedLimitRenderer()
     self.turn_signal_controller = TurnSignalController()
     self.circular_alerts_renderer = CircularAlertsRenderer()
-    self._torque_bar = TorqueBar(scale=3.0, always=True)
+    # v3.5.1: quieter, fixed-height, and on the HUD's own palette. The height
+    # ramp is off (`grow=False`) — the driver already has the feel for the
+    # limits, so the bar only needs to be legible, not to grow into the road.
+    self._torque_bar = TorqueBar(scale=3.0, always=True, opacity=T.TORQUE_OPACITY,
+                                 grow=False, warm_color=T.ATTENTION, hot_color=T.HALT)
 
     self._sign = SpeedSign()
     self._route_map = RouteMap()
@@ -282,8 +287,7 @@ class HudRendererSP(HudRenderer):
     stations.draw_road_name(cx, rect.y + ROADNAME_Y,
                             self.road_name_renderer.road_name if ui_state.road_name_toggle else "")
     if not ui_state.hide_v_ego_ui:
-      unit = tr("km/h") if ui_state.is_metric else tr("mph")
-      stations.draw_speed(cx, rect.y + SPEED_Y, self.speed, unit)
+      stations.draw_speed(cx, rect.y + SPEED_Y, self.speed)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     if not self.is_cruise_available:
@@ -325,6 +329,10 @@ class HudRendererSP(HudRenderer):
   def _draw_vitals(self, rect: rl.Rectangle) -> None:
     if ui_state.rocket_fuel:
       stations.draw_accel_spine(rect.x + SPINE_X, rect.y + rect.height / 2, self._accel)
-    stations.draw_long_dot(rect.x + SPINE_X - 4,
-                           rect.y + rect.height - 150 - DeveloperUiRenderer.get_bottom_dev_ui_offset(),
+    # v3.5.1: bottom-left corner, DOT_MARGIN clear of both edges. It still
+    # clears the dev-UI bottom rail when that is on, because the rail owns the
+    # bottom of the content area and nothing may sit under it.
+    stations.draw_long_dot(rect.x + DOT_MARGIN + 16,
+                           rect.y + rect.height - DOT_MARGIN - 16
+                           - DeveloperUiRenderer.get_bottom_dev_ui_offset(),
                            self._long_state)

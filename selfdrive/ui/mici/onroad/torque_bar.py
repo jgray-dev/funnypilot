@@ -146,13 +146,35 @@ def arc_bar_pts(cx: float, cy: float,
 
 
 class TorqueBar(Widget):
-  def __init__(self, demo: bool = False, scale: float = 1.0, always: bool = False):
+  def __init__(self, demo: bool = False, scale: float = 1.0, always: bool = False,
+               opacity: float = 1.0, grow: bool = True,
+               warm_color: rl.Color | None = None, hot_color: rl.Color | None = None):
+    """FunnyPilot v3.5.1 added the last four, all defaulting to the previous
+    behaviour so the mici HUD is untouched:
+
+      opacity     flat multiplier on every alpha in here
+      grow        False pins the bar's height and offset, so approaching the
+                  limit changes only COLOUR. The height ramp made the bar grow
+                  into the road view at exactly the moment the driver is
+                  looking through it, and it duplicated information the colour
+                  already carried.
+      warm/hot    the two colours the bar fades toward near the limit
+    """
     super().__init__()
     self._demo = demo
     self._scale = scale
     self._always = always
+    self._opacity = opacity
+    self._grow = grow
+    self._warm = warm_color or rl.Color(255, 200, 0, 255)
+    self._hot = hot_color or rl.Color(255, 115, 0, 255)
     self._torque_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
     self._torque_line_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+
+  def _a(self, frac: float) -> int:
+    """Alpha byte for `frac` of full, after the widget's opacity and the
+    engage-state fade."""
+    return int(255 * frac * self._opacity * self._torque_line_alpha_filter.x)
 
   def update_filter(self, value: float):
     """Update the torque filter value (for demo mode)."""
@@ -182,8 +204,12 @@ class TorqueBar(Widget):
 
   def _render(self, rect: rl.Rectangle) -> None:
     # adjust y pos with torque
-    torque_line_offset = np.interp(abs(self._torque_filter.x), [0.5, 1], [22 * self._scale, 26 * self._scale])
-    torque_line_height = np.interp(abs(self._torque_filter.x), [0.5, 1], [14 * self._scale, 56 * self._scale])
+    if self._grow:
+      torque_line_offset = np.interp(abs(self._torque_filter.x), [0.5, 1], [22 * self._scale, 26 * self._scale])
+      torque_line_height = np.interp(abs(self._torque_filter.x), [0.5, 1], [14 * self._scale, 56 * self._scale])
+    else:
+      torque_line_offset = 22 * self._scale
+      torque_line_height = 14 * self._scale
 
     # animate alpha and angle span
     if not self._demo:
@@ -192,9 +218,9 @@ class TorqueBar(Widget):
       self._torque_line_alpha_filter.update(1.0)
 
     torque_line_bg_alpha = np.interp(abs(self._torque_filter.x), [0.5, 1.0], [0.25, 0.5])
-    torque_line_bg_color = rl.Color(255, 255, 255, int(255 * torque_line_bg_alpha * self._torque_line_alpha_filter.x))
+    torque_line_bg_color = rl.Color(255, 255, 255, self._a(torque_line_bg_alpha))
     if ui_state.status not in (UIStatus.ENGAGED, UIStatus.LAT_ONLY) and not self._demo:
-      torque_line_bg_color = rl.Color(255, 255, 255, int(255 * 0.15 * self._torque_line_alpha_filter.x))
+      torque_line_bg_color = rl.Color(255, 255, 255, self._a(0.15))
 
     # draw curved line polygon torque bar
     torque_line_radius = 1200 * self._scale
@@ -224,20 +250,23 @@ class TorqueBar(Widget):
     else:
       end_grad_pt = (cx * (1 - 0.65) + (max(bg_pts[:, 0]) * 0.65)) / rect.width
 
-    # fade to orange as we approach max torque
+    # Fade toward the limit colours. v3.5.1 widened the ramp from 0.75 to 0.60:
+    # with the height ramp gone, colour is the ONLY channel left, so it has to
+    # start saying something sooner.
+    hot = min(1.0, max(0.0, abs(self._torque_filter.x) - 0.60) * 2.5)
     start_color = blend_colors(
-      rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
-      rl.Color(255, 200, 0, int(255 * self._torque_line_alpha_filter.x)),  # yellow
-      max(0, abs(self._torque_filter.x) - 0.75) * 4,
+      rl.Color(255, 255, 255, self._a(0.9)),
+      rl.Color(self._warm.r, self._warm.g, self._warm.b, self._a(1.0)),
+      hot,
     )
     end_color = blend_colors(
-      rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
-      rl.Color(255, 115, 0, int(255 * self._torque_line_alpha_filter.x)),  # orange
-      max(0, abs(self._torque_filter.x) - 0.75) * 4,
+      rl.Color(255, 255, 255, self._a(0.9)),
+      rl.Color(self._hot.r, self._hot.g, self._hot.b, self._a(1.0)),
+      hot,
     )
 
     if ui_state.status not in (UIStatus.ENGAGED, UIStatus.LAT_ONLY) and not self._demo:
-      start_color = end_color = rl.Color(255, 255, 255, int(255 * 0.35 * self._torque_line_alpha_filter.x))
+      start_color = end_color = rl.Color(255, 255, 255, self._a(0.35))
 
     gradient = Gradient(
       start=(start_grad_pt, 0),
@@ -255,4 +284,4 @@ class TorqueBar(Widget):
     if abs(self._torque_filter.x) < 0.5:
       dot_y = self._rect.y + self._rect.height - torque_line_offset - torque_line_height / 2
       rl.draw_circle(int(cx), int(dot_y), (10 // 2 * self._scale),
-                     rl.Color(182, 182, 182, int(255 * 0.9 * self._torque_line_alpha_filter.x)))
+                     rl.Color(182, 182, 182, self._a(0.9)))

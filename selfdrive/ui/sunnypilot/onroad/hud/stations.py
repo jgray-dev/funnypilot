@@ -53,20 +53,18 @@ def draw_set_speed(x: float, y: float, value: float, is_set: bool, icbm_value=No
   T.text_centered(T.font_bold(), txt, cx, y + 74, T.SZ_TITLE, col)
 
 
-def draw_speed(cx: float, y: float, value: float, unit: str) -> None:
+def draw_speed(cx: float, y: float, value: float) -> None:
   """The hero. No plate — a shadow instead, which is what buys back the ~110 px
-  of road view the old boxed treatment cost."""
-  s = str(round(value))
-  fb, fm = T.font_bold(), T.font_med()
-  w_num = measure_text_cached(fb, s, T.SZ_DISPLAY).x
-  w_unit = measure_text_cached(fm, unit, T.SZ_MICRO * 2).x
-  gap = 20
-  left = cx - (w_num + gap + w_unit) / 2
+  of road view the old boxed treatment cost.
 
-  T.text_shadowed(fb, s, left, y, T.SZ_DISPLAY, T.WHITE)
-  # unit sits on the baseline beside the number, not under it
-  T.text_shadowed(fm, unit, left + w_num + gap,
-                  y + T.SZ_DISPLAY * 0.92, T.SZ_MICRO * 2, T.MUTED, 2.2)
+  v3.5.1: NO UNIT LABEL. It never changes on a given car, so it carried no
+  information — and because it sat beside the number, the number itself was
+  offset from centre by half the label's width, breaking alignment with the
+  road name above and the status pills below. The number is now centred on cx
+  and the whole column lines up.
+  """
+  s = str(round(value))
+  T.text_centered_shadowed(T.font_bold(), s, cx, y, T.SZ_DISPLAY, T.WHITE)
 
 
 def draw_road_name(cx: float, y: float, name: str) -> None:
@@ -129,8 +127,13 @@ def draw_accel_spine(x: float, cy: float, accel: float) -> None:
 
 
 def draw_long_dot(x: float, y: float, state: str) -> None:
-  """green = throttle, gray = coasting or inactive, red = brake lamp lit."""
+  """green = throttle, gray = coasting or inactive, red = brake lamp lit.
+
+  (x, y) is the dot's CENTRE since v3.5.1 — it lives in the bottom-left corner
+  now, where a top-left anchor would have made the margin depend on the glyph
+  box rather than on the thing you actually see.
+  """
   col = {"green": T.ENGAGED, "red": T.HALT}.get(state, rl.Color(126, 138, 153, 255))
-  rl.draw_circle(int(x + 14), int(y + 14), 16.0, T.with_alpha(col, 0.28))
-  rl.draw_circle(int(x + 14), int(y + 14), 11.0, col)
-  T.text_at(T.font_bold(), "LONG", x + 38, y + 3, T.SZ_MICRO, T.FAINT, 3.2)
+  rl.draw_circle(int(x), int(y), 16.0, T.with_alpha(col, 0.28))
+  rl.draw_circle(int(x), int(y), 11.0, col)
+  T.text_at(T.font_bold(), "LONG", x + 26, y - 11, T.SZ_MICRO, T.FAINT, 3.2)

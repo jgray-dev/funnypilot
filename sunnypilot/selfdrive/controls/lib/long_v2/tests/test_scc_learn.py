@@ -31,7 +31,13 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_IN
 @pytest.fixture
 def store():
   with tempfile.TemporaryDirectory() as d:
-    yield S.LearnStore(directory=d, name="corners.jsonl")
+    s = S.LearnStore(directory=d, name="corners.jsonl")
+    # v3.5.1: writes happen on a short-lived thread so plannerd's 20 Hz loop
+    # never touches /data. Join the startup rewrite BEFORE the test body, or it
+    # lands on top of whatever the test writes to the file itself.
+    s.join_writes()
+    yield s
+    s.join_writes()
 
 
 # ── geometry / keying ───────────────────────────────────────────────────────
@@ -177,7 +183,9 @@ class TestPersistence:
     store.observe(37.5, -122.0, 90.0, 17.5, now=123.0)
     store.observe(37.6, -122.1, 270.0, 12.0, now=124.0)
     store._rewrite()
+    store.join_writes()
     reloaded = S.LearnStore(directory=store.directory, name="corners.jsonl")
+    reloaded.join_writes()
     assert reloaded.count == 2
     assert reloaded.corners[S.key_for(37.5, -122.0, 90.0)].v == pytest.approx(17.5, abs=0.01)
 
@@ -193,11 +201,13 @@ class TestPersistence:
       f.write("\n")
       f.write(S.Corner(37.6, -122.0, 90.0, 16.0).to_json(S.key_for(37.6, -122.0, 90.0)) + "\n")
     reloaded = S.LearnStore(directory=store.directory, name="corners.jsonl")
+    reloaded.join_writes()
     assert reloaded.count == 2
 
   def test_missing_file_is_an_empty_map_not_an_error(self):
     with tempfile.TemporaryDirectory() as d:
       s = S.LearnStore(directory=os.path.join(d, "never-made"), name="corners.jsonl")
+      s.join_writes()
       assert s.count == 0
       assert s.loaded
 
@@ -208,6 +218,7 @@ class TestPersistence:
         f.write(S.Corner(37.5, -122.0, 90.0, 15.0, n=i + 1, t=float(i)).to_json(key) + "\n")
     big = os.path.getsize(store.path)
     reloaded = S.LearnStore(directory=store.directory, name="corners.jsonl")
+    reloaded.join_writes()
     assert reloaded.count == 1
     assert os.path.getsize(reloaded.path) < big
     # last write wins
@@ -223,27 +234,48 @@ class TestPersistence:
         lat = 37.0 + i * 0.05
         f.write(S.Corner(lat, -122.0, 90.0, 15.0).to_json(S.key_for(lat, -122.0, 90.0)) + "\n")
     reloaded = S.LearnStore(directory=store.directory, name="corners.jsonl")
+    reloaded.join_writes()
     assert reloaded.count == 10
 
   def test_flush_is_rate_limited_and_appends(self, store):
+    store.join_writes()                             # the startup rewrite
     store.observe(37.5, -122.0, 90.0, 15.0, now=1.0)
     assert store.maybe_flush(0.0) is False          # too soon after _last_flush
     assert store.maybe_flush(S.FLUSH_S + 1.0) is True
-    assert store.maybe_flush(S.FLUSH_S + 2.0) is False   # nothing dirty
+    store.join_writes()
+    assert store.maybe_flush(S.FLUSH_S * 2 + 2.0) is False   # nothing dirty
+
+  def test_the_flush_path_makes_no_syscalls(self, store):
+    """THE v3.5.1 RULE: plannerd's 20 Hz loop may not touch /data at all. A
+    blocked append is 0.5 s of missed longitudinalPlan, which selfdrived reads
+    as `commIssue` — a full-screen 'TAKE CONTROL IMMEDIATELY' for a car that is
+    driving perfectly. Pinned on the AST because it is the whole fix."""
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(S.LearnStore.maybe_flush)))
+    banned = {"open", "getsize", "statvfs", "makedirs", "stat", "_have_space", "_write_blocking"}
+    for node in ast.walk(tree):
+      if isinstance(node, ast.Call):
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        assert name not in banned, f"maybe_flush must not call {name} on the planner thread"
 
   def test_flush_survives_an_unwritable_store(self, store):
+    store.join_writes()
     store.observe(37.5, -122.0, 90.0, 15.0, now=1.0)
     store.directory = "/proc/nonexistent/nope"
     store.path = "/proc/nonexistent/nope/corners.jsonl"
-    assert store.maybe_flush(S.FLUSH_S + 1.0) is False   # and did not raise
+    store.maybe_flush(S.FLUSH_S + 1.0)   # must not raise, here or on the thread
+    store.join_writes()
+    assert not os.path.exists(store.path)
 
   def test_journal_cap_stops_writing_rather_than_compacting_mid_drive(self, store):
     """Compaction is a STARTUP job. Rewriting megabytes beside a moving car is
     the v3.4.6 lesson (bounded in memory, not merely in time), so hitting the
     cap costs one drive of learning and nothing else."""
+    store.join_writes()
     store.observe(37.5, -122.0, 90.0, 15.0, now=1.0)
-    with open(store.path, "w") as f:
-      f.write("x" * (S.MAX_JOURNAL_BYTES + 1))
+    store._journal_bytes = S.MAX_JOURNAL_BYTES + 1
     assert store.maybe_flush(S.FLUSH_S + 1.0) is False
     assert store._journal_full
 

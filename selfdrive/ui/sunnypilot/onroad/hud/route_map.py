@@ -45,9 +45,25 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
 MPS_TO_MPH = 2.23694
 
 RANGE_M = 300.0        # how far up the box the route runs
+BEHIND_M = 60.0        # keep this much of the road already driven, to fade out
 POLL_S = 1.0           # source data is 1 Hz; parsing faster buys nothing
 MAX_POINTS = 400       # hard bound on how much JSON we will walk
 RING_M = (100.0, 200.0)
+
+# v3.5.1 — THE JITTER, and why it is fixed here rather than by polling faster.
+# The source (mapd's LastGPSPosition) updates at 1 Hz, so the ego pose the route
+# is drawn relative to used to change in one step per second and the whole
+# ribbon snapped with it. Polling faster cannot help: there is no new data to
+# read. Instead the DISPLAYED pose eases toward the polled one every frame and
+# the route is re-projected from raw lat/lon each frame. The map therefore lags
+# the fix by ~POSE_TAU, which is the correct trade for an awareness widget --
+# it is showing you a road, not a countdown.
+POSE_TAU = 0.35        # s, displayed-pose time constant
+POSE_SNAP_M = 120.0    # a jump bigger than this is a new fix, not motion: snap
+
+# How far inside the box a segment has fully faded. Non-zero so nothing is ever
+# drawn hard against the edge -- there is no scissor here (see render()).
+FADE_PX = 26.0
 
 # delta (mph under the posted limit) -> tint. Below DELTA_LO the road is simply
 # the road and gets no colour at all.
@@ -89,14 +105,38 @@ def to_ego_frame(lat: float, lon: float, lat0: float, lon0: float, bearing_deg: 
   return fwd, right
 
 
+def bearing_lerp(cur: float, target: float, a: float) -> float:
+  """Ease a heading the SHORT way round. 359 -> 1 is two degrees, not 358."""
+  d = (target - cur + 180.0) % 360.0 - 180.0
+  return (cur + d * a) % 360.0
+
+
+def edge_fade(px: float, py: float, rect: rl.Rectangle) -> float:
+  """1.0 well inside the box, easing to 0 within FADE_PX of any edge.
+
+  v3.5.1: replaces a hard `inside()` test that made the road already driven
+  vanish the instant it crossed the boundary. There is no scissor available
+  here (nesting one would un-clip every later widget -- see render()), so the
+  fade reaching zero BEFORE the boundary is what keeps the ribbon inside its
+  box without one.
+  """
+  d = min(px - rect.x, rect.x + rect.width - px,
+          py - rect.y, rect.y + rect.height - py)
+  return T.clamp(d / FADE_PX, 0.0, 1.0)
+
+
 class RouteMap:
   def __init__(self):
     self._params = None
     self._tried_params = False
     self._last_poll = 0.0
-    # projected route: list of (fwd_m, right_m, delta_mph)
-    self._pts: list[tuple[float, float, float]] = []
-    self._gov = None            # (fwd_m, right_m, authority) or None
+    self._last_frame = 0.0
+    # raw route in geodetic coords: list of (lat, lon, delta_mph). Kept raw so
+    # the smoothed pose below can re-project it every frame.
+    self._raw: list[tuple[float, float, float]] = []
+    self._fix = None            # (lat, lon, bearing) as last polled
+    self._pose = None           # (lat, lon, bearing) as displayed, eased
+    self._gov_ll = None         # (lat, lon, authority) or None
     self._advisory = False
     self._have_fix = False
 
@@ -133,7 +173,7 @@ class RouteMap:
 
     mem = self._mem()
     if mem is None:
-      self._pts, self._gov, self._have_fix = [], None, False
+      self._raw, self._gov_ll, self._have_fix = [], None, False
       return
 
     try:
@@ -143,9 +183,10 @@ class RouteMap:
       lon0 = float(pos["longitude"])
       bearing = float(pos.get("bearing", 0.0))
     except Exception:
-      self._pts, self._gov, self._have_fix = [], None, False
+      self._raw, self._gov_ll, self._have_fix = [], None, False
       return
     self._have_fix = True
+    self._fix = (lat0, lon0, bearing)
 
     try:
       raw = mem.get("MapTargetVelocities")
@@ -173,10 +214,13 @@ class RouteMap:
     pts = []
     for p in points[:MAX_POINTS]:
       try:
-        fwd, right = to_ego_frame(float(p["latitude"]), float(p["longitude"]), lat0, lon0, bearing)
+        plat, plon = float(p["latitude"]), float(p["longitude"])
+        fwd, _right = to_ego_frame(plat, plon, lat0, lon0, bearing)
       except Exception:
         continue
-      if fwd < -20.0 or fwd > RANGE_M:      # behind us, or past the box
+      # Keep a little of the road already driven so it can FADE out of the box
+      # rather than blink out of it.
+      if fwd < -BEHIND_M or fwd > RANGE_M + 40.0:
         continue
       try:
         v = float(p["velocity"])
@@ -185,26 +229,78 @@ class RouteMap:
       # which zone is in force at this point
       lim = nxt_limit if (nxt_fwd is not None and nxt_limit > 0 and fwd > nxt_fwd) else limit_now
       delta = (lim - v) * MPS_TO_MPH if lim > 0 else 0.0
-      pts.append((fwd, right, delta))
-    self._pts = pts
+      pts.append((plat, plon, delta))
+    self._raw = pts
 
     # the controller's own choice, not ours
     try:
       from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_scc_shm
       g_lat, g_lon, _gv, auth, adv = read_scc_shm()
       self._advisory = bool(adv)
-      if g_lat or g_lon:
-        gf, gr = to_ego_frame(g_lat, g_lon, lat0, lon0, bearing)
-        self._gov = (gf, gr, auth) if -20.0 <= gf <= RANGE_M else None
-      else:
-        self._gov = None
+      self._gov_ll = (g_lat, g_lon, auth) if (g_lat or g_lon) else None
     except Exception:
-      self._gov, self._advisory = None, False
+      self._gov_ll, self._advisory = None, False
+
+  # ── pose smoothing ──────────────────────────────────────────────────────
+
+  def _ease_pose(self, now: float) -> None:
+    """Move the DISPLAYED pose toward the polled one. See POSE_TAU."""
+    if self._fix is None:
+      return
+    if self._pose is None:
+      self._pose = self._fix
+      return
+
+    dt = now - self._last_frame if self._last_frame else 1.0 / 60.0
+    self._last_frame = now
+    dt = T.clamp(dt, 0.0, 0.25)
+    a = 1.0 - math.exp(-dt / POSE_TAU) if POSE_TAU > 0 else 1.0
+
+    lat, lon, brg = self._pose
+    tlat, tlon, tbrg = self._fix
+    # A route change or a GPS relock moves us kilometres in one poll; easing
+    # through that would drag the whole ribbon across the box for a second.
+    jump = math.hypot((tlat - lat) * _M_PER_DEG,
+                      (tlon - lon) * _M_PER_DEG * math.cos(math.radians(tlat)))
+    if jump > POSE_SNAP_M:
+      self._pose = self._fix
+      return
+    self._pose = (lat + (tlat - lat) * a, lon + (tlon - lon) * a,
+                  bearing_lerp(brg, tbrg, a))
 
   # ── drawing ─────────────────────────────────────────────────────────────
 
+  def _project(self):
+    """Raw geodetic route -> ego-frame metres, using the EASED pose.
+
+    Done every frame rather than at poll time -- that is the whole jitter fix.
+    The trig is hoisted out of the loop, so a 400-point route costs a few
+    thousand flops a frame and no transcendental calls at all.
+    """
+    if self._pose is None:
+      return [], None
+    lat0, lon0, brg = self._pose
+    b = math.radians(brg)
+    cb, sb = math.cos(b), math.sin(b)
+    clat = math.cos(math.radians(lat0))
+
+    def to_ego(plat, plon):
+      north = (plat - lat0) * _M_PER_DEG
+      east = (plon - lon0) * _M_PER_DEG * clat
+      return north * cb + east * sb, -north * sb + east * cb
+
+    pts = [(*to_ego(plat, plon), d) for plat, plon, d in self._raw]
+    gov = None
+    if self._gov_ll is not None:
+      gf, gr = to_ego(self._gov_ll[0], self._gov_ll[1])
+      gov = (gf, gr, self._gov_ll[2])
+    return pts, gov
+
   def render(self, rect: rl.Rectangle) -> None:
-    self._poll(time.monotonic())
+    now = time.monotonic()
+    self._poll(now)
+    self._ease_pose(now)
+    pts, gov = self._project()
 
     T.plate(rect, 0.10)
 
@@ -219,36 +315,34 @@ class RouteMap:
     # NO SCISSOR HERE, DELIBERATELY. AugmentedRoadView._render already has one
     # open around the whole content rect, and raylib's EndScissorMode simply
     # disables the test — it does not restore an outer region. Nesting one here
-    # would silently un-clip every widget drawn after this on the frame. So
-    # segments that leave the box are dropped instead; on a bend sharp enough
-    # to exit laterally, the ribbon ends at the edge, which reads correctly.
-    x0b, x1b = rect.x + 2, rect.x + rect.width - 2
-    y0b, y1b = rect.y + 2, rect.y + rect.height - 2
-
-    def inside(p) -> bool:
-      return x0b <= p[0] <= x1b and y0b <= p[1] <= y1b
+    # would silently un-clip every widget drawn after this on the frame.
+    # v3.5.1: instead of dropping out-of-box segments (which made the road
+    # already driven blink out of existence at the bottom edge) the alpha eases
+    # to zero over the last FADE_PX, so the ribbon leaves the box by fading.
+    y0b = rect.y + 2
 
     for r in RING_M:
       rr = r * scale
       if y0 - rr > y0b:
         rl.draw_ring(rl.Vector2(cx, y0), rr - 1.0, rr, 200, 340, 28, rl.Color(255, 255, 255, 22))
 
-    for i in range(1, len(self._pts)):
-      f0, r0, _ = self._pts[i - 1]
-      f1, r1, d1 = self._pts[i]
+    for i in range(1, len(pts)):
+      f0, r0, _ = pts[i - 1]
+      f1, r1, d1 = pts[i]
       a, b = px(f0, r0), px(f1, r1)
-      if not (inside(a) and inside(b)):
+      edge = min(edge_fade(a[0], a[1], rect), edge_fade(b[0], b[1], rect))
+      if edge <= 0.0:
         continue
       c = ramp_color(d1)
-      fade = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
+      depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
       w = max(3.0, rect.width * 0.085 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
-      rl.draw_line_ex(a, b, w, rl.Color(c[0], c[1], c[2], int(fade * 255)))
+      rl.draw_line_ex(a, b, w, rl.Color(c[0], c[1], c[2], int(depth * edge * 255)))
 
-    if self._gov is not None:
-      gf, gr, auth = self._gov
+    if gov is not None:
+      gf, gr, auth = gov
       g = px(gf, gr)
       rad = rect.width * 0.075
-      if inside((g[0] - rad, g[1] - rad)) and inside((g[0] + rad, g[1] + rad)):
+      if edge_fade(g[0], g[1], rect) >= 1.0:
         if auth >= 0.99:
           rl.draw_ring(rl.Vector2(g[0], g[1]), rad - 3.0, rad, 0, 360, 24, T.WHITE)
           rl.draw_circle(int(g[0]), int(g[1]), rect.width * 0.021, T.WHITE)
