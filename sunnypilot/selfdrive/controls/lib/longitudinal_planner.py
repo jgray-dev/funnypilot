@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import time
+
 from cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
@@ -23,7 +25,9 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import write_scc_shm
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import write_scc_shm, write_learn_shm
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_fusion import fuse_learned_target
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_learn import SCCLearnV1, read_gps
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -49,6 +53,10 @@ class LongitudinalPlannerSP:
     self._speed_governor = SpeedGovernor()
     self._fric = 0.8
     self._scc_map_authority = 0.0
+    # v3.5.0 SCC-Learn. The store is lazy (first onroad frame), so constructing
+    # this touches no disk — plannerd is onroad-only and this class is also
+    # imported by tests.
+    self._scc_learn = SCCLearnV1()
 
   @property
   def mlsim(self) -> bool:
@@ -62,6 +70,38 @@ class LongitudinalPlannerSP:
       return None
 
     return self.dec.mode()
+
+  def _update_scc_learn(self, sm, CS, v_ego: float, v_cruise: float, long_enabled: bool) -> None:
+    """Feed SCC-Learn and refresh its cap. Total — never raises into the planner.
+
+    The exclusions passed in here are the whole safety story of the feature:
+    every one of them names something that makes the car slow down but is NOT
+    a bend, and learning any of them would build a map that brakes for traffic
+    lights forever. See long_v2/scc_learn.py.
+    """
+    try:
+      lat, lon, bearing, acc, gps_ok = read_gps(sm)
+      lead = False
+      try:
+        rs = sm['radarState']
+        lead = bool(rs.leadOne.status or rs.leadTwo.status)
+      except Exception:
+        pass
+      t = time.monotonic()
+      self._scc_learn.observe(
+        t, v_ego,
+        lat=lat, lon=lon, bearing=bearing, gps_acc=acc,
+        lead=lead,
+        standstill=bool(CS.standstill),
+        speed_limit=float(self.resolver.speed_limit if self.resolver.speed_limit_valid else 0.0),
+        sla_busy=bool(self.sla.busy),
+        vision_active=bool(self._scc_vision_v2.is_active),
+        driver_braking=bool(CS.brakePressed),
+      )
+      self._scc_learn.update(long_enabled, v_ego, v_cruise, lat, lon, bearing, gps_ok)
+      self._scc_learn.flush(t)
+    except Exception:
+      pass
 
   def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> tuple[float, float]:
     CS = sm['carState']
@@ -110,6 +150,16 @@ class LongitudinalPlannerSP:
     self._scc_map_authority = min(1.0, got / asked) if asked > 0.1 else 0.0
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
+    # LongV2: SCC-Learn (v3.5.0) — the corner map this car built by driving.
+    # Learn first, then cap, so a corner is never capped from the very pass
+    # that is recording it. Both halves are total: any failure in here degrades
+    # to "no learned data" and the governor's min() becomes a no-op.
+    self._update_scc_learn(sm, CS, v_ego, v_cruise, long_enabled)
+    v_scc_learn = fuse_learned_target(self._scc_learn.output_v_target, v_cruise,
+                                      self._scc_learn.confidence,
+                                      self._scc_vision_v2.is_active,
+                                      self._scc_vision_v2.corroboration)
+
     # Speed limit info for road cap logic
     road_type = ""
     speed_limit_posted = self.resolver.speed_limit if self.resolver.speed_limit_valid else 0.0
@@ -120,7 +170,8 @@ class LongitudinalPlannerSP:
 
     v_governed = self._speed_governor.update(
       v_cruise, v_scc_map, v_scc_vision, v_sla,
-      road_type, speed_limit_posted, self._fric
+      road_type, speed_limit_posted, self._fric,
+      v_scc_learn=v_scc_learn
     )
 
     # Source tracking — prefer most restrictive non-cruise source for display
@@ -128,7 +179,10 @@ class LongitudinalPlannerSP:
       src = self._speed_governor.source
       if src == "scc_vision":
         self.source = LongitudinalPlanSource.sccVision
-      elif src == "scc_map":
+      elif src in ("scc_map", "scc_learn"):
+        # scc_learn reports as sccMap: it IS a map, just one we made, and the
+        # capnp enum has no room for a new member on this fork (a schema change
+        # forces a device rebuild — see the v3.4.1 post-mortem).
         self.source = LongitudinalPlanSource.sccMap
       elif src == "sla":
         self.source = LongitudinalPlanSource.speedLimitAssist
@@ -220,6 +274,10 @@ class LongitudinalPlannerSP:
     write_scc_shm(self._scc_map_v2.gov_lat, self._scc_map_v2.gov_lon,
                   self._scc_map_v2.output_v_target, self._scc_map_authority,
                   self._scc_map_v2.advisory_active)
+
+    # v3.5.0: SCC-Learn's corner count + whether it is governing right now.
+    write_learn_shm(self._scc_learn.learned_count, self._scc_learn.is_active,
+                    self._scc_learn.confidence)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

@@ -56,6 +56,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.sunnypilot.selfdrive.car.brake_light_shm import read_brake_light
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.sla_shm import read_sla_shm
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_learn_shm
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 
@@ -184,6 +185,19 @@ class HudRendererSP(HudRenderer):
           pills.append(stations.Pill(f"{label} {round(side.vTarget * conv)}", T.LAT_ONLY, True))
         else:
           pills.append(stations.Pill(label, T.MUTED, False))
+    except Exception:
+      pass
+
+    # v3.5.0 SCC-Learn. Lit with the cap it is taking, unlit with how many
+    # corners it knows — so an empty store reads as "LRN 0" rather than as a
+    # missing feature, which is the difference between "nothing learned yet"
+    # and "this is broken".
+    try:
+      n, learn_active, _conf = read_learn_shm()
+      if learn_active:
+        pills.append(stations.Pill(tr("LRN"), T.LAT_ONLY, True))
+      elif n:
+        pills.append(stations.Pill(f"LRN {n}", T.MUTED, False))
     except Exception:
       pass
 

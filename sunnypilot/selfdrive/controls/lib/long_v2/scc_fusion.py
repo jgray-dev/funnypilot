@@ -87,3 +87,48 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   if allowed < MAP_SOLO_MIN_CUT:
     return CAP_INACTIVE
   return float(v_cruise) - allowed
+
+
+# FunnyPilot v3.5.0 — the LEARNED corner map (see scc_learn.py).
+#
+# WHY THIS IS NOT JUST ANOTHER CALL TO fuse_map_target. The vision veto exists
+# because OSM's curve speeds are COMPUTED FROM GEOMETRY BY SOMEONE ELSE. A
+# learned point is not computed at all — it is a speed THIS CAR ACTUALLY WENT
+# THROUGH THIS BEND, recorded only after a dip that recovered with no lead, no
+# stop and no zone change (scc_learn.CornerObserver does that filtering). It is
+# self-corroborating in the exact sense the map is not, so demanding the model
+# also see the corner would throw away the one piece of evidence that is better
+# than the model's.
+#
+# WHAT REPLACES THE VETO IS VISIT COUNT. A corner seen once is real evidence and
+# gets a real but partial cut; three visits earn the full one. Vision agreeing
+# can only ever raise that authority, never lower it.
+LEARN_SOLO_MAX_CUT = 8.9   # m/s (~20 mph) — ceiling on a partly-trusted learned cut
+LEARN_MIN_CUT = 0.5        # m/s — below this it is not worth a slowdown
+
+
+def fuse_learned_target(learn_v_target: float, v_cruise: float, confidence: float,
+                        vision_is_active: bool = False,
+                        vision_corroboration: float = 0.0) -> float:
+  """Return the learned cap as the governor should see it.
+
+  learn_v_target: SCC-Learn's smoothed cap (CAP_INACTIVE when it has nothing)
+  confidence: [0, 1] from visit count (scc_learn.confidence_for)
+  vision_is_active / vision_corroboration: may only RAISE authority
+  """
+  if not (learn_v_target < CAP_INACTIVE):
+    return CAP_INACTIVE
+
+  if vision_is_active:
+    return learn_v_target
+
+  a = min(max(float(confidence), 0.0), 1.0)
+  a = max(a, min(max(float(vision_corroboration), 0.0), 1.0))
+  if a <= 0.0:
+    return CAP_INACTIVE
+
+  cut = max(0.0, float(v_cruise) - float(learn_v_target))
+  allowed = min(cut * a, LEARN_SOLO_MAX_CUT)
+  if allowed < LEARN_MIN_CUT:
+    return CAP_INACTIVE
+  return float(v_cruise) - allowed

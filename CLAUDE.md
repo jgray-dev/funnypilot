@@ -53,9 +53,83 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 ### v3.5.0e Changes (based on funnypilot-3.4.9e)
 
-Onroad UI rewritten on one design system; advisory limits into SCC-M; the
-experimental-mode wheel button removed. ZERO schema and ZERO compiled files
-touched — this branch cannot trigger a device rebuild.
+Onroad UI rewritten on one design system; advisory limits into SCC-M;
+SCC-Learn (a corner map built by driving); the experimental-mode wheel button
+removed. ZERO schema and ZERO compiled files touched — this branch cannot
+trigger a device rebuild.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py` — NEW,
+  stdlib-only. Persistence + geometry index for SCC-Learn. Cell key is
+  `(lat_cell, lon_cell, heading_octant)` at `CELL_DEG` ~22 m; THE OCTANT IS IN
+  THE KEY because a bend taken northbound and the same tarmac southbound are
+  different approaches. A `COARSE_DEG` ~1.1 km index maps to fine keys so a
+  lookup probes 9 cells instead of 25,000 records — at 20 Hz that is the whole
+  feasibility of the feature. MERGE ON WRITE (`MERGE_M` 30, `MERGE_BEARING_DEG`
+  45) and the reason it is load-bearing: a grid has edges, a bend is as likely
+  to sit on one as anywhere, and two records with one visit each would be filed
+  as two roads-driven-once — VISIT COUNT IS WHAT EVICTION KEEPS, so the merge is
+  what stops a boundary corner on the commute being evicted first. Found by a
+  test, not by eye. `_evict()` sorts by `(n, t)` reverse: the user's explicit
+  requirement, and mutation-tested because sorting by recency looks identical in
+  review and is exactly backwards. APPEND-ONLY JOURNAL COMPACTED AT STARTUP —
+  plannerd is `only_onroad` so it restarts every drive, which is why NO
+  BACKGROUND THREAD IS NEEDED (the v3.4.6 `git gc` OOM rule: bounded in MEMORY,
+  not merely in time). Hitting `MAX_JOURNAL_BYTES` mid-drive STOPS WRITING
+  rather than compacting; `MAX_JOURNAL_LINES` bounds the startup read
+  explicitly. `ALPHA_UP` 0.5 / `ALPHA_DOWN` 0.2 — a cap can only SLOW the car,
+  so learning to brake HARDER deserves more evidence. Every operation
+  best-effort; losing the file is acceptable, the feature relearns.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py` — NEW. `CornerObserver`
+  + `SCCLearnV1`. THE RULE THAT MAKES THIS SAFE: commit only on **a local
+  minimum in speed FOLLOWED BY RECOVERY, with nothing else explaining it**. The
+  recovery requirement is load-bearing and generalizes — a corner is transient,
+  while a stop sign, a light and congestion all end in a stop or a long hold, so
+  requiring the car to come back UP rejects all three WITHOUT THE SYSTEM NEEDING
+  TO KNOW THEY EXIST. Explicit exclusions (each names a non-bend that would
+  otherwise be learned): lead at any point, `v_min < MIN_CORNER_V`, posted limit
+  changed mid-dip, `sla_busy`, standstill, dip outside `[MIN_DIP_S, MAX_DIP_S]`,
+  `gps_acc > MAX_GPS_ACC_M`. The record lands at the APEX not the entry (braking
+  is planned TO the corner). Stores `v_min * LEARN_MARGIN` — the minimum already
+  contains the driver's/SCC-V's margin, so capping AT it would compound the
+  margin every visit until the car crawled. `confidence_for()` 0.45 at one
+  visit, 1.0 at three. `read_gps(sm)` prefers the `gpsLocation*` service over
+  mapd's `LastGPSPosition` BECAUSE IT CARRIES `horizontalAccuracy` — a record
+  keyed on a position we are unsure of is worse than no record.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — NEW
+  `fuse_learned_target()`, `LEARN_SOLO_MAX_CUT = 8.9`, `LEARN_MIN_CUT = 0.5`.
+  DELIBERATELY NOT a second call to `fuse_map_target`: the vision veto exists
+  because OSM's curve speeds are COMPUTED BY SOMEONE ELSE, whereas a learned
+  point is a speed THIS CAR ACTUALLY WENT THROUGH THIS BEND after the observer
+  rejected everything that was not a bend. It is self-corroborating in the exact
+  sense the map is not. What replaces the veto is VISIT COUNT; vision agreeing
+  may only RAISE authority (`max()`, mutation-tested — assigning looks the same
+  in review).
+- `sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py` — `v_scc_learn`
+  is its OWN candidate, not folded into `scc_map`: its authority comes from
+  visit count, not OSM, and the two must be able to disagree without one
+  masking the other.
+- `sunnypilot/selfdrive/controls/lib/longitudinal_planner.py` (SP) —
+  `_update_scc_learn()` gathers the exclusion signals and is TOTAL (any failure
+  degrades to no learned data). Learn happens BEFORE the cap is read so a corner
+  is never capped from the pass that is recording it. Reports as
+  `LongitudinalPlanSource.sccMap` — the capnp enum has no room for a new member
+  and a schema change forces a rebuild.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py` — NEW
+  `/dev/shm/fp_learn` (`write_learn_shm` / `read_learn_shm`). A SEPARATE FILE
+  from `fp_scc` on purpose: that reader unpacks positionally and its contract is
+  pinned by tests, and widening a working channel for an unrelated feature is
+  how a reader that indexes `[4]` starts reading a different quantity.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` — NEW
+  read-only `busy` property (mid-ramp or gas-gating). Without it there would be
+  a permanent learned corner cap at every speed-limit sign on the commute.
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — "LRN" pill: lit while a
+  learned corner governs, else the known-corner count, so an empty store reads
+  as "nothing learned yet" rather than as a broken feature.
+- TESTS: `long_v2/tests/test_scc_learn.py` (72). NINE SCC-Learn guards
+  MUTATION-TESTED: eviction by recency, symmetric alpha, no cell-edge merge,
+  committing without recovery (5 failures — the one that turns every red light
+  into a corner), lead not poisoning a dip, one visit trusted like ten, corners
+  behind us still capping, corroboration overriding confidence, unbounded cut.
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — reads
   `MapAdvisoryLimit` / `NextMapAdvisoryLimit`, unread since mapd shipped. THE
@@ -136,8 +210,9 @@ settings screen is how you would flash out of it.
   * `draw_triangle_fan` takes plain (x, y) tuples here (see
     onroad/model_renderer.py). Prefer it to `draw_triangle`, which is
     winding-order sensitive and silently draws nothing when wrong.
-- TESTS: **418 green, 0 failed.** NEW `test_hud_imports.py` (15),
-  `test_hud_logic.py` (45), `test_scc_advisory.py` (25). Seven guards
+- TESTS: **494 green, 0 failed.** NEW `test_hud_imports.py` (15),
+  `test_hud_logic.py` (45), `test_scc_advisory.py` (25),
+  `test_scc_learn.py` (72). Seven UI/advisory guards
   MUTATION-TESTED: advisory raising instead of lowering, unbounded advisory
   cut, advisory overriding rather than flooring corroboration, scc_shm
   staleness, safe_draw not disabling, the minimap rotation with sin/cos swapped

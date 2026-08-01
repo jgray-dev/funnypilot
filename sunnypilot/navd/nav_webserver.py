@@ -122,6 +122,11 @@ _CODE_MARKERS = [
   ("class RouteMap", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "SCC-M route minimap"),
   ("def halo_spec", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/speed_sign.py", "text-free SLA sign halo"),
   ("HORIZON BANDS", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "horizon-band HUD layout"),
+  # v3.5.0 SCC-Learn
+  ("class LearnStore", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "learned-corner store"),
+  ("class CornerObserver", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py", "corner-dip observer"),
+  ("def fuse_learned_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "learned cap authority"),
+  ("scc_learn", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "SCC-Learn wired into plannerd"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

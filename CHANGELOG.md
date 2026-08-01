@@ -1,9 +1,9 @@
 FunnyPilot v3.5.0e (2026-08-01)
 ========================
 The onroad UI, rebuilt on one design system; advisory speed limits wired into
-SCC-M; the experimental-mode wheel button removed. NO SCHEMA AND NO COMPILED
-FILE IS TOUCHED -- everything here is Python and raylib, so nothing rebuilds on
-the device.
+SCC-M; SCC-Learn, a corner map the car builds by driving; the experimental-mode
+wheel button removed. NO SCHEMA AND NO COMPILED FILE IS TOUCHED -- everything
+here is Python and raylib, so nothing rebuilds on the device.
 
 1. SCC-M NOW READS POSTED ADVISORY SPEEDS
 ------------------------------------------------------------------------
@@ -102,7 +102,128 @@ the device.
   hero speed and the accel spine respectively; all three were left with zero
   importers.
 
-3. NOT CRASHING THE DEVICE
+3. SCC-LEARN: THE CORNER MAP THIS CAR BUILDS BY DRIVING
+------------------------------------------------------------------------
+SCC-M asks OSM how fast a bend can be taken and is wrong often enough that it
+needs a vision veto to be safe. But the car already knows the answer for any
+road it has driven: the speed it actually went through the bend. Record that,
+keyed by position AND heading, and after one pass a road has a corner map that
+owes nothing to OSM's geometry -- and unlike OSM it is derived from this car,
+this driver and this tyre set. On a commute it is strictly better information
+than the map. No cloud, no sync, no account: it is a file on this device.
+
+* feat: NEW `long_v2/scc_learn_store.py` -- persistence and the geometry index.
+  NEW `long_v2/scc_learn.py` -- the observer and the governor. They are separate
+  modules because the hard part (deciding what is worth remembering) has to be
+  testable without a car, and the persistence has to be testable without a
+  planner.
+
+WHAT IS WORTH REMEMBERING, which is the whole safety story.
+Recording "the car slowed down here" is easy and useless -- the car slows for
+traffic, lights, stop signs, junctions, zone changes and lead vehicles, and
+learning any of those builds a map that brakes at a green light forever. The
+observer commits only for a shape specific to a bend:
+
+    A LOCAL MINIMUM IN SPEED, FOLLOWED BY RECOVERY, WITH NOTHING ELSE
+    EXPLAINING IT.
+
+THE RECOVERY REQUIREMENT IS THE LOAD-BEARING PART, and it is the general lesson
+of this feature: a corner is transient -- you slow, you turn, you speed back
+up. A stop sign, a light and congestion all end in a stop or a long hold, so
+requiring the car to come back UP before committing rejects all three WITHOUT
+THE SYSTEM NEEDING TO KNOW THEY EXIST. Everything else is explicit exclusion,
+and each one names a thing that would otherwise be learned as a corner: a lead
+seen at any point, v_min below MIN_CORNER_V (a junction or a queue), the posted
+limit changing mid-dip (SLA owns that), SLA ramping or gas-gating, standstill,
+a dip longer than MAX_DIP_S (congestion) or shorter than MIN_DIP_S (noise), and
+GPS accuracy worse than MAX_GPS_ACC_M -- a record keyed on a position we are
+not sure of is WORSE than no record, because it caps the car where no bend is.
+
+* The record lands at the APEX (where v_min occurred), not where the dip began.
+  Braking is planned TO the corner, so a record at the entry would ask the next
+  pass to be at corner speed a hundred metres early.
+* It stores `v_min * LEARN_MARGIN`, not v_min. The observed minimum already
+  contains whatever margin the driver or SCC-V chose; capping AT it and then
+  observing again would compound the margin every visit until the car crawled.
+
+STORAGE, AND THE EVICTION RULE THAT WAS THE EXPLICIT REQUIREMENT.
+* Cell key is (lat_cell, lon_cell, heading_octant) at ~22 m. The octant is in
+  the KEY: a bend taken northbound and the same tarmac southbound are different
+  approaches with different entry points and different carryable speeds.
+* A coarse ~1.1 km index maps to the fine keys inside it, so a lookup probes 9
+  coarse cells instead of scanning 25,000 records. At 20 Hz that difference is
+  the whole feasibility of the feature.
+* MERGE ON WRITE (`MERGE_M` 30 m, `MERGE_BEARING_DEG` 45): a grid has edges and
+  a bend is as likely to sit on one as anywhere else. Without this, two visits
+  to the SAME corner landing either side of a boundary become two records with
+  one visit each -- which is not merely untidy, because VISIT COUNT IS WHAT
+  EVICTION KEEPS. A boundary corner on the commute would be filed as two
+  roads-driven-once and thrown away first. Found by a test, not by inspection.
+* EVICTION: over MAX_RECORDS the store is sorted by visit count FIRST and
+  last-seen second, and the tail is dropped -- the road you take to work every
+  morning outlives the road you drove once on holiday. Mutation-tested, because
+  sorting by recency instead looks identical in review and is exactly backwards.
+* PERSISTENCE IS AN APPEND-ONLY JOURNAL, COMPACTED AT STARTUP. plannerd is
+  `only_onroad` so it restarts every drive, which gives compaction a free
+  moment and means NO BACKGROUND THREAD IS EVER NEEDED. That is deliberate:
+  v3.4.5 shipped a startup task that shelled out to `git gc` and OOM-killed the
+  device, and the rule that came out of it (see the v3.4.6 post-mortem) is that
+  anything running beside a moving car must be bounded in MEMORY, not merely in
+  time. Appending a few short lines every FLUSH_S is bounded by construction; a
+  full rewrite happens once, before the car moves. Hitting MAX_JOURNAL_BYTES
+  mid-drive STOPS WRITING rather than compacting -- it costs one drive of
+  learning and never risks a multi-megabyte rewrite next to a moving car.
+  `MAX_JOURNAL_LINES` bounds the startup read explicitly rather than trusting
+  the byte cap to imply a bound.
+* `MIN_FREE_BYTES` (512 MB) sits above `deleter.py`'s floor, so this never
+  competes with drive logs for the last of the disk. Every operation is
+  best-effort: a full disk, a corrupt line, a truncated write or a read-only
+  filesystem all degrade to "no learned data", and losing the file entirely is
+  an acceptable outcome -- the feature simply relearns.
+* The estimate rises fast and falls slow (ALPHA_UP 0.5 / ALPHA_DOWN 0.2). A cap
+  can only ever SLOW the car, so learning to brake HARDER is the change that
+  deserves more evidence.
+
+TURNING THE MAP BACK INTO A CAP.
+* `SCCLearnV1` reuses SCC-M's exact envelope maths (`sqrt(v^2 + 2*a*d_eff)`,
+  arriving early by ARRIVAL_LEAD_T) so a learned corner and a mapped corner
+  produce the same SHAPE of slowdown and the governor's `min()` compares like
+  with like. Speed-domain only, like every other governor here: the MPC and the
+  shaper own the actual deceleration and it can never command an acceleration.
+* NEW `fuse_learned_target()` in scc_fusion.py, and it is deliberately NOT a
+  second call to `fuse_map_target`. THE VISION VETO EXISTS BECAUSE OSM'S CURVE
+  SPEEDS ARE COMPUTED FROM GEOMETRY BY SOMEONE ELSE. A learned point is not
+  computed at all -- it is a speed THIS CAR ACTUALLY WENT THROUGH THIS BEND,
+  after the observer above rejected everything that was not a bend. It is
+  self-corroborating in the exact sense the map is not, so demanding the model
+  also see the corner would throw away the one piece of evidence that is better
+  than the model's.
+* WHAT REPLACES THE VETO IS VISIT COUNT. `confidence_for()` gives 0.45 at one
+  sighting and 1.0 at three, and that scales how much of the requested cut
+  reaches the governor -- bounded by LEARN_SOLO_MAX_CUT (~20 mph) so a single
+  bad observation can never produce an arbitrary slowdown. Vision agreeing can
+  only ever RAISE that authority, never lower it (`max()`, mutation-tested --
+  assigning instead looks identical in review).
+* `nearby()` filters on AHEAD-NESS via a dot product, not a radius: without it
+  the bend you have just exited keeps braking you on the way out.
+* Reports as `sccMap` in `longitudinalPlanSource`. It IS a map, just one we
+  made, and the capnp enum has no room for a new member on this fork -- a
+  schema change forces a device rebuild (v3.4.1 post-mortem).
+
+* feat(ui): "LRN" pill in the status strip -- lit while a learned corner is
+  governing, otherwise showing how many corners are known. An empty store reads
+  as "nothing learned yet", not as a missing feature. Fed by a NEW
+  `/dev/shm/fp_learn` channel with the same staleness contract as fp_scc. A
+  SEPARATE FILE rather than two more fields on fp_scc, deliberately: the
+  minimap reader unpacks fp_scc positionally and its contract is pinned by
+  tests, and widening a working channel for an unrelated feature is how a
+  reader that indexes [4] starts reading a different quantity.
+* feat(SLA): new read-only `SpeedLimitAssist.busy` property (mid-ramp or
+  gas-gating). The observer refuses to learn a dip that a zone boundary
+  explains -- without it there would be a permanent corner cap at every
+  speed-limit sign on the commute.
+
+4. NOT CRASHING THE DEVICE
 ------------------------------------------------------------------------
 This was the highest-priority constraint and it shaped the architecture.
 `selfdrive/ui/ui.py` draws BOTH screens from one process, so a raise in an
@@ -139,17 +260,32 @@ loop, on a device whose settings screen is how you would flash your way out.
 
 TESTS
 ------------------------------------------------------------------------
-* 418 green, 0 failed. NEW `test_hud_imports.py` (15), `test_hud_logic.py`
-  (45), `test_scc_advisory.py` (25).
-* Seven guards MUTATION-TESTED fail-then-restore: advisory raising instead of
-  lowering the cap, an unbounded advisory cut, advisory overriding rather than
-  flooring corroboration, the scc_shm staleness check, safe_draw not disabling
-  a failed widget, the minimap's rotation with sin/cos swapped (which mirrors
-  every corner and looks plausible), and a halo that stops tracking distance.
+* 494 green, 0 failed. NEW `test_hud_imports.py` (15), `test_hud_logic.py`
+  (45), `test_scc_advisory.py` (25), `test_scc_learn.py` (72).
+* FIFTEEN guards MUTATION-TESTED fail-then-restore. From the advisory work:
+  advisory raising instead of lowering the cap, an unbounded advisory cut,
+  advisory overriding rather than flooring corroboration, the scc_shm staleness
+  check, safe_draw not disabling a failed widget, the minimap's rotation with
+  sin/cos swapped (which mirrors every corner and looks plausible), and a halo
+  that stops tracking distance. From SCC-Learn: eviction sorted by recency
+  instead of visit count, the estimate falling as fast as it rises, the
+  cell-edge merge removed, committing without requiring recovery (5 tests fail
+  -- this is the one that turns every red light into a corner), a lead no
+  longer poisoning a dip, one visit trusted like ten, corners behind us still
+  capping, corroboration overriding confidence instead of flooring it, and an
+  unbounded learned cut.
 * ruff clean across selfdrive/ sunnypilot/ system/ common/.
 * ON-DEVICE VERIFICATION REQUIRED: none of the drawing can be tested off-device
   (no GL context, no camera). The logic is unit-tested and the import path is
   guarded; the LOOK has to be judged on the car.
+* ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE (SCC-Learn): drive a known road
+  and watch the LRN count. If it climbs on a straight road, an exclusion is
+  leaking and the observer is the bug -- do NOT retune MIN_DROP_MS to hide it.
+  If a corner is learned but never caps on the second pass, the first suspects
+  are the ahead-ness dot product and the heading tolerance in `nearby()`, not
+  the confidence schedule. If it caps somewhere no corner is, read the flags on
+  that record: FLAG_DRIVER alone means a driver slowdown was learned and the
+  exclusion set needs another member.
 
 FunnyPilot v3.4.9 (2026-07-31)
 ========================

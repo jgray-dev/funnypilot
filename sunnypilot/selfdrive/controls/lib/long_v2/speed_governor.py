@@ -39,6 +39,7 @@ class SpeedGovernor:
     road_type: str,
     speed_limit_posted: float,
     fric: float,
+    v_scc_learn: float = 999.0,
   ) -> float:
     tuning = get_tuning()
 
@@ -61,6 +62,11 @@ class SpeedGovernor:
       "cruise": v_cruise_raw,
       "scc_map": v_scc_map,
       "scc_vision": v_scc_vision,
+      # v3.5.0 — the corner map this car built by driving (long_v2/scc_learn.py).
+      # A separate candidate rather than folded into scc_map because its
+      # authority comes from visit count, not from OSM, and the two must be
+      # able to disagree without one silently masking the other.
+      "scc_learn": v_scc_learn,
       "sla": v_sla,
       "road_cap": v_road_cap,
       "weather": self.v_weather_cap,

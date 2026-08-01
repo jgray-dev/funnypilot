@@ -417,6 +417,14 @@ class SpeedLimitAssist:
       return False
     return abs(self.v_cruise_target - self._clamp_set_speed(self.effective_speed_limit_target)) > RAMP_DISPLACED_TH
 
+  @property
+  def busy(self) -> bool:
+    """FunnyPilot v3.5.0 — True while SLA is the reason the car's speed is
+    changing (mid-ramp or gas-gating). Read-only; SCC-Learn uses it to refuse
+    to learn a speed dip that a zone boundary explains, which would otherwise
+    put a permanent corner cap at every speed-limit sign on the commute."""
+    return bool(self.is_active and (self.gas_gate_active or self._ramp_displaced))
+
   def _apply_driver_set_speed_change(self) -> None:
     """FunnyPilot v3.4.9 — a cruise adjustment DURING a ramp is a DELTA, not an
     absolute statement of the driver's offset for this zone.

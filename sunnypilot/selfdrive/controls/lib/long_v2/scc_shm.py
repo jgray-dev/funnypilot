@@ -43,6 +43,7 @@ import tempfile
 import time
 
 SHM_PATH = '/dev/shm/fp_scc'
+LEARN_SHM_PATH = '/dev/shm/fp_learn'
 
 # Writer is 20 Hz (DT_MDL). 1.0 s is deliberately looser than sla_shm's 0.5 s:
 # nothing here touches control, and a marker that blinks out on a single late
@@ -50,6 +51,7 @@ SHM_PATH = '/dev/shm/fp_scc'
 STALE_S = 1.0
 
 INACTIVE = (0.0, 0.0, 0.0, 0.0, False)
+LEARN_INACTIVE = (0, False, 0.0)
 
 
 def write_scc_shm(gov_lat: float, gov_lon: float, gov_v: float,
@@ -72,6 +74,52 @@ def write_scc_shm(gov_lat: float, gov_lon: float, gov_v: float,
       raise
   except Exception:
     pass
+
+
+def _atomic_write(path: str, payload: str) -> None:
+  fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.fp_shm')
+  try:
+    with os.fdopen(fd, 'w') as f:
+      f.write(payload)
+    os.replace(tmp, path)
+  except Exception:
+    try:
+      os.unlink(tmp)
+    except Exception:
+      pass
+
+
+def write_learn_shm(count: int, active: bool, confidence: float) -> None:
+  """SCC-Learn's state, for the onroad "LRN" pill. Diagnostic only.
+
+  A SEPARATE FILE rather than two more fields on fp_scc, deliberately: the
+  minimap reader unpacks fp_scc positionally and its staleness contract is
+  pinned by tests. Widening a working channel to carry an unrelated feature is
+  how a reader that indexes [4] starts reading a different quantity.
+  """
+  try:
+    _atomic_write(LEARN_SHM_PATH,
+                  f"{int(count)},{int(bool(active))},{float(confidence):.3f},{time.monotonic():.3f}")
+  except Exception:
+    pass
+
+
+def read_learn_shm() -> tuple[int, bool, float]:
+  """(learned_corner_count, governing_now, confidence). LEARN_INACTIVE on any doubt."""
+  try:
+    with open(LEARN_SHM_PATH) as f:
+      parts = f.read().strip().split(',')
+    if len(parts) < 4:
+      return LEARN_INACTIVE
+    age = time.monotonic() - float(parts[3])
+    if not -1.0 < age <= STALE_S:
+      return LEARN_INACTIVE
+    conf = float(parts[2])
+    if conf != conf:  # NaN
+      return LEARN_INACTIVE
+    return int(parts[0]), bool(int(parts[1])), min(max(conf, 0.0), 1.0)
+  except Exception:
+    return LEARN_INACTIVE
 
 
 def read_scc_shm() -> tuple[float, float, float, float, bool]:
