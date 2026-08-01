@@ -18,6 +18,62 @@ All versions must be separate branches: `funnypilot-X.Y.Z`
 In each new branch, modify the CHANGELOG.md file to correspond to what was last modified in the version of the branch.
 Additionally, edit CLAUDE.md Key Files section to describe what changes and logic were implemented in what files.
 
+## Device Recovery (learned the hard way, v3.5.1)
+
+**A manager crash does NOT take the device off the network.** `manager.py`
+catches the exception, stops the UI and shows a TextWindow — but systemd,
+NetworkManager and sshd keep running. So a device stuck on "Manager failed to
+start" is still a reachable Linux box. It will auto-join any wifi network
+already saved in NetworkManager, with no UI involved.
+
+**If you are away from a known network:** set a phone hotspot to the SAME SSID
+and password as one the device has already joined. NM matches on SSID+PSK, so
+it connects as if it were home. Android hotspots hand out `192.168.43.x`.
+
+**Authorizing a new SSH key without the UI.** `selfdrive/test/setup_device_ci.sh`
+reveals that `/etc/ssh/sshd_config` points `AuthorizedKeysFile` at
+`/data/params/d/GithubSshKeys` — a PLAIN FILE, read live per connection. So:
+
+```bash
+printf "\n%s\n" "ssh-ed25519 AAAA... comment" | sudo tee -a /data/params/d/GithubSshKeys
+```
+
+authorizes immediately, no sshd restart. THIS SIDESTEPS the trap in comma's own
+docs ("public keys are only fetched from your GitHub account once") — refreshing
+via the settings UI is impossible when the UI is what is broken. CAVEAT: any
+later `params.put("GithubSshKeys", ...)` from `ssh_key.py` (i.e. re-entering
+your GitHub username in settings) OVERWRITES the file and drops the appended
+key. Add the key to the GitHub account too if you want it permanent.
+
+**git fetch fails with `server certificate verification failed. CAfile: none`.**
+The certs are fine — AGNOS's git is linked against a libcurl with no compiled-in
+CA path, so nothing tells it where the trust store is. Fix, keeping verification
+ON:
+
+```bash
+git config --global http.sslCAInfo /etc/ssl/certs/ca-certificates.crt
+```
+
+(`http.sslCAPath /etc/ssl/certs` if that build wants the directory.) This lands
+in `/home/comma/.gitconfig` and may not survive an AGNOS OS update — re-run it
+before assuming a new bug. NEVER reach for `http.sslVerify=false` here: it is an
+unverified fetch of code that steers a car, and the offline options below get
+the same result with none of the exposure.
+
+**Unbricking with NO network at all.** You do not need git. Either hand-edit the
+offending file (a boot failure is nearly always a one-line import error, and the
+traceback names it), or check out a previous branch straight from local git
+objects — every branch you have ever flashed is still in `.git`:
+
+```bash
+cd /data/openpilot && git checkout funnypilot-3.5.0e && sudo reboot
+```
+
+**Serial console** is the guaranteed fallback and needs no network or keys, but
+needs a laptop: on the 3X it runs through the panda on the OBD-C port
+(`panda/tests/som_debug.sh`), login `comma` / `comma`. See
+`docs/how-to/connect-to-comma.md`.
+
 ## Deploying to Device
 
 ```bash
