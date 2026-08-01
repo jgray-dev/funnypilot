@@ -1,3 +1,69 @@
+FunnyPilot v3.5.3 (2026-08-01)
+========================
+Two comfort changes, both small, both off-device testable. Nothing else.
+
+1. THE ACCEL CEILING NO LONGER SURVIVES A DISENGAGEMENT
+------------------------------------------------------------------------
+A defect, not a tuning opinion. `prev_accel_clip` feeds a +/-0.05-per-frame
+rate limiter on the acceleration CEILING. That limiter exists to stop the
+ceiling stepping WHILE ENGAGED -- but the `reset_state` branch reset
+`v_desired_filter`, `a_desired`, the shaper and `lead_grace`, and never this.
+
+Across a disengagement there is no continuity worth preserving, so the stale
+value just throttles you on the way back in. The ceiling has to walk up at
+1.0 m/s^2 per second:
+
+  * disengage mid-corner, where turn limiting has pulled the ceiling to ~0.1
+  * or during an SLA gas gate, which pins it to coast accel -- NEGATIVE on a
+    downhill
+  * drive manually, re-engage on a straight
+  * and the car will not accelerate for one to two seconds
+
+Same input, different response depending on invisible history, which is the
+definition of unpredictable. It is also one of the open suspects the v3.4.8
+post-mortem left for the reported "~10 s coast".
+
+The reset can only ever WIDEN the ceiling on the first engaged frame, never
+narrow it, and it touches nothing while engaged.
+
+2. LIFTING OFF THE THROTTLE IS NO LONGER A BRAKE APPLY
+------------------------------------------------------------------------
+`jerk_down` interpolates on the demanded accel, and `np.interp` CLAMPS outside
+its breakpoints. With the old two-point table
+
+    JERK_DOWN_BP = [-3.5, -1.0] -> [12.0, 4.0]
+
+EVERY target above -1.0 got 4.0 m/s^3 -- including simply lifting off at +1.0
+with nothing wrong, which took the car from full throttle to zero in a quarter
+of a second. That is the most-felt harshness on an ordinary highway mile, and
+it was an artefact of the clamp rather than a decision.
+
+    JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0] -> [12.0, 4.0, 3.0, 2.5]
+
+THIS CANNOT WEAKEN BRAKING, and the reason is the interpolation variable: the
+lookup is on the DEMAND, not on the current output. The moment the planner asks
+for -2.0 the table returns ~9.5 on that very frame, whatever the shaper was
+doing before. The relaxed values are reachable only while the demand is mild.
+`test_a_hard_demand_is_unaffected_by_the_new_breakpoints` pins exactly that.
+
+TESTS
+------------------------------------------------------------------------
+* 525 green, 0 failed. NEW: monotonicity of the jerk table, throttle-lift vs
+  brake-apply, hard-demand-unaffected, and an AST guard that `prev_accel_clip`
+  is reset in the `reset_state` branch (asserted structurally because
+  longitudinal_planner imports the acados MPC and cannot be built off-device --
+  same technique as the cruise_ext single-writer and scc_learn no-syscall
+  guards).
+* Three guards MUTATION-TESTED: the reset reverted, the table returned to two
+  points, and a mis-ordered table that would make hard braking gentler than
+  light braking -- the one thing long_shaping promises it cannot do, and the
+  one that would look like a harmless tuning edit in review.
+* ON-ROAD VERIFICATION: (1) re-engage after a manual corner should now pull
+  away immediately rather than after a beat; (2) throttle lift-offs should feel
+  rounded. If braking feels AT ALL softer, that is not this change -- the
+  demand-side lookup makes it impossible -- and the next suspect is
+  COMFORT_BRAKE in long_mpc.py.
+
 FunnyPilot v3.5.2 (2026-08-01)
 ========================
 Minimap only. Everything else in v3.5.1 is byte-identical.

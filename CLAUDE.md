@@ -119,6 +119,33 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.3 Changes (based on funnypilot-3.5.2)
+
+Two comfort changes, nothing else.
+
+- `selfdrive/controls/lib/longitudinal_planner.py` — `prev_accel_clip` is now
+  RESET IN THE `reset_state` BRANCH. It feeds a +/-0.05/frame rate limiter on
+  the accel CEILING; that limiter is for continuity WHILE ENGAGED, and across a
+  disengagement there is none to preserve. Leaving it stale meant the ceiling
+  walked back up at 1.0 m/s^2 per second on re-engage: disengage mid-corner
+  (turn limiting has it at ~0.1) or during an SLA gas gate (pinned to coast
+  accel — NEGATIVE downhill), re-engage on a straight, and the car will not
+  accelerate for 1-2 s. Same input, different response depending on invisible
+  history. Can only WIDEN the ceiling on the first engaged frame, never narrow
+  it. One of the open suspects from the v3.4.8 "~10 s coast" post-mortem.
+- `selfdrive/controls/lib/long_shaping.py` — `JERK_DOWN_BP/V` extended into the
+  POSITIVE region: `[-3.5,-1.0] -> [12,4]` became `[-3.5,-1.0,0,1] ->
+  [12,4,3,2.5]`. `np.interp` CLAMPS, so every target above -1.0 previously got
+  brake-apply slew (4 m/s^3) — a plain throttle lift at +1.0 went to zero in a
+  quarter second. CANNOT WEAKEN BRAKING because the lookup is on the DEMAND,
+  not the current output: asking for -2.0 returns ~9.5 on that frame regardless
+  of history. KEEP `JERK_DOWN_V` MONOTONICALLY DECREASING — a mis-ordered value
+  makes hard braking gentler than light braking and looks like a harmless
+  tuning edit (`test_jerk_down_is_monotone`, mutation-tested).
+- TESTS: 525 green. The clip reset is pinned on the AST (the planner imports
+  the acados MPC and cannot be constructed off-device) with an anti-vacuous
+  check that the branch itself still exists.
+
 ### v3.5.2 Changes (based on funnypilot-3.5.1)
 
 Minimap only; the rest of 3.5.1 is byte-identical.

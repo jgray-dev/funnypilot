@@ -44,7 +44,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.2"
+EXPECTED_VERSION = "3.5.3"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -135,6 +135,9 @@ _CODE_MARKERS = [
   # v3.5.2
   ("def expected_speed_at", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tint vs expected speed"),
   ("def _draw_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ego marker"),
+  # v3.5.3
+  ("self.prev_accel_clip = list", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "accel clip reset on disengage"),
+  ("JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "gentle throttle release"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

@@ -185,6 +185,20 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
       self.shaper.reset(self.a_desired)
       self.lead_grace.reset()
+      # FunnyPilot v3.5.3 — RESET THE CLIP RATE LIMITER TOO.
+      # `prev_accel_clip` feeds a +/-0.05-per-frame limiter on the accel
+      # CEILING (see the clip below). That limiter exists to stop the ceiling
+      # stepping WHILE ENGAGED; across a disengagement there is no continuity
+      # worth preserving, and leaving the stale value in place means the
+      # ceiling has to walk back up at 1.0 m/s^2 per second on re-engage.
+      # Symptom: disengage mid-corner (turn limiting has pulled the ceiling to
+      # ~0.1) or during an SLA gas gate (which pins it to coast accel — NEGATIVE
+      # on a downhill), drive manually, re-engage on a straight, and the car
+      # will not accelerate for one to two seconds. Same input, different
+      # response depending on invisible history, which is the definition of
+      # unpredictable. This can only ever WIDEN the ceiling on the first engaged
+      # frame, never narrow it, and it touches nothing while engaged.
+      self.prev_accel_clip = list(accel_clip)
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))

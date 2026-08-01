@@ -54,6 +54,31 @@ class TestAccelJerkShaper:
     strong = AccelJerkShaper(DT, a_init=0.0).update(JERK_DOWN_BP[0])
     assert strong < mild < 0.0
 
+  def test_jerk_down_is_monotone(self):
+    """SAFETY INVARIANT, v3.5.3. The table must never allow a FIRMER braking
+    demand a GENTLER slew than a milder one. A single mis-ordered value would
+    make hard braking softer than light braking, which is the one thing this
+    module promises it cannot do — and it would look like a harmless tuning
+    edit in review."""
+    assert JERK_DOWN_BP == sorted(JERK_DOWN_BP), "breakpoints must ascend for np.interp"
+    assert JERK_DOWN_V == sorted(JERK_DOWN_V, reverse=True), \
+      "more negative demand must never get a lower jerk allowance"
+
+  def test_lifting_off_throttle_is_gentler_than_braking(self):
+    """v3.5.3. `np.interp` CLAMPS, so the old two-point table gave every target
+    above -1.0 the same 4 m/s^3 — a simple throttle lift got brake-apply slew
+    and dropped from full throttle to zero in a quarter second."""
+    lift = AccelJerkShaper(DT, a_init=1.0).update(0.8)
+    brake = AccelJerkShaper(DT, a_init=1.0).update(-1.0)
+    assert (1.0 - lift) < (1.0 - brake), "a mild lift must move less per frame than a brake apply"
+
+  def test_a_hard_demand_is_unaffected_by_the_new_breakpoints(self):
+    """The interpolation variable is the DEMAND, not the current output — so
+    extending the table upward cannot slow a brake application, whatever the
+    shaper was doing on the previous frame."""
+    from_throttle = AccelJerkShaper(DT, a_init=1.0)
+    assert abs(from_throttle.update(-3.5) - (1.0 - JERK_DOWN_V[0] * DT)) < EPS
+
   def test_fcw_bypass_is_immediate(self):
     s = AccelJerkShaper(DT, a_init=1.0)
     out = s.update(-4.0, bypass=True)
@@ -143,3 +168,60 @@ class TestLeadGrace:
     # new lead appears: loss timer resets, tracking restarts
     g.update(True, True, 12.0, 15.0, 30.0)
     assert g._lost_t == 0.0
+
+
+class TestAccelClipResetOnDisengage:
+  """FunnyPilot v3.5.3 — `prev_accel_clip` MUST be reset with the rest of the
+  planner state.
+
+  It feeds a +/-0.05-per-frame rate limiter on the accel CEILING. That limiter
+  is there to stop the ceiling stepping WHILE ENGAGED. Across a disengagement
+  there is no continuity worth preserving, and leaving the stale value behind
+  means the ceiling walks back up at 1.0 m/s^2 per second on re-engage:
+  disengage mid-corner (turn limiting has pulled it to ~0.1) or during an SLA
+  gas gate (which pins it to coast accel, NEGATIVE on a downhill), then
+  re-engage on a straight, and the car will not accelerate for one to two
+  seconds. Same input, different response depending on invisible history.
+
+  ASSERTED ON THE AST, because `longitudinal_planner` imports the acados MPC
+  and cannot be constructed off-device. Same technique as the single-writer
+  guard in test_cruise_ext_sla_ramp.py and the no-syscalls guard in
+  test_scc_learn.py: when the runtime is unreachable, the structure is what is
+  left to pin.
+  """
+
+  @staticmethod
+  def _reset_block():
+    import ast
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / 'longitudinal_planner.py').read_text()
+    for node in ast.walk(ast.parse(src)):
+      # the `if reset_state:` branch inside LongitudinalPlanner.update
+      if (isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+          and node.test.id == 'reset_state'):
+        return node
+    return None
+
+  def test_the_reset_branch_exists(self):
+    """Anti-vacuous: if the branch is ever renamed, every assertion below would
+    pass on an empty search rather than fail loudly."""
+    assert self._reset_block() is not None, "could not find the `if reset_state:` branch"
+
+  def test_prev_accel_clip_is_reset_with_the_rest_of_the_state(self):
+    import ast
+    block = self._reset_block()
+    assigned = {
+      ast.unparse(t) for stmt in ast.walk(block)
+      if isinstance(stmt, ast.Assign) for t in stmt.targets
+    }
+    calls = {
+      ast.unparse(n.func) for n in ast.walk(block) if isinstance(n, ast.Call)
+    }
+    # the state this branch has always reset, as a sanity anchor
+    assert 'self.a_desired' in assigned
+    assert 'self.shaper.reset' in calls
+    # ...and the one v3.5.3 added
+    assert 'self.prev_accel_clip' in assigned, (
+      "prev_accel_clip survives a disengagement and throttles the accel ceiling " +
+      "for ~1-2 s on re-engage; it must be reset here"
+    )

@@ -28,8 +28,23 @@ JERK_UP_DEFAULT = 1.8
 # Jerk toward less accel (throttle release / brake apply), m/s^3.
 # Interpolated on the DEMANDED accel so a strong braking request immediately
 # unlocks a high slew rate — the comfort cap only applies to mild demands.
-JERK_DOWN_BP = [-3.5, -1.0]
-JERK_DOWN_V = [12.0, 4.0]
+#
+# FunnyPilot v3.5.3 EXTENDED THE TABLE INTO THE POSITIVE REGION. `np.interp`
+# CLAMPS outside its breakpoints, so with the old two-point table EVERY target
+# above -1.0 got 4.0 m/s^3 — including simply lifting off the throttle at +1.0
+# with nothing wrong, which took the car from full throttle to zero in a
+# quarter of a second. That is the single most-felt harshness on an ordinary
+# highway mile, and it was an artefact of the clamp rather than a decision.
+#
+# THIS CANNOT WEAKEN BRAKING, and the reason is the interpolation variable: the
+# lookup is on the DEMAND, not on the current output. The moment the planner
+# asks for -2.0 the table returns ~9.5 on that very frame, whatever the shaper
+# was doing before. The relaxed values are reachable only while the demand
+# itself is mild. Keep the sequence MONOTONICALLY DECREASING — a later edit
+# that raises a value in the middle would make firmer braking gentler, which is
+# the one thing this module promises never to do (test_jerk_down_is_monotone).
+JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]
+JERK_DOWN_V = [12.0, 4.0, 3.0, 2.5]
 
 
 class AccelJerkShaper:
