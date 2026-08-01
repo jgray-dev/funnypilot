@@ -1,3 +1,156 @@
+FunnyPilot v3.5.0e (2026-08-01)
+========================
+The onroad UI, rebuilt on one design system; advisory speed limits wired into
+SCC-M; the experimental-mode wheel button removed. NO SCHEMA AND NO COMPILED
+FILE IS TOUCHED -- everything here is Python and raylib, so nothing rebuilds on
+the device.
+
+1. SCC-M NOW READS POSTED ADVISORY SPEEDS
+------------------------------------------------------------------------
+* feat(SCC-M): `MapAdvisoryLimit` / `NextMapAdvisoryLimit` (OSM
+  `maxspeed:advisory`) have been sitting in /dev/shm/params unread since mapd
+  shipped. They are a different KIND of signal from everything else SCC-M has:
+  `MapTargetVelocities` is geometry mapd COMPUTED, an advisory speed is one a
+  highway engineer SURVEYED AND SIGNED. That makes it the best available answer
+  to "is this corner real" -- the exact question the vision veto exists to ask.
+
+  Used in two bounded ways, and deliberately NOT as a target:
+    - AS A FLOOR ON THE CAP. Where geometry under-detects a bend the advisory
+      pulls the cap down, but only to `advisory * ADVISORY_MARGIN` (1.15 -- the
+      signs are conservative) and never more than ADVISORY_MAX_CUT (~20 mph)
+      below cruise. `min()` is the only operator it touches, so it can never
+      raise a cap geometry already set.
+    - AS CORROBORATION. `advisory_active` floors the map's authority in
+      scc_fusion at ADVISORY_CORROB_FLOOR. A surveyed advisory does not stop
+      being evidence because the model has not seen the bend yet. It is a
+      FLOOR, not an override: where vision already corroborates fully the
+      advisory changes nothing, and MAP_SOLO_MAX_CUT still bounds the result.
+
+  WHY NOT A TARGET: advisory tags are per-WAY, so a curvy road carries one for
+  its whole length. Obeying it literally would hold the car down through every
+  straight between the bends. Geometry still decides the SHAPE of the slowdown.
+
+* feat: NEW `long_v2/scc_shm.py`. plannerd publishes the governing point --
+  `argmin(v_allowed)`, the one point SCC-M is braking for -- plus how much of
+  its requested cut survived the fusion. The onroad minimap draws that instead
+  of re-deriving it: two copies of a selection rule drift the moment either is
+  tuned, and a debug readout that disagrees with the controller is worse than
+  none. Same /dev/shm pattern as sla_shm, same staleness contract (a wedged
+  plannerd reads as "no constraint", never as a stuck one).
+
+2. THE ONROAD UI
+------------------------------------------------------------------------
+* feat(ui): NEW `selfdrive/ui/sunnypilot/onroad/hud/` -- tokens, chrome,
+  speed_sign, route_map, stations. Every visual constant now lives in one
+  module instead of beside the code that draws it. Before this the screen had
+  eleven widgets and eleven visual languages (three corner radii, four
+  unrelated greens, plates on some elements and bare text on others).
+
+* feat(ui): STATE GLOW REPLACES THE SOLID BORDER. Engagement is now an inward
+  bloom from the frame edge -- 60% alpha at the border, linear to zero over
+  120 px, all four edges -- instead of a 30 px coloured ring. It reads in
+  peripheral vision and it can BREATHE, which is how driver override is now
+  communicated instead of by a banner.
+  THE VIGNETTE IS LOAD-BEARING, not decoration: a glow drawn onto a bright sky
+  washes out completely, which would make the indicator untrustworthy in
+  exactly the conditions where you most want it. A darkening pass is drawn
+  FIRST, deeper (220 px) and stronger (72%), so the glow always has a dark
+  ground. Order is the whole trick: vignette, glow, bands, content.
+
+* feat(ui): HORIZON BANDS. Chrome lives in a 350 px top scrim and a 138 px
+  bottom scrim -- derived from what the camera actually shows -- and the middle
+  third is never drawn into. Stations: set speed + sign column top-left, road
+  name / speed / status pills top-centre, route minimap top-right, accel spine
+  and long-state dot on the left edge, diagnostics along the bottom.
+  EVERY STATION RESERVES ITS SPACE whether or not it has content. That is not
+  cosmetic: the dev-UI rail computed `gap_width = (available - total) / gaps`
+  over a CONDITIONALLY built list, so the moment `liveDelay` dropped validity
+  every remaining metric slid sideways.
+
+* feat(ui): THE SPEED-LIMIT SIGN CARRIES EVERY SLA STATE WITH NO TEXT. One halo
+  around the sign: COLOUR says which way the limit is about to move (red lower,
+  green higher, cyan SLA-active-and-satisfied), WEIGHT says how close --
+  thickness and bloom grow continuously from a hairline at 400 m to a solid
+  ring at the boundary. The upcoming limit slides in beneath at 62% scale, so
+  "65 now, 45 soon" reads as two objects rather than a sentence. The MUTCD and
+  Vienna faces are unchanged; they are legally recognisable iconography and a
+  restyled speed-limit sign is a worse speed-limit sign.
+  The preActive arrow PNGs are replaced by a chevron drawn from two lines --
+  one less asset that can fail to load.
+
+* feat(ui): THE SCC-M ROUTE MINIMAP. `MapTargetVelocities` drawn ego-centric,
+  bearing-up, 300 m range, each segment tinted by how far BELOW THE POSTED
+  LIMIT the map wants you there -- so a 35 mph curve in a 35 zone stays neutral
+  and a 35 mph curve in a 55 zone glows. A ring marks the governing point:
+  solid = the fusion passed the cut through at full authority, hollow = the
+  corroboration is scaling it because the model has not seen the corner yet.
+  NO SIDE ROADS, and that is a finding rather than a shortfall: mapd publishes
+  exactly eleven params and none contain junctions or surrounding geometry.
+  Drawing them would have meant querying the offline OSM database on the UI
+  thread AND showing geometry the controller cannot see -- the opposite of a
+  debug tool. The map is one road, which is also why it stays minimal.
+
+* feat(ui): THE WHEEL BUTTON IS GONE. Tapping it toggled `ExperimentalMode`
+  mid-drive; the mode now comes solely from the offroad setting. Nothing about
+  how the car BEHAVES changed -- selfdrived has always read the param and
+  published `selfdriveState.experimentalMode`. An E2E pill in the status strip
+  keeps the mode visible, and the top-right slot it vacated is where the
+  minimap went.
+
+* chore(ui): DELETED `smart_cruise_control.py`, `speed_renderer.py` and
+  `rocket_fuel.py` (onroad). Their information moved into the status strip, the
+  hero speed and the accel spine respectively; all three were left with zero
+  importers.
+
+3. NOT CRASHING THE DEVICE
+------------------------------------------------------------------------
+This was the highest-priority constraint and it shaped the architecture.
+`selfdrive/ui/ui.py` draws BOTH screens from one process, so a raise in an
+onroad widget kills the UI, manager restarts it, and it dies again -- a boot
+loop, on a device whose settings screen is how you would flash your way out.
+
+* Every module in `hud/` imports only pyray, the stdlib, and modules already on
+  the UI's import path. Nothing touches the filesystem, /dev/shm or a texture
+  at import or in a constructor -- the minimap's Params handle is created
+  lazily on first onroad draw, because /dev/shm/params does not exist offroad.
+* `tokens.safe_draw` wraps every new widget. The first exception logs a
+  traceback and disables THAT WIDGET for the session. One broken readout costs
+  you the readout, never the screen. No retry, no re-enable: a widget raising
+  at 60 Hz would burn the frame budget the rest of the UI needs.
+* NEW `test_hud_imports.py` really imports every hud/ module with only the
+  graphics deps stubbed, AST-scans for capnp-in-`|`-union (the v3.4.0/v3.4.1
+  brick), and pins that nothing does IO at import. The capnp lookups that
+  remain are inside function bodies for the same reason.
+* NO NEW PARAMS. Registering one means editing `common/params_keys.h`, which is
+  C++ and would compile. The minimap is gated on SCC-M being enabled and the
+  accel spine on the existing RocketFuel toggle.
+* NO NEW ASSETS, NO SHADERS, NO SCHEMA CHANGES. Everything is drawn from
+  raylib primitives that already appear elsewhere in this repo, so every call
+  shape is one the device has executed before.
+
+* fix(ui): the minimap does NOT open a scissor region. AugmentedRoadView
+  already has one around the content rect and raylib's EndScissorMode DISABLES
+  the test rather than restoring an outer region -- nesting one would silently
+  un-clip every widget drawn after it on that frame. Out-of-box segments are
+  dropped instead.
+* The ego marker uses `draw_triangle_fan` with plain (x, y) tuples, matching
+  the proven call shape in onroad/model_renderer.py, and sidestepping
+  `draw_triangle`'s winding-order sensitivity (wrong order draws nothing).
+
+TESTS
+------------------------------------------------------------------------
+* 418 green, 0 failed. NEW `test_hud_imports.py` (15), `test_hud_logic.py`
+  (45), `test_scc_advisory.py` (25).
+* Seven guards MUTATION-TESTED fail-then-restore: advisory raising instead of
+  lowering the cap, an unbounded advisory cut, advisory overriding rather than
+  flooring corroboration, the scc_shm staleness check, safe_draw not disabling
+  a failed widget, the minimap's rotation with sin/cos swapped (which mirrors
+  every corner and looks plausible), and a halo that stops tracking distance.
+* ruff clean across selfdrive/ sunnypilot/ system/ common/.
+* ON-DEVICE VERIFICATION REQUIRED: none of the drawing can be tested off-device
+  (no GL context, no camera). The logic is unit-tested and the import path is
+  guarded; the LOOK has to be judged on the car.
+
 FunnyPilot v3.4.9 (2026-07-31)
 ========================
 Four requested changes -- more lateral interpolation without the old EMA's

@@ -23,6 +23,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import write_scc_shm
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -47,6 +48,7 @@ class LongitudinalPlannerSP:
     self._scc_map_v2 = SCCMapV2()
     self._speed_governor = SpeedGovernor()
     self._fric = 0.8
+    self._scc_map_authority = 0.0
 
   @property
   def mlsim(self) -> bool:
@@ -97,7 +99,15 @@ class LongitudinalPlannerSP:
     # threshold before the map may act on it. See long_v2/scc_fusion.py.
     v_scc_vision = self._scc_vision_v2.output_v_target
     v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active,
-                                v_cruise, self._scc_vision_v2.corroboration)
+                                v_cruise, self._scc_vision_v2.corroboration,
+                                self._scc_map_v2.advisory_active)
+    # v3.5.0: what fraction of the cut SCC-M asked for actually survived the
+    # fusion. 1.0 = passed through whole, 0.0 = vetoed. The onroad minimap draws
+    # this as a solid vs hollow marker; publishing it beats having the UI
+    # re-derive a selection rule that lives here.
+    asked = max(0.0, v_cruise - self._scc_map_v2.output_v_target)
+    got = max(0.0, v_cruise - v_scc_map) if v_scc_map < 999.0 else 0.0
+    self._scc_map_authority = min(1.0, got / asked) if asked > 0.1 else 0.0
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
     # Speed limit info for road cap logic
@@ -204,6 +214,12 @@ class LongitudinalPlannerSP:
     # NOTE (v3.4.3): the capnp change did NOT cause the v3.4.0 boot failure —
     # that was a `car.CarState | None` annotation in cruise_ext.py. See sla_shm.py.
     write_sla_shm(self.sla.v_cruise_target, self.sla.gas_gate_active)
+
+    # v3.5.0: SCC-M's governing point + how much authority it kept, for the
+    # onroad minimap. Diagnostic only — see long_v2/scc_shm.py.
+    write_scc_shm(self._scc_map_v2.gov_lat, self._scc_map_v2.gov_lon,
+                  self._scc_map_v2.output_v_target, self._scc_map_authority,
+                  self._scc_map_v2.advisory_active)
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

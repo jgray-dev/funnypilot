@@ -39,10 +39,12 @@ _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
+  "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py",
+  "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py",
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.4.9"
+EXPECTED_VERSION = "3.5.0e"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -111,6 +113,15 @@ _CODE_MARKERS = [
   ("v_cruise_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA publishes the ramp target"),
   ("def fuse_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "merged SCC arbitration"),
   ("corroboration", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py", "SCC-V corroboration signal"),
+  # v3.5.0
+  ("ADVISORY_MARGIN", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "advisory limits into SCC-M"),
+  ("ADVISORY_CORROB_FLOOR", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "advisory as corroboration"),
+  ("def write_scc_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "SCC governing-point channel"),
+  ("def safe_draw", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py", "onroad HUD blast shield"),
+  ("def draw_state_glow", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "state edge glow"),
+  ("class RouteMap", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "SCC-M route minimap"),
+  ("def halo_spec", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/speed_sign.py", "text-free SLA sign halo"),
+  ("HORIZON BANDS", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "horizon-band HUD layout"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

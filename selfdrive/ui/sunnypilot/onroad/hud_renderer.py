@@ -3,25 +3,98 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
+
+FunnyPilot v3.5.0 — onroad HUD, composed from one design system.
+
+LAYOUT: HORIZON BANDS. The camera image has three natural strata — sky, the
+road and traffic through the middle, the hood at the bottom. Chrome lives in
+the top and bottom bands and the middle third is never drawn into. Stations
+inside the bands:
+
+    top-left     set speed, then the speed-limit sign column
+    top-centre   road name, the hero speed, the status pill strip
+    top-right    the SCC-M route minimap
+    left edge    acceleration spine, longitudinal state dot
+    bottom       the diagnostics rail (dev UI), alerts
+
+EVERY STATION RESERVES ITS SPACE whether or not it currently has content, so
+nothing on this screen can move because something else appeared. That is the
+invariant; see hud/stations.py for the reflow bug it was written against.
+
+THE WHEEL BUTTON IS GONE (v3.5.0). Tapping it toggled `ExperimentalMode`
+mid-drive; the mode now comes solely from the offroad setting, which is the one
+place it can be changed deliberately. Nothing about how the car BEHAVES
+changed — selfdrived has always read the param and published
+`selfdriveState.experimentalMode`, and that is still what the planner acts on.
+The screen only lost a control, so an E2E pill in the status strip keeps the
+mode visible.
+
+SAFETY. This process draws the offroad screen too, so a raise here is a UI
+boot-loop and a device you cannot flash from. Every new widget goes through
+`tokens.safe_draw`, which disables a widget permanently on its first exception
+instead of taking the frame down. The pre-existing widgets kept below (alerts,
+driver monitoring, turn signals, torque bar, dev UI) are called exactly as they
+were, because they are proven and this is not the release to churn them.
 """
+import math
+
 import pyray as rl
 
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.road_name import RoadNameRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.rocket_fuel import RocketFuel
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.smart_cruise_control import SmartCruiseControlRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.sunnypilot.onroad.circular_alerts import CircularAlertsRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.speed_renderer import SpeedRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.long_status_dot import LongStatusDotRenderer
+from openpilot.selfdrive.ui.sunnypilot.onroad.long_status_dot import classify as classify_long
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome, stations
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud.speed_sign import SpeedSign
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud.route_map import RouteMap
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
-from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer, UI_CONFIG, FONT_SIZES, COLORS, CRUISE_DISABLED_CHAR
+from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
+from openpilot.sunnypilot.selfdrive.car.brake_light_shm import read_brake_light
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.sla_shm import read_sla_shm
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
+
+SpeedLimitAssistState = None  # resolved lazily; see _sla_states()
+
+# station geometry, in content-rect pixels (device is a fixed 2160x1080)
+X_GUTTER = 46
+Y_TOP = 40
+SET_X = X_GUTTER
+SIGN_X = X_GUTTER + stations.SET_W + 26
+MAP_W = 190
+MAP_H = 400
+SPEED_Y = 44
+ROADNAME_Y = 6
+STRIP_Y = 290
+SPINE_X = 14
+
+_STATE_COLORS = {
+  UIStatus.ENGAGED: T.ENGAGED,
+  UIStatus.DISENGAGED: T.DISENGAGED,
+  UIStatus.OVERRIDE: T.OVERRIDE,
+  UIStatus.LAT_ONLY: T.LAT_ONLY,
+  UIStatus.LONG_ONLY: T.LONG_ONLY,
+}
+
+
+def _sla_states():
+  """The SLA state enum, resolved on first use.
+
+  Deliberately NOT a module-level `custom.LongitudinalPlanSP...` constant: the
+  v3.4.2 outage was a capnp module object reaching an eagerly-evaluated
+  position, and keeping every capnp lookup inside a function body is the
+  cheapest way to guarantee this file can always be imported.
+  """
+  global SpeedLimitAssistState
+  if SpeedLimitAssistState is None:
+    from cereal import custom
+    SpeedLimitAssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
+  return SpeedLimitAssistState
 
 
 class HudRendererSP(HudRenderer):
@@ -29,20 +102,28 @@ class HudRendererSP(HudRenderer):
     super().__init__()
     self.developer_ui = DeveloperUiRenderer()
     self.road_name_renderer = RoadNameRenderer()
-    self.rocket_fuel = RocketFuel()
+    # kept purely as the speed-limit DATA parser; its own renderer is replaced
+    # by hud/speed_sign.py and is never called.
     self.speed_limit_renderer = SpeedLimitRenderer()
-    self.smart_cruise_control_renderer = SmartCruiseControlRenderer()
     self.turn_signal_controller = TurnSignalController()
     self.circular_alerts_renderer = CircularAlertsRenderer()
-    self.speed_renderer = SpeedRenderer()
-    self.long_status_dot = LongStatusDotRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
+
+    self._sign = SpeedSign()
+    self._route_map = RouteMap()
 
     self.pcm_cruise_speed: bool = True
     self.show_icbm_status: bool = False
     self.icbm_active_counter: int = 0
     self.speed_cluster: float = 0.0
     self.speed_conv: float = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
+
+    self._accel: float = 0.0
+    self._glow_phase: float = 0.0
+    self._long_state: str = 'gray'
+    self._pills: list = []
+
+  # ── state ───────────────────────────────────────────────────────────────
 
   def _update_state(self) -> None:
     if ui_state.sm.recv_frame["carState"] < ui_state.started_frame:
@@ -56,15 +137,71 @@ class HudRendererSP(HudRenderer):
     super()._update_state()
     self.road_name_renderer.update()
     self.speed_limit_renderer.update()
-    self.smart_cruise_control_renderer.update()
     self.turn_signal_controller.update()
     self.circular_alerts_renderer.update()
-    self.speed_renderer.update()
+
+    self._get_icbm_status()
+    T.safe_draw("hud_state", self._update_derived)
+
+  def _update_derived(self) -> None:
+    sm = ui_state.sm
+
+    # smoothed longitudinal accel for the spine (same filter the old rocket
+    # fuel bar used, so the feel of that readout is unchanged)
+    self._accel += (sm['carState'].aEgo - self._accel) / 5.0
+
+    gas_gating = False
+    try:
+      scc = sm['longitudinalPlanSP'].smartCruiseControl
+      gas_gating = bool(scc.vision.gasGating or scc.map.gasGating)
+    except Exception:
+      pass
+    sla_gate = False
+    if not gas_gating:
+      _, sla_gate = read_sla_shm()
+
+    self._long_state = classify_long(sm['carControl'].longActive,
+                                     sm['carOutput'].actuatorsOutput.accel,
+                                     gas_gating or sla_gate,
+                                     read_brake_light())
+
+    self._pills = self._build_pills(gas_gating, sla_gate)
+
+  def _build_pills(self, scc_gate: bool, sla_gate: bool) -> list:
+    """The status strip. A source that is not saying anything is simply absent —
+    the strip is centred and its height is reserved, so this cannot reflow the
+    rest of the screen."""
+    sm = ui_state.sm
+    pills: list = []
+    conv = self.speed_conv
+
+    try:
+      scc = sm['longitudinalPlanSP'].smartCruiseControl
+      for label, side in (("SCC", scc.vision), ("MAP", scc.map)):
+        if not side.enabled:
+          continue
+        if side.active and side.vTarget < 888.0:
+          pills.append(stations.Pill(f"{label} {round(side.vTarget * conv)}", T.LAT_ONLY, True))
+        else:
+          pills.append(stations.Pill(label, T.MUTED, False))
+    except Exception:
+      pass
+
+    if scc_gate or sla_gate:
+      pills.append(stations.Pill(tr("GAS GATE"), T.ATTENTION, True))
+
+    try:
+      if sm['selfdriveState'].experimentalMode:
+        pills.append(stations.Pill("E2E", T.LONG_ONLY, True))
+    except Exception:
+      pass
+
+    return pills
 
   def _get_icbm_status(self):
     if not self.pcm_cruise_speed and ui_state.sm['carControl'].enabled:
       if round(self.set_speed) != round(self.speed_cluster):
-        self.icbm_active_counter = 3 * gui_app.target_fps  # 3 seconds usually
+        self.icbm_active_counter = 3 * gui_app.target_fps
       elif self.icbm_active_counter > 0:
         self.icbm_active_counter -= 1
     else:
@@ -72,59 +209,40 @@ class HudRendererSP(HudRenderer):
 
     self.show_icbm_status = self.icbm_active_counter > 0
 
-  def _draw_set_speed(self, rect: rl.Rectangle) -> None:
-    self._get_icbm_status()
+  # ── chrome, called from AugmentedRoadView before the HUD ────────────────
 
-    set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
-    x = rect.x + 60 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
-    y = rect.y + 45
+  def state_color(self) -> rl.Color:
+    return _STATE_COLORS.get(ui_state.status, T.DISENGAGED)
 
-    set_speed_rect = rl.Rectangle(x, y, set_speed_width, UI_CONFIG.set_speed_height)
-    rl.draw_rectangle_rounded(set_speed_rect, 0.35, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_rectangle_rounded_lines_ex(set_speed_rect, 0.35, 10, 6, COLORS.BORDER_TRANSLUCENT)
+  def glow_intensity(self) -> float:
+    """Breathe while the driver is overriding. This is the channel that
+    replaces a text banner for 'I am not steering right now'."""
+    self._glow_phase = (self._glow_phase + 1.0 / max(gui_app.target_fps, 1)) % 8.0
+    if ui_state.status == UIStatus.OVERRIDE:
+      return 0.86 + 0.24 * (0.5 + 0.5 * math.sin(self._glow_phase * math.pi / 1.3))
+    return 1.0
 
-    max_color = COLORS.GREY
-    set_speed_color = COLORS.DARK_GREY
-    if self.is_cruise_set:
-      set_speed_color = COLORS.WHITE
-      if ui_state.status == UIStatus.ENGAGED:
-        max_color = COLORS.ENGAGED
-      elif ui_state.status == UIStatus.DISENGAGED:
-        max_color = COLORS.DISENGAGED
-      elif ui_state.status == UIStatus.OVERRIDE:
-        max_color = COLORS.OVERRIDE
+  # ── the wheel button is gone; nothing in the HUD is tappable now ─────────
 
-    max_str_size = 60 if self.show_icbm_status else 40
-    max_str_y = 15 if self.show_icbm_status else 27
+  def user_interacting(self) -> bool:
+    return False
 
-    max_text = str(round(self.speed_cluster)) if self.show_icbm_status else tr("MAX")
-    max_text_width = measure_text_cached(self._font_semi_bold, max_text, max_str_size).x
-    rl.draw_text_ex(
-      self._font_semi_bold,
-      max_text,
-      rl.Vector2(x + (set_speed_width - max_text_width) / 2, y + max_str_y),
-      max_str_size,
-      0,
-      max_color,
-    )
-
-    set_speed_text = CRUISE_DISABLED_CHAR if not self.is_cruise_set else str(round(self.set_speed))
-    speed_text_width = measure_text_cached(self._font_bold, set_speed_text, FONT_SIZES.set_speed).x
-    rl.draw_text_ex(
-      self._font_bold,
-      set_speed_text,
-      rl.Vector2(x + (set_speed_width - speed_text_width) / 2, y + 77),
-      FONT_SIZES.set_speed,
-      0,
-      set_speed_color,
-    )
-
-  def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    self.speed_renderer.render(rect)
+  # ── render ──────────────────────────────────────────────────────────────
 
   def _render(self, rect: rl.Rectangle) -> None:
-    super()._render(rect)
+    # NOTE: HudRenderer._render is deliberately NOT called. It draws the old
+    # header gradient, the boxed set speed, the centred speed and the wheel
+    # button — all replaced below. Its _update_state IS still used.
+    T.safe_draw("bands", chrome.draw_bands, rect)
+    T.safe_draw("speed", self._draw_centre, rect)
+    T.safe_draw("set_speed", self._draw_set_speed, rect)
+    T.safe_draw("sign", self._draw_sign, rect)
+    T.safe_draw("route_map", self._draw_route_map, rect)
+    T.safe_draw("strip", stations.draw_status_strip,
+                rect.x + rect.width / 2, rect.y + STRIP_Y, self._pills)
+    T.safe_draw("vitals", self._draw_vitals, rect)
 
+    # ── pre-existing widgets, untouched ───────────────────────────────────
     if ui_state.torque_bar and ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
       torque_rect = rect
       if ui_state.developer_ui in (DeveloperUiRenderer.DEV_UI_BOTTOM, DeveloperUiRenderer.DEV_UI_BOTH):
@@ -132,10 +250,59 @@ class HudRendererSP(HudRenderer):
       self._torque_bar.render(torque_rect)
 
     self.developer_ui.render(rect)
-    self.road_name_renderer.render(rect)
-    self.speed_limit_renderer.render(rect)
-    self.smart_cruise_control_renderer.render(rect)
     self.turn_signal_controller.render(rect)
     self.circular_alerts_renderer.render(rect)
-    self.rocket_fuel.render(rect, ui_state.sm)
-    self.long_status_dot.render(rect)
+
+  # ── stations ────────────────────────────────────────────────────────────
+
+  def _draw_centre(self, rect: rl.Rectangle) -> None:
+    cx = rect.x + rect.width / 2
+    stations.draw_road_name(cx, rect.y + ROADNAME_Y,
+                            self.road_name_renderer.road_name if ui_state.road_name_toggle else "")
+    if not ui_state.hide_v_ego_ui:
+      unit = tr("km/h") if ui_state.is_metric else tr("mph")
+      stations.draw_speed(cx, rect.y + SPEED_Y, self.speed, unit)
+
+  def _draw_set_speed(self, rect: rl.Rectangle) -> None:
+    if not self.is_cruise_available:
+      return
+    stations.draw_set_speed(rect.x + SET_X, rect.y + Y_TOP, self.set_speed, self.is_cruise_set,
+                            self.speed_cluster if self.show_icbm_status else None)
+
+  def _draw_sign(self, rect: rl.Rectangle) -> None:
+    slr = self.speed_limit_renderer
+    from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
+    if ui_state.speed_limit_mode == Mode.off:
+      return
+
+    states = _sla_states()
+    active = slr.speed_limit_assist_state in (states.active, states.adapting)
+    pre = slr.speed_limit_assist_state == states.preActive
+
+    ahead = slr.speed_limit_ahead if slr.speed_limit_ahead_valid else 0.0
+    limit = slr.speed_limit_final_last
+    overspeed = bool(limit > 0 and round(limit) < round(slr.speed))
+
+    self._sign.render(rect.x + SIGN_X, rect.y + Y_TOP,
+                      limit=limit, next_limit=ahead, dist_m=slr.speed_limit_ahead_dist,
+                      sla_active=active, pre_active=pre,
+                      offset_ratio=slr.sla_dynamic_offset, metric=ui_state.is_metric,
+                      overspeed=overspeed, dt=1.0 / max(gui_app.target_fps, 1))
+
+  def _draw_route_map(self, rect: rl.Rectangle) -> None:
+    """Drawn whenever SCC-M is enabled — the feature it visualises. The slot is
+    reserved regardless, so turning the feature on never shifts anything."""
+    try:
+      if not ui_state.sm['longitudinalPlanSP'].smartCruiseControl.map.enabled:
+        return
+    except Exception:
+      return
+    x = rect.x + rect.width - MAP_W - X_GUTTER
+    self._route_map.render(rl.Rectangle(x, rect.y + Y_TOP, MAP_W, MAP_H))
+
+  def _draw_vitals(self, rect: rl.Rectangle) -> None:
+    if ui_state.rocket_fuel:
+      stations.draw_accel_spine(rect.x + SPINE_X, rect.y + rect.height / 2, self._accel)
+    stations.draw_long_dot(rect.x + SPINE_X - 4,
+                           rect.y + rect.height - 150 - DeveloperUiRenderer.get_bottom_dev_ui_offset(),
+                           self._long_state)

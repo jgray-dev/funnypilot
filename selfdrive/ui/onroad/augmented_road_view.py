@@ -18,6 +18,7 @@ if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.onroad.augmented_road_view import BORDER_COLORS_SP, AugmentedRoadViewSP
   from openpilot.selfdrive.ui.sunnypilot.onroad.driver_state import DriverStateRendererSP as DriverStateRenderer
   from openpilot.selfdrive.ui.sunnypilot.onroad.hud_renderer import HudRendererSP as HudRenderer
+  from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome
   from openpilot.selfdrive.ui.sunnypilot.ui_state import OnroadTimerStatus
 
 OpState = log.SelfdriveState.OpenpilotState
@@ -94,6 +95,11 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
+    # FunnyPilot v3.5.0: edge treatment sits between the model and the HUD —
+    # ORDER IS LOAD-BEARING. The vignette darkens the frame edges first so the
+    # state glow always has a dark ground and cannot wash out against a bright
+    # sky; both go under the HUD so no readout is dimmed by them.
+    self._draw_edge_treatment()
     self._hud_renderer.render(self._content_rect)
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
@@ -120,8 +126,30 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # We only call click callback on press if not interacting with HUD
     pass
 
+  def _draw_edge_treatment(self):
+    """FunnyPilot v3.5.0: vignette + state glow, replacing the solid ring.
+
+    Guarded end to end. This process also draws the offroad screen, so an
+    exception escaping here would boot-loop the UI and leave a device with no
+    way to reach settings — the chrome is not worth that, so it silently
+    degrades to 'no glow' instead.
+    """
+    if not gui_app.sunnypilot_ui():
+      return
+    try:
+      chrome.draw_vignette(self._content_rect)
+      color = self._hud_renderer.state_color()
+      chrome.draw_state_glow(self._content_rect, color, self._hud_renderer.glow_intensity())
+    except Exception:
+      pass
+
   def _draw_border(self, rect: rl.Rectangle):
     rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)
+    if gui_app.sunnypilot_ui():
+      # v3.5.0: the coloured ring is gone — engagement state is the edge glow
+      # drawn inside the content area (see _draw_edge_treatment). The black
+      # frame stays: it masks the camera against the bezel.
+      return
     border_roundness = 0.12
     border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
     border_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,

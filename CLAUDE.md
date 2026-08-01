@@ -51,6 +51,103 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.0e Changes (based on funnypilot-3.4.9e)
+
+Onroad UI rewritten on one design system; advisory limits into SCC-M; the
+experimental-mode wheel button removed. ZERO schema and ZERO compiled files
+touched — this branch cannot trigger a device rebuild.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — reads
+  `MapAdvisoryLimit` / `NextMapAdvisoryLimit`, unread since mapd shipped. THE
+  DISTINCTION THAT JUSTIFIES IT: `MapTargetVelocities` is geometry mapd
+  COMPUTED; an advisory limit is a speed an engineer SURVEYED AND SIGNED, i.e.
+  the best available answer to "is this corner real" — the exact question the
+  vision veto asks. Used ONLY as (1) a floor on the cap, bounded by
+  `ADVISORY_MARGIN` 1.15 and `ADVISORY_MAX_CUT` ~20 mph, `min()` only so it can
+  never raise a geometry cap; and (2) corroboration. NOT a target: advisory
+  tags are per-WAY, so obeying one literally holds the car down through every
+  straight between a curvy road's bends. `_advisory_cap` returns CAP_INACTIVE
+  on any doubt, making every consumer a no-op. Also records `gov_lat/gov_lon`,
+  the point `argmin(v_allowed)` chose.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` —
+  `ADVISORY_CORROB_FLOOR = 0.6`. GENERALIZED: **a confirmation gate should
+  accept independent evidence, not only the one sensor it was written around.**
+  It is a FLOOR (`max(c, FLOOR)`), never an override — where vision already
+  corroborates fully the advisory changes nothing, and `MAP_SOLO_MAX_CUT` still
+  bounds the result. A test pins that distinction because assigning instead of
+  max()-ing looks identical in review.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py` — NEW. plannerd
+  publishes the governing point + how much of its cut survived the fusion. The
+  UI draws that rather than re-deriving `argmin`: **two copies of a selection
+  rule drift the moment either is tuned, and a debug readout that disagrees
+  with the controller is worse than no readout.** Same /dev/shm pattern and
+  staleness contract as sla_shm (wedged publisher reads as "no constraint").
+- `selfdrive/ui/sunnypilot/onroad/hud/` — NEW package: `tokens.py` (every
+  visual constant + `safe_draw`), `chrome.py` (vignette, state glow, bands),
+  `speed_sign.py`, `route_map.py`, `stations.py`.
+  * STATE GLOW replaces the solid ring: 60% at the frame edge, linear to zero
+    over 120 px, four gradient rects. THE VIGNETTE UNDER IT IS LOAD-BEARING —
+    a glow on a bright sky washes out completely, which would make the
+    indicator useless in exactly the conditions you want it. Order is the
+    trick: vignette (220 px, 72%), glow, bands, content.
+  * HORIZON BANDS: 350 px top scrim, 138 px bottom, middle third never drawn
+    into. EVERY STATION RESERVES ITS SPACE — the dev rail's
+    `gap_width = (available - total)/gaps` over a conditionally built list
+    meant one dropped `liveDelay` slid every metric sideways. Nothing reflows.
+  * THE SIGN CARRIES EVERY SLA STATE WITH NO TEXT: halo colour = direction the
+    limit is moving, halo thickness/bloom = how close (hairline at 400 m ->
+    solid ring at the boundary). `halo_spec()` is pure and unit-tested. MUTCD
+    and Vienna faces UNCHANGED — legally recognisable iconography.
+  * ROUTE MINIMAP: `MapTargetVelocities` ego-centric, tinted by
+    `posted_limit - map_target_velocity` (neutral -> amber -> red across
+    3..25 mph under). NO SIDE ROADS AND THAT IS A FINDING: mapd publishes 11
+    params and none contain junctions. Drawing more would show geometry the
+    controller cannot see.
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — REWRITTEN. Does NOT call
+  `HudRenderer._render` (the base still owns `_update_state`). WHEEL BUTTON
+  GONE: experimental mode comes solely from the offroad setting; behaviour is
+  unchanged because selfdrived always published it. E2E pill keeps it visible.
+- `selfdrive/ui/onroad/augmented_road_view.py` — `_draw_edge_treatment()`
+  between the model and the HUD; `_draw_border` skips the coloured ring under
+  sunnypilot UI.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` —
+  `RIGHT_TOP_OFFSET`/`RIGHT_PITCH` so the right column starts below the minimap.
+- DELETED (zero importers after the rewrite): onroad `smart_cruise_control.py`,
+  `speed_renderer.py`, `rocket_fuel.py`.
+
+NOT-CRASHING-THE-DEVICE RULES ESTABLISHED HERE — read before touching any
+onroad UI file. `selfdrive/ui/ui.py` draws BOTH screens, so a raise onroad
+kills the UI, manager restarts it, it dies again = boot loop on a device whose
+settings screen is how you would flash out of it.
+  * `tokens.safe_draw` wraps every new widget: first exception logs and
+    disables THAT widget for the session. No retry, no re-enable — a widget
+    raising at 60 Hz burns the frame budget the rest of the UI needs.
+  * Nothing in `hud/` may do IO at import or in a constructor. RouteMap's
+    Params handle is lazy because /dev/shm/params does not exist offroad.
+    `test_hud_imports.py` pins this on the AST.
+  * NO NEW PARAMS EVER without checking: registering one edits
+    `common/params_keys.h`, which is C++ and compiles.
+  * NO new assets, no shaders, no schema changes. Every raylib call shape used
+    is one that already appears elsewhere in this repo.
+  * DO NOT nest `begin_scissor_mode` inside AugmentedRoadView's. raylib's
+    `EndScissorMode` DISABLES the test, it does not restore an outer region —
+    nesting silently un-clips every widget drawn after it that frame. The
+    minimap drops out-of-box segments instead.
+  * `draw_triangle_fan` takes plain (x, y) tuples here (see
+    onroad/model_renderer.py). Prefer it to `draw_triangle`, which is
+    winding-order sensitive and silently draws nothing when wrong.
+- TESTS: **418 green, 0 failed.** NEW `test_hud_imports.py` (15),
+  `test_hud_logic.py` (45), `test_scc_advisory.py` (25). Seven guards
+  MUTATION-TESTED: advisory raising instead of lowering, unbounded advisory
+  cut, advisory overriding rather than flooring corroboration, scc_shm
+  staleness, safe_draw not disabling, the minimap rotation with sin/cos swapped
+  (mirrors every corner and looks plausible), a halo that stops tracking
+  distance.
+- ON-DEVICE VERIFICATION REQUIRED: no drawing can be tested off-device (no GL
+  context, no camera). Logic is unit-tested and the import path is guarded; the
+  LOOK has to be judged on the car. If a widget vanishes on-road, grep the log
+  for "onroad hud widget ... disabled" — that names the failure exactly.
+
 ### v3.4.9e Changes (based on funnypilot-3.4.8)
 
 Four requested behaviour changes plus a dead-code sweep. Read the KnotFilter

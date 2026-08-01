@@ -17,6 +17,12 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
+# v3.5.0 right-column geometry. RIGHT_TOP_OFFSET clears the route minimap
+# (Y_TOP + MAP_H in hud_renderer.py, plus a gutter); RIGHT_PITCH is sized so
+# the five elements still fit above the bottom rail on a 1020 px content area.
+RIGHT_TOP_OFFSET = 470
+RIGHT_PITCH = 104
+
 
 class DeveloperUiRenderer(Widget):
   DEV_UI_OFF = 0
@@ -104,13 +110,16 @@ class DeveloperUiRenderer(Widget):
 
     elements.append(self.actual_lat_accel_elem.update(sm, ui_state.is_metric))
 
-    current_y = y
+    # FunnyPilot v3.5.0: the right column starts BELOW the route minimap, which
+    # now owns the top-right station (the old wheel button's slot). The offset
+    # and pitch are constants rather than magic numbers inline so the two
+    # widgets' geometry can be reasoned about together — an overlap here would
+    # be invisible in code review and obvious on the road.
+    current_y = y + RIGHT_TOP_OFFSET
     for element in elements:
       current_y += self._draw_right_dev_ui_element(x, current_y, element)
 
   def _draw_right_dev_ui_element(self, x: int, y: int, element: UiElement) -> int:
-    x += 0
-    y += 230
     container_width = 184
     label_size = 28
     value_size = 60
@@ -132,7 +141,7 @@ class DeveloperUiRenderer(Widget):
 
       rl.draw_text_pro(self._font_bold, element.unit, rl.Vector2(units_x, units_y), rl.Vector2(0, 0), -90.0, unit_size, 0, rl.WHITE)
 
-    return 130
+    return RIGHT_PITCH
 
   def _draw_bottom_dev_ui(self, rect: rl.Rectangle) -> None:
     sm = ui_state.sm

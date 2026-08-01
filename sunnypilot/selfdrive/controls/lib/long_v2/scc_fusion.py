@@ -51,15 +51,24 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_IN
 MAP_SOLO_MAX_CUT = 6.7   # m/s (~15 mph) — ceiling on a partially-corroborated cut
 MAP_SOLO_MIN_CUT = 0.5   # m/s — below this the map is not saying anything useful
 
+# FunnyPilot v3.5.0 — a POSTED ADVISORY SPEED is corroboration in its own right.
+# The whole reason vision gets a veto is that OSM curve speeds are computed and
+# therefore wrong sometimes; an advisory limit is not computed, it is surveyed
+# and signed. The model not having seen the bend yet does not make the sign
+# fake, so an advisory floors the map's authority rather than replacing it —
+# MAP_SOLO_MAX_CUT still bounds the result exactly as before.
+ADVISORY_CORROB_FLOOR = 0.6
+
 
 def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool,
-                    vision_corroboration: float) -> float:
+                    vision_corroboration: float, advisory_active: bool = False) -> float:
   """Return the map's cap as the governor should see it.
 
   map_v_target: SCC-M's smoothed cap (CAP_INACTIVE when it has nothing to say)
   v_cruise: the cruise speed the cut is measured against
   vision_is_active: SCC-V has independently latched a cap
   vision_corroboration: [0, 1], how much lateral action the model predicts
+  advisory_active: a posted advisory speed agrees there is something here
   """
   if not (map_v_target < CAP_INACTIVE):
     return CAP_INACTIVE
@@ -68,6 +77,8 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
     return map_v_target
 
   c = min(max(float(vision_corroboration), 0.0), 1.0)
+  if advisory_active:
+    c = max(c, ADVISORY_CORROB_FLOOR)
   if c <= 0.0:
     return CAP_INACTIVE
 

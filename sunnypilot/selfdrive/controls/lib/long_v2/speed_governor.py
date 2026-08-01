@@ -9,7 +9,7 @@ _V_CRUISE_MAX_MPS = 58.1  # ~130 mph
 
 
 def gate_map_target(map_v_target: float, vision_is_active: bool, v_cruise: float = 0.0,
-                    vision_corroboration: float = 0.0) -> float:
+                    vision_corroboration: float = 0.0, advisory_active: bool = False) -> float:
   """SCC-M's cap as the governor should see it.
 
   v3.3.8 made this a binary veto: the map bound only while SCC-V was ACTIVE.
@@ -20,7 +20,7 @@ def gate_map_target(map_v_target: float, vision_is_active: bool, v_cruise: float
   See scc_fusion.py for the full rationale; this is a thin alias kept so the
   governor's import site and the older call shape both still work.
   """
-  return fuse_map_target(map_v_target, v_cruise, vision_is_active, vision_corroboration)
+  return fuse_map_target(map_v_target, v_cruise, vision_is_active, vision_corroboration, advisory_active)
 
 
 class SpeedGovernor:
