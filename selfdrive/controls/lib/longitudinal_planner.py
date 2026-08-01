@@ -23,7 +23,6 @@ priority order:
      (long_shaping.LeadGrace): the cap is floored at v_ego, so it can hold
      the car back after a lead drops but can never brake it.
 """
-import math
 import numpy as np
 
 import cereal.messaging as messaging
@@ -38,6 +37,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace
+from openpilot.selfdrive.controls.lib.turn_limit import limit_accel_in_turns, predicted_lat_accel
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -64,9 +64,6 @@ JERK_UP_STANDARD = 1.8
 JERK_UP_RELAXED = 1.4
 
 # Lookup table for turns
-_A_TOTAL_MAX_V = [1.7, 3.2]
-_A_TOTAL_MAX_BP = [20., 40.]
-
 def get_max_accel(v_ego):
   return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
 
@@ -79,20 +76,6 @@ def get_jerk_up(personality):
   elif personality == log.LongitudinalPersonality.relaxed:
     return JERK_UP_RELAXED
   return JERK_UP_STANDARD
-
-def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
-  """
-  This function returns a limited long acceleration allowed, depending on the existing lateral acceleration
-  this should avoid accelerating when losing the target in turns
-  """
-  # FIXME: This function to calculate lateral accel is incorrect and should use the VehicleModel
-  # The lookup table for turns should also be updated if we do this
-  a_total_max = np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V)
-  a_y = v_ego ** 2 * angle_steers * CV.DEG_TO_RAD / (CP.steerRatio * CP.wheelbase)
-  a_x_allowed = math.sqrt(max(a_total_max ** 2 - a_y ** 2, 0.))
-
-  return [a_target[0], min(a_target[1], a_x_allowed)]
-
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL):
@@ -177,7 +160,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
     steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
-    accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
+    # v3.5.4: the model's planned curvature makes the turn limit anticipatory.
+    # Total (degrades to exactly the pre-v3.5.4 behaviour on any bad data).
+    a_y_pred = predicted_lat_accel(sm['modelV2'].orientationRate.z,
+                                   sm['modelV2'].velocity.x, v_ego)
+    accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip,
+                                      self.CP, a_y_pred)
 
     if reset_state:
       self.v_desired_filter.x = v_ego

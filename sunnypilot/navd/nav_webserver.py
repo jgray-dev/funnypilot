@@ -37,6 +37,7 @@ _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/eps_limit.py",
   "/data/openpilot/selfdrive/controls/lib/bump_damper.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
+  "/data/openpilot/selfdrive/controls/lib/turn_limit.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
   "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py",
@@ -44,7 +45,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.3"
+EXPECTED_VERSION = "3.5.4"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -138,6 +139,10 @@ _CODE_MARKERS = [
   # v3.5.3
   ("self.prev_accel_clip = list", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "accel clip reset on disengage"),
   ("JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "gentle throttle release"),
+  # v3.5.4
+  ("def predicted_lat_accel", "/data/openpilot/selfdrive/controls/lib/turn_limit.py", "anticipatory turn limiting"),
+  ("def starting_accel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "scheduled creep launch"),
+  ("def stopping_decel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "tapered stop settle"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

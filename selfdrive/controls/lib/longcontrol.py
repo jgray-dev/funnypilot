@@ -13,6 +13,40 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 # kick, without the head-snap of a step command.
 STARTING_ACCEL_RATE = 6.0
 
+# FunnyPilot v3.5.4 — the starting ramp is now SCHEDULED ON THE ACCEL ITSELF,
+# not constant. The ramp does two completely different jobs back to back:
+#
+#   while output is NEGATIVE it is RELEASING THE BRAKE. That must stay brisk;
+#   slowing it is a car that sits at a green light.
+#   once output is POSITIVE it is APPLYING LAUNCH TORQUE. That is where the
+#   head-snap lives, and it is the half worth softening.
+#
+# Interpolating on the current accel rather than switching at zero keeps the
+# rate itself continuous, so there is no kink where the two jobs meet.
+STARTING_CREEP_RATE = 2.5      # m/s^3, once actually pulling away
+STARTING_RATE_BP = [-0.5, 0.5]  # m/s^2 of current output accel
+
+# The stopping ramp's rate is likewise tapered WHILE STILL ROLLING. It walks
+# accel down toward CP.stopAccel after the plan has decided to stop; at full
+# rate that last bite of brake pressure arrives while the car is still moving
+# and is exactly the nod you feel at the end of a stop. Below STOP_TAPER_V the
+# full rate is restored so the brake hold is always secured firmly.
+# THIS CANNOT MAKE THE CAR STOP LATER THAN COMMANDED: the ramp starts from
+# `last_output_accel`, which is already whatever the planner asked for, and
+# only ever adds MORE braking on top.
+STOP_TAPER_V = [0.5, 1.5]      # m/s
+STOP_TAPER_SCALE = [1.0, 0.35]  # fraction of CP.stoppingDecelRate
+
+
+def starting_accel_rate(a_now: float) -> float:
+  """Slew rate for the starting state, m/s^3. See STARTING_RATE_BP."""
+  return float(np.interp(a_now, STARTING_RATE_BP, [STARTING_ACCEL_RATE, STARTING_CREEP_RATE]))
+
+
+def stopping_decel_rate(base_rate: float, v_ego: float) -> float:
+  """Slew rate for the stopping state, m/s^3. See STOP_TAPER_V."""
+  return float(base_rate * np.interp(v_ego, STOP_TAPER_V, STOP_TAPER_SCALE))
+
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
 
@@ -83,12 +117,16 @@ class LongControl:
       output_accel = self.last_output_accel
       if output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
-        output_accel -= self.CP.stoppingDecelRate * DT_CTRL
+        # v3.5.4: tapered while still rolling, full rate once nearly stopped
+        output_accel -= stopping_decel_rate(self.CP.stoppingDecelRate, CS.vEgo) * DT_CTRL
       self.reset()
 
     elif self.long_control_state == LongCtrlState.starting:
-      # Jerk-limited ramp toward startAccel instead of a step
-      output_accel = min(self.last_output_accel + STARTING_ACCEL_RATE * DT_CTRL, self.CP.startAccel)
+      # Jerk-limited ramp toward startAccel instead of a step. v3.5.4 schedules
+      # the rate on the accel itself: brisk while releasing the brake, gentle
+      # once actually pulling away.
+      rate = starting_accel_rate(self.last_output_accel)
+      output_accel = min(self.last_output_accel + rate * DT_CTRL, self.CP.startAccel)
       self.reset()
 
     else:  # LongCtrlState.pid

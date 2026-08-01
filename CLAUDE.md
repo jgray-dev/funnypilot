@@ -119,6 +119,44 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.4 Changes (based on funnypilot-3.5.3)
+
+Three longitudinal comfort changes.
+
+- `selfdrive/controls/lib/turn_limit.py` — NEW, import-light. `limit_accel_in_turns`
+  MOVED here out of the planner (which imports acados and so cannot be tested
+  off-device) and made ANTICIPATORY via NEW `predicted_lat_accel()`. It used to
+  see a corner only through the MEASURED steering angle — reactive, so the
+  ceiling fell once you were already in the bend, which is exactly when a change
+  in longitudinal accel is least welcome. THE TRAP IS THE v3.4.9 scc_vision_v2
+  ONE: `orientationRate.z * velocity.x` is the accel the model INTENDS to pull,
+  and the model plans to slow for corners, so it reads "nothing to do" where
+  there is something to do. Recover geometry instead
+  (`curvature = rate / velocity`, a property of the ROAD) and evaluate at OUR
+  speed. Joined to the measured term by `max()` — never replacing it — so it can
+  only ever be MORE conservative, and every failure path returns 0.0 which
+  restores the pre-v3.5.4 numbers bit-for-bit. `TURN_LOOKAHEAD_T` 2.5 s is short
+  ON PURPOSE (a corner 200 m away must not hold the car back). Bounds the accel
+  CEILING only; never braking.
+  SCOPE: with the fork's 70% `A_CRUISE_MAX` table the request is often already
+  below the limit, so this only bites above ~1.5 m/s^2 lateral at city speeds
+  and ~2.0 at 56 mph. It changes nothing on a motorway sweeper.
+- `selfdrive/controls/lib/longcontrol.py` — NEW `stopping_decel_rate()`: the
+  ramp toward `CP.stopAccel` is tapered while still ROLLING (full rate again
+  below 0.5 m/s so the hold is secured). That last bite of brake at full rate
+  while moving is the nod at the end of a stop. CANNOT STOP THE CAR LATER THAN
+  COMMANDED — the ramp starts from `last_output_accel`, already the planner's
+  demand, and only adds more on top; the scale is bounded to <= 1.0.
+- Same file — NEW `starting_accel_rate()`. `STARTING_ACCEL_RATE` was ONE
+  constant for TWO jobs: NEGATIVE output is releasing the brake (must stay
+  brisk, or the car sits at a green light), POSITIVE output is launch torque
+  (where the head-snap is). Now interpolated on the current accel, 6.0 -> 2.5
+  m/s^3, so the rate itself stays continuous across the handover.
+- TESTS: 551 green. NEW `test_turn_limit.py` (14). Five guards mutation-tested.
+  PROCESS NOTE worth remembering: the first max() guard PASSED its mutation
+  because it compared two calls the mutant moved TOGETHER — a relative
+  assertion is worthless against that; it is absolute now.
+
 ### v3.5.3 Changes (based on funnypilot-3.5.2)
 
 Two comfort changes, nothing else.

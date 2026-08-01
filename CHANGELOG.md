@@ -1,3 +1,89 @@
+FunnyPilot v3.5.4 (2026-08-01)
+========================
+Three comfort changes, all longitudinal, all off-device testable.
+
+1. TURN LIMITING IS NOW ANTICIPATORY
+------------------------------------------------------------------------
+`limit_accel_in_turns` saw a corner only through the MEASURED steering angle,
+which makes it REACTIVE: the accel ceiling came down once the wheel was already
+turned, i.e. once you were in the bend -- precisely when a change in
+longitudinal accel is least welcome. You accelerated up to turn-in and then got
+backed off mid-corner.
+
+* feat: NEW `selfdrive/controls/lib/turn_limit.py` (import-light) with
+  `predicted_lat_accel()` and the moved `limit_accel_in_turns()`.
+
+THE TRAP, AND IT IS THE SAME ONE v3.4.9 FOUND IN scc_vision_v2. The obvious
+quantity is `orientationRate.z * velocity.x` -- the lateral accel the MODEL
+intends to pull. But the model PLANS TO SLOW for corners, so that product reads
+as "nothing to do" exactly where there is something to do. The fix is to
+recover the pure geometry,
+
+    curvature = orientation_rate_z / velocity_x        [rad/m]
+
+which is a property of the ROAD and contains no intent at all, and evaluate it
+at OUR speed: `a_lat = curvature * v_ego^2`. Mutation-tested.
+
+SAFETY POSTURE. The predicted term joins the measured one by `max()`, never
+replacing it, so this can only ever be MORE conservative than before. Every
+failure path returns 0.0, which makes the feature a no-op and restores the old
+numbers bit-for-bit. It bounds the accel CEILING only and can never command
+braking -- `test_the_braking_floor_is_never_touched` pins that. The lookahead
+is deliberately short (2.5 s): the point is to stop accelerating INTO a bend
+about to arrive, not to hold the car back for one 200 m away.
+
+SCOPE, HONESTLY: with the fork's 70% A_CRUISE_MAX table the requested accel is
+often already below the turn limit, so this only bites in real corners --
+roughly a_lat above 1.5 m/s^2 at city speeds and 2.0 at 56 mph. It will not
+change how the car feels on a motorway sweeper.
+
+2. THE END OF A STOP IS TAPERED
+------------------------------------------------------------------------
+The `stopping` state walks accel down toward `CP.stopAccel` at a constant
+`stoppingDecelRate`. At full rate that last bite of brake pressure arrives
+while the car is still rolling, and that is the nod you feel as you come to
+rest. The rate is now scaled by speed, restoring the full rate below 0.5 m/s so
+the brake hold is always secured firmly.
+
+THIS CANNOT MAKE THE CAR STOP LATER THAN COMMANDED: the ramp starts from
+`last_output_accel`, which is already whatever the planner asked for, and only
+ever adds MORE braking on top. `test_stopping_ramp_only_ever_adds_braking`
+pins it, and the taper is bounded to <= 1.0 so it can never amplify.
+
+3. LAUNCH IS GENTLE, BRAKE RELEASE IS NOT
+------------------------------------------------------------------------
+`STARTING_ACCEL_RATE` was one constant for two completely different jobs done
+back to back:
+
+  * while the output is NEGATIVE it is RELEASING THE BRAKE. That must stay
+    brisk -- slowing it is a car that sits at a green light.
+  * once the output is POSITIVE it is APPLYING LAUNCH TORQUE. That is where the
+    head-snap lives, and it is the half worth softening.
+
+The rate is now interpolated on the current accel (6.0 -> 2.5 m/s^3 across
+-0.5 -> +0.5 m/s^2), which keeps the rate itself continuous so there is no kink
+where the two jobs meet. Mutation-tested against a flipped schedule, which
+would give a gentle brake release and a snappy launch -- exactly backwards, and
+a plausible-looking edit.
+
+TESTS
+------------------------------------------------------------------------
+* 551 green, 0 failed. NEW `test_turn_limit.py` (14) and six longcontrol cases.
+* FIVE guards MUTATION-TESTED: evaluating at the model's speed instead of ours,
+  the predicted term replacing rather than tightening the measured one, the
+  lookahead window removed, the starting schedule flipped, and a stop taper
+  that amplifies instead of softening.
+* PROCESS NOTE: the first version of the max() guard PASSED its mutation,
+  because it compared two calls that the mutant moved together. Relative
+  assertions are worthless against a mutation that shifts both sides -- it is
+  now an absolute one. Watch for that shape.
+* ON-ROAD VERIFICATION: (1) the car should stop adding speed slightly before
+  turn-in rather than backing off mid-corner; (2) coming to rest should have
+  less of a final nod; (3) pulling away from a light should start just as
+  promptly but build more gently. If (3) feels SLOW TO MOVE, that is the brake
+  release and NOT this change -- the schedule keeps full rate there; look at
+  CP.stopAccel instead.
+
 FunnyPilot v3.5.3 (2026-08-01)
 ========================
 Two comfort changes, both small, both off-device testable. Nothing else.
