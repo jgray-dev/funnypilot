@@ -148,7 +148,15 @@ def arc_bar_pts(cx: float, cy: float,
 class TorqueBar(Widget):
   def __init__(self, demo: bool = False, scale: float = 1.0, always: bool = False,
                opacity: float = 1.0, grow: bool = True,
-               warm_color: rl.Color | None = None, hot_color: rl.Color | None = None):
+               # warm_color / hot_color are DELIBERATELY UNANNOTATED. `rl.Color`
+               # is a cffi FACTORY FUNCTION, not a Python type, so `rl.Color |
+               # None` evaluates `function.__or__(None)` when the `def` runs —
+               # i.e. at import — and raises TypeError. That kills the UI
+               # module, which kills manager, which is a car that does not
+               # boot. Same failure as the v3.4.2 `car.CarState | None`
+               # outage; the rule is not "no capnp in a union", it is NO
+               # NON-TYPE IN A UNION. See test_no_pyray_types_in_unions.
+               warm_color=None, hot_color=None):
     """FunnyPilot v3.5.1 added the last four, all defaulting to the previous
     behaviour so the mici HUD is untouched:
 
