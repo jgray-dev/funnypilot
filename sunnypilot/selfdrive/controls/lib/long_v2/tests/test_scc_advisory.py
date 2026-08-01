@@ -68,54 +68,86 @@ class TestAdvisoryOnlyEverLowers:
     run(loose, n=200)
     assert loose.raw_v_target <= tight.raw_v_target + 1e-6
 
-  def test_an_advisory_lowers_a_cap_geometry_missed(self):
-    """The whole point: mapd's curve math sees nothing, the sign does."""
+  def test_an_advisory_alone_never_slows_the_car(self):
+    """THE PER-WAY RULE, and the regression guard for the version of this that
+    shipped as an unconditional min().
+
+    An advisory tag belongs to a WAY, not a point, so a curvy road carries one
+    along its whole length. Folding it in wherever it exists holds the car down
+    on every straight between the bends — a sustained slowdown with no corner
+    in sight. On a route geometry reads as straight, the advisory must change
+    the CAP by nothing at all. It still speaks, as corroboration; see
+    TestAdvisoryAsCorroboration.
+    """
     straight = route_north([30] * 8)
     blind = make(straight, advisory=(0.0, 0.0, 0.0))
     seeing = make(straight, advisory=(13.4, 0.0, 0.0))  # 30 mph advisory
     run(blind, n=5)
     run(seeing, n=5)
     assert blind.raw_v_target == CAP_INACTIVE
-    assert seeing.raw_v_target < 30.0
-    assert seeing.advisory_active
+    assert seeing.raw_v_target == CAP_INACTIVE
+    assert seeing.advisory_active, "it must still be available as evidence"
+
+  def test_an_advisory_tightens_a_corner_geometry_already_found(self):
+    """The useful half: where mapd's curve math HAS found a bend but under-rates
+    it, the surveyed number is the better one and pulls the cap down."""
+    points = route_north([30, 30, 30, 22, 30, 30])
+    loose = make(points, advisory=(0.0, 0.0, 0.0))
+    tight = make(points, advisory=(13.4, 0.0, 0.0))
+    run(loose, n=5)
+    run(tight, n=5)
+    assert loose.raw_v_target < CAP_INACTIVE, "geometry must be constraining for this test to mean anything"
+    assert tight.raw_v_target < loose.raw_v_target
 
   def test_margin_is_applied_so_we_do_not_crawl(self):
-    """Advisory speeds are signed conservatively, so the cap sits ADVISORY_MARGIN
-    above the number on the sign rather than on it. Cruise is low here so the
-    MAX_CUT bound is slack and the margin is what decides the answer."""
+    """Advisory speeds are signed conservatively, so what the advisory asks for
+    sits ADVISORY_MARGIN above the number on the sign rather than on it.
+
+    Asserted against `_advisory_cap` directly. Driving it through a route would
+    make the answer depend on where the route's geometry cap happens to land,
+    and this test is about the margin, not about the arbitration.
+    """
     scc = make(route_north([16] * 8), advisory=(13.4, 0.0, 0.0))
-    run(scc, v_ego=16., v_cruise=16., n=5)
-    assert abs(scc.raw_v_target - 13.4 * ADVISORY_MARGIN) < 0.5
+    assert abs(scc._advisory_cap(16.0) - 13.4 * ADVISORY_MARGIN) < 1e-6
 
   def test_the_two_bounds_compose_and_the_tighter_one_wins(self):
     """At highway cruise the MAX_CUT bound is the binding one, not the margin —
-    an advisory alone cannot take more than ADVISORY_MAX_CUT however low the
-    sign is. Pinned because the two bounds are easy to reason about separately
-    and easy to get wrong together."""
-    scc = make(route_north([30] * 8), advisory=(13.4, 0.0, 0.0))
+    an advisory cannot take more than ADVISORY_MAX_CUT however low the sign is.
+    Pinned because the two bounds are easy to reason about separately and easy
+    to get wrong together. The route bends so the advisory is in play at all."""
+    scc = make(route_north([30, 30, 30, 25, 30, 30]), advisory=(13.4, 0.0, 0.0))
     run(scc, v_cruise=30., n=5)
     assert abs(scc.raw_v_target - (30.0 - ADVISORY_MAX_CUT)) < 1e-6
 
   def test_a_nonsense_low_advisory_is_ignored(self):
     """MUTATION: drop _ADVISORY_MIN. A mistagged 5 km/h advisory on a highway
-    would otherwise ask for a stop."""
+    would otherwise ask for a stop.
+
+    Against `_advisory_cap`, NOT through a route: since an advisory only binds
+    where geometry is already constraining, a straight route returns
+    CAP_INACTIVE whatever the advisory says — so the route form of this test
+    would pass with _ADVISORY_MIN deleted. An anti-vacuity check follows.
+    """
     scc = make(route_north([30] * 8), advisory=(_ADVISORY_MIN - 0.5, 0.0, 0.0))
-    run(scc, n=5)
-    assert scc.raw_v_target == CAP_INACTIVE
+    assert scc._advisory_cap(30.0) == CAP_INACTIVE
+    ok = make(route_north([30] * 8), advisory=(_ADVISORY_MIN + 2.0, 0.0, 0.0))
+    assert ok._advisory_cap(30.0) < CAP_INACTIVE, "the threshold, not the plumbing, is what rejected it"
 
   def test_the_cut_is_bounded(self):
     """MUTATION: drop ADVISORY_MAX_CUT. This is the ceiling on what a single
     mistagged advisory can cost, and it is the reason this signal is allowed
     anywhere near the controller."""
     scc = make(route_north([30] * 8), advisory=(5.0, 0.0, 0.0))
-    run(scc, v_cruise=31.0, n=5)
-    assert scc.raw_v_target >= 31.0 - ADVISORY_MAX_CUT - 1e-6
+    cap = scc._advisory_cap(31.0)
+    assert cap >= 31.0 - ADVISORY_MAX_CUT - 1e-6
+    assert cap < 31.0, "still asking for something, or the bound is untested"
 
   def test_an_advisory_ahead_tightens_with_distance(self):
     """MUTATION: apply the ahead-advisory as a step instead of through the
     approach envelope. The car would brake at the sign instead of before it."""
-    far = make(route_north([30] * 8), advisory=(0.0, 13.4, 400.0))
-    near = make(route_north([30] * 8), advisory=(0.0, 13.4, 60.0))
+    bend = route_north([30, 30, 30, 25, 30, 30])
+    far = make(bend, advisory=(0.0, 13.4, 400.0))
+    near = make(bend, advisory=(0.0, 13.4, 60.0))
     run(far, n=5)
     run(near, n=5)
     assert near.raw_v_target < far.raw_v_target

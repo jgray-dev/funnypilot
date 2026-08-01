@@ -56,7 +56,9 @@ class LongitudinalPlannerSP:
     # v3.5.0 SCC-Learn. The store is lazy (first onroad frame), so constructing
     # this touches no disk — plannerd is onroad-only and this class is also
     # imported by tests.
-    self._scc_learn = SCCLearnV1()
+    # Shares SCC-M's Params handle so both read the same toggle from the same
+    # place and cannot disagree about whether the feature is on.
+    self._scc_learn = SCCLearnV1(params=self._scc_map_v2.params)
 
   @property
   def mlsim(self) -> bool:
@@ -88,8 +90,17 @@ class LongitudinalPlannerSP:
       except Exception:
         pass
       t = time.monotonic()
+      # THE OBSERVER GETS THE MEASURED SPEED, NOT THE PLANNER'S.
+      # `v_ego` here is `v_desired_filter.x`, which the planner INTEGRATES
+      # FORWARD with the plan's accel each frame and only corrects toward vEgo
+      # with a 2 s time constant — so while engaged it is the speed we INTEND,
+      # leading the car through a corner, while disengaged `reset_state` pins
+      # it to vEgo exactly. Learning off that would record a corner from a
+      # different signal depending on whether openpilot happened to be on. The
+      # question this feature asks is "what speed did this car actually carry
+      # through this bend", and only carState.vEgo answers it.
       self._scc_learn.observe(
-        t, v_ego,
+        t, float(CS.vEgo),
         lat=lat, lon=lon, bearing=bearing, gps_acc=acc,
         lead=lead,
         standstill=bool(CS.standstill),
@@ -97,6 +108,7 @@ class LongitudinalPlannerSP:
         sla_busy=bool(self.sla.busy),
         vision_active=bool(self._scc_vision_v2.is_active),
         driver_braking=bool(CS.brakePressed),
+        self_governing=bool(self._scc_learn.is_active),
       )
       self._scc_learn.update(long_enabled, v_ego, v_cruise, lat, lon, bearing, gps_ok)
       self._scc_learn.flush(t)

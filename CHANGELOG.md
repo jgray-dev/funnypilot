@@ -15,11 +15,19 @@ here is Python and raylib, so nothing rebuilds on the device.
   to "is this corner real" -- the exact question the vision veto exists to ask.
 
   Used in two bounded ways, and deliberately NOT as a target:
-    - AS A FLOOR ON THE CAP. Where geometry under-detects a bend the advisory
-      pulls the cap down, but only to `advisory * ADVISORY_MARGIN` (1.15 -- the
+    - AS A FLOOR ON THE CAP, **ONLY WHERE GEOMETRY IS ALREADY CONSTRAINING**.
+      Where mapd's curve math has found a bend but under-rates it, the advisory
+      pulls the cap down -- but only to `advisory * ADVISORY_MARGIN` (1.15, the
       signs are conservative) and never more than ADVISORY_MAX_CUT (~20 mph)
       below cruise. `min()` is the only operator it touches, so it can never
       raise a cap geometry already set.
+      THE GEOMETRY PRECONDITION IS LOAD-BEARING and was missing from the first
+      cut of this feature. An advisory tag belongs to a WAY, not a point, so a
+      curvy road carries one along its whole length; folding it in wherever it
+      exists holds the car at `advisory * MARGIN` along every straight between
+      the bends -- a sustained slowdown with no corner in sight. The unguarded
+      `min()` reads as obviously correct, which is why it is now pinned by
+      `test_an_advisory_alone_never_slows_the_car`.
     - AS CORROBORATION. `advisory_active` floors the map's authority in
       scc_fusion at ADVISORY_CORROB_FLOOR. A surveyed advisory does not stop
       being evidence because the model has not seen the bend yet. It is a
@@ -183,6 +191,26 @@ STORAGE, AND THE EVICTION RULE THAT WAS THE EXPLICIT REQUIREMENT.
 * The estimate rises fast and falls slow (ALPHA_UP 0.5 / ALPHA_DOWN 0.2). A cap
   can only ever SLOW the car, so learning to brake HARDER is the change that
   deserves more evidence.
+* A PASS WE OURSELVES GOVERNED CANNOT RAISE THE ESTIMATE (`FLAG_SELF` ->
+  `allow_raise=False`). Without this the feature reinforces itself: our cap
+  sets v_min, v_min comes back in at +LEARN_MARGIN above the cap, ALPHA_UP
+  adopts half of it, and the estimate ratchets ~2.5% per visit -- measured at
+  16.8 -> 22.0 m/s (37 -> 49 mph) over eleven commutes, i.e. the feature
+  quietly stops working on exactly the roads it exists for. Learning to go
+  SLOWER from such a pass is still real information and is still allowed.
+* THE OBSERVER READS `carState.vEgo`, NOT the planner's `v_ego`. What the
+  planner passes around is `v_desired_filter.x`, which it integrates forward
+  with the plan's accel and only corrects toward vEgo with a 2 s time constant
+  -- so while engaged it is the speed we INTEND, and while disengaged
+  `reset_state` pins it to vEgo exactly. Learning off that would record the
+  same corner from a different signal depending on whether openpilot happened
+  to be on.
+* A dip closes at `v_min + RECOVER_MS`, still well below the pre-corner
+  reference, so the observer clears that reference on commit. Carrying it
+  across would satisfy the entry condition on the very next frame and open a
+  second dip on the way OUT of the same bend; only MIN_DIP_S stood between that
+  and a duplicate record. Measured on a deep, short dip with a slow exit: a
+  spurious second record 3 s past the apex, 1.6 m/s high.
 
 TURNING THE MAP BACK INTO A CAP.
 * `SCCLearnV1` reuses SCC-M's exact envelope maths (`sqrt(v^2 + 2*a*d_eff)`,
@@ -218,6 +246,12 @@ TURNING THE MAP BACK INTO A CAP.
   minimap reader unpacks fp_scc positionally and its contract is pinned by
   tests, and widening a working channel for an unrelated feature is how a
   reader that indexes [4] starts reading a different quantity.
+* SCC-Learn SHARES SCC-M's `SmartCruiseControlMap` TOGGLE rather than adding a
+  param of its own -- registering one edits `common/params_keys.h`, which is
+  C++ and compiles. Sharing also gives the feature an on-device off switch on
+  its first flash, which a hard-coded True would not. The toggle gates the CAP
+  only; learning keeps running with it off, so the map is there the moment it
+  goes back on.
 * feat(SLA): new read-only `SpeedLimitAssist.busy` property (mid-ramp or
   gas-gating). The observer refuses to learn a dip that a zone boundary
   explains -- without it there would be a permanent corner cap at every
@@ -260,8 +294,8 @@ loop, on a device whose settings screen is how you would flash your way out.
 
 TESTS
 ------------------------------------------------------------------------
-* 494 green, 0 failed. NEW `test_hud_imports.py` (15), `test_hud_logic.py`
-  (45), `test_scc_advisory.py` (25), `test_scc_learn.py` (72).
+* 497 green, 0 failed. NEW `test_hud_imports.py` (15), `test_hud_logic.py`
+  (45), `test_scc_advisory.py` (24), `test_scc_learn.py` (73).
 * FIFTEEN guards MUTATION-TESTED fail-then-restore. From the advisory work:
   advisory raising instead of lowering the cap, an unbounded advisory cut,
   advisory overriding rather than flooring corroboration, the scc_shm staleness

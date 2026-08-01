@@ -54,29 +54,12 @@ INACTIVE = (0.0, 0.0, 0.0, 0.0, False)
 LEARN_INACTIVE = (0, False, 0.0)
 
 
-def write_scc_shm(gov_lat: float, gov_lon: float, gov_v: float,
-                  authority: float, advisory: bool) -> None:
-  """Publish from plannerd. Best-effort; never raises."""
-  try:
-    payload = (f"{float(gov_lat):.7f},{float(gov_lon):.7f},{float(gov_v):.2f}," +
-               f"{float(authority):.3f},{int(bool(advisory))},{time.monotonic():.3f}")
-    d = os.path.dirname(SHM_PATH)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix='.fp_scc')
-    try:
-      with os.fdopen(fd, 'w') as f:
-        f.write(payload)
-      os.replace(tmp, SHM_PATH)
-    except Exception:
-      try:
-        os.unlink(tmp)
-      except Exception:
-        pass
-      raise
-  except Exception:
-    pass
-
-
 def _atomic_write(path: str, payload: str) -> None:
+  """Write via a temp file + os.replace so a reader can never see a torn line.
+
+  Leaving a stray temp file behind on a full /dev/shm would be worse than the
+  failed write itself, hence the unlink on the failure path.
+  """
   fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.fp_shm')
   try:
     with os.fdopen(fd, 'w') as f:
@@ -87,6 +70,17 @@ def _atomic_write(path: str, payload: str) -> None:
       os.unlink(tmp)
     except Exception:
       pass
+
+
+def write_scc_shm(gov_lat: float, gov_lon: float, gov_v: float,
+                  authority: float, advisory: bool) -> None:
+  """Publish from plannerd. Best-effort; never raises."""
+  try:
+    _atomic_write(SHM_PATH,
+                  f"{float(gov_lat):.7f},{float(gov_lon):.7f},{float(gov_v):.2f}," +
+                  f"{float(authority):.3f},{int(bool(advisory))},{time.monotonic():.3f}")
+  except Exception:
+    pass
 
 
 def write_learn_shm(count: int, active: bool, confidence: float) -> None:

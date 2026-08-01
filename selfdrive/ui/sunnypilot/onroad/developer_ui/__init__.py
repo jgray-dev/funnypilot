@@ -17,11 +17,16 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
-# v3.5.0 right-column geometry. RIGHT_TOP_OFFSET clears the route minimap
-# (Y_TOP + MAP_H in hud_renderer.py, plus a gutter); RIGHT_PITCH is sized so
-# the five elements still fit above the bottom rail on a 1020 px content area.
-RIGHT_TOP_OFFSET = 470
-RIGHT_PITCH = 104
+# v3.5.0 right-column geometry, UNCHANGED from v3.4.9 and deliberately so.
+# An earlier draft pushed this column down to sit under the route minimap;
+# on a 1020 px content area that put the five elements at a 104 px pitch when
+# each is 120 px tall, so they overlapped each other, ran into the bottom rail
+# and the last one fell off the screen. The minimap moved sideways instead —
+# see MAP_RIGHT_INSET in hud_renderer.py, which is keyed off these numbers.
+RIGHT_COL_WIDTH = 184
+RIGHT_COL_MARGIN = 40
+RIGHT_TOP_OFFSET = 230
+RIGHT_PITCH = 130
 
 
 class DeveloperUiRenderer(Widget):
@@ -92,8 +97,8 @@ class DeveloperUiRenderer(Widget):
     controls_state = sm['controlsState']
 
     UI_BORDER_SIZE = 20
-    container_width = 184
-    x = int(rect.x + rect.width - container_width - UI_BORDER_SIZE * 2)
+    container_width = RIGHT_COL_WIDTH
+    x = int(rect.x + rect.width - container_width - RIGHT_COL_MARGIN)
     y = int(rect.y + UI_BORDER_SIZE * 1.5)
 
     elements = [
@@ -110,11 +115,6 @@ class DeveloperUiRenderer(Widget):
 
     elements.append(self.actual_lat_accel_elem.update(sm, ui_state.is_metric))
 
-    # FunnyPilot v3.5.0: the right column starts BELOW the route minimap, which
-    # now owns the top-right station (the old wheel button's slot). The offset
-    # and pitch are constants rather than magic numbers inline so the two
-    # widgets' geometry can be reasoned about together — an overlap here would
-    # be invisible in code review and obvious on the road.
     current_y = y + RIGHT_TOP_OFFSET
     for element in elements:
       current_y += self._draw_right_dev_ui_element(x, current_y, element)

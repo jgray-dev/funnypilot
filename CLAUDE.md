@@ -94,7 +94,20 @@ trigger a device rebuild.
   margin every visit until the car crawled. `confidence_for()` 0.45 at one
   visit, 1.0 at three. `read_gps(sm)` prefers the `gpsLocation*` service over
   mapd's `LastGPSPosition` BECAUSE IT CARRIES `horizontalAccuracy` — a record
-  keyed on a position we are unsure of is worse than no record.
+  keyed on a position we are unsure of is worse than no record — and ages it
+  with `sm.recv_time` (the v3.4.5 clock rule); a valid-but-STALE fix is the
+  dangerous case, since nothing else rejects it.
+  THREE FIXES FOUND IN REVIEW, all measured, all of the same family — a signal
+  feeding back into itself: (1) `reset()` MUST clear `_v_ref` on commit, else
+  the dip's own exit re-arms the observer and a slow exit commits a duplicate
+  record past the apex; (2) `FLAG_SELF` -> `allow_raise=False`, else our cap
+  sets v_min, v_min returns +LEARN_MARGIN above it and the estimate ratchets
+  2.5%/visit (16.8 -> 22.0 m/s over eleven commutes); (3) `confidence` is HELD
+  while `CurveSpeedCap` rides out its release, else the fusion multiplies the
+  release ramp by a fresh 0 and deletes the cap in one frame. The observer is
+  fed `carState.vEgo`, NOT the planner's `v_ego` (`v_desired_filter.x` is the
+  plan integrated forward, pinned to vEgo only while disengaged — learning off
+  it would use a different signal depending on engagement).
 - `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — NEW
   `fuse_learned_target()`, `LEARN_SOLO_MAX_CUT = 8.9`, `LEARN_MIN_CUT = 0.5`.
   DELIBERATELY NOT a second call to `fuse_map_target`: the vision veto exists
@@ -125,11 +138,12 @@ trigger a device rebuild.
 - `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — "LRN" pill: lit while a
   learned corner governs, else the known-corner count, so an empty store reads
   as "nothing learned yet" rather than as a broken feature.
-- TESTS: `long_v2/tests/test_scc_learn.py` (72). NINE SCC-Learn guards
+- TESTS: `long_v2/tests/test_scc_learn.py` (73). TEN SCC-Learn guards
   MUTATION-TESTED: eviction by recency, symmetric alpha, no cell-edge merge,
   committing without recovery (5 failures — the one that turns every red light
   into a corner), lead not poisoning a dip, one visit trusted like ten, corners
-  behind us still capping, corroboration overriding confidence, unbounded cut.
+  behind us still capping, corroboration overriding confidence, unbounded cut,
+  a self-governed pass raising the estimate.
 
 - `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — reads
   `MapAdvisoryLimit` / `NextMapAdvisoryLimit`, unread since mapd shipped. THE
@@ -138,7 +152,10 @@ trigger a device rebuild.
   the best available answer to "is this corner real" — the exact question the
   vision veto asks. Used ONLY as (1) a floor on the cap, bounded by
   `ADVISORY_MARGIN` 1.15 and `ADVISORY_MAX_CUT` ~20 mph, `min()` only so it can
-  never raise a geometry cap; and (2) corroboration. NOT a target: advisory
+  never raise a geometry cap, AND ONLY WHERE GEOMETRY IS ALREADY CONSTRAINING
+  (an advisory tag is per-WAY, so an unguarded `min()` holds the car down along
+  every straight between a curvy road's bends — the guard is the fix, the
+  unguarded version reads as obviously correct); and (2) corroboration. NOT a target: advisory
   tags are per-WAY, so obeying one literally holds the car down through every
   straight between a curvy road's bends. `_advisory_cap` returns CAP_INACTIVE
   on any doubt, making every consumer a no-op. Also records `gov_lat/gov_lon`,
@@ -185,7 +202,13 @@ trigger a device rebuild.
   between the model and the HUD; `_draw_border` skips the coloured ring under
   sunnypilot UI.
 - `selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py` —
-  `RIGHT_TOP_OFFSET`/`RIGHT_PITCH` so the right column starts below the minimap.
+  geometry EXPORTED (`RIGHT_COL_WIDTH`/`RIGHT_COL_MARGIN`) but otherwise
+  UNCHANGED. A draft pushed this column below the minimap; on the 1020 px
+  content area that gave five 120 px-tall elements a 104 px pitch, so they
+  overlapped each other, hit the bottom rail and the last fell off-screen. The
+  MINIMAP MOVED SIDEWAYS INSTEAD (`MAP_RIGHT_INSET`, keyed off the dev-UI
+  constants so the two cannot drift). Check any onroad geometry change with
+  arithmetic, not by eye — none of it can be rendered off-device.
 - DELETED (zero importers after the rewrite): onroad `smart_cruise_control.py`,
   `speed_renderer.py`, `rocket_fuel.py`.
 
@@ -210,9 +233,9 @@ settings screen is how you would flash out of it.
   * `draw_triangle_fan` takes plain (x, y) tuples here (see
     onroad/model_renderer.py). Prefer it to `draw_triangle`, which is
     winding-order sensitive and silently draws nothing when wrong.
-- TESTS: **494 green, 0 failed.** NEW `test_hud_imports.py` (15),
-  `test_hud_logic.py` (45), `test_scc_advisory.py` (25),
-  `test_scc_learn.py` (72). Seven UI/advisory guards
+- TESTS: **497 green, 0 failed.** NEW `test_hud_imports.py` (15),
+  `test_hud_logic.py` (45), `test_scc_advisory.py` (24),
+  `test_scc_learn.py` (73). Seven UI/advisory guards
   MUTATION-TESTED: advisory raising instead of lowering, unbounded advisory
   cut, advisory overriding rather than flooring corroboration, scc_shm
   staleness, safe_draw not disabling, the minimap rotation with sin/cos swapped

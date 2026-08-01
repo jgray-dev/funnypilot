@@ -42,6 +42,7 @@ import pyray as rl
 
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from openpilot.selfdrive.ui.sunnypilot.onroad import developer_ui as dev_ui
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.road_name import RoadNameRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitRenderer
@@ -69,6 +70,13 @@ SET_X = X_GUTTER
 SIGN_X = X_GUTTER + stations.SET_W + 26
 MAP_W = 190
 MAP_H = 400
+# The minimap sits to the LEFT of the dev-UI right column's slot, not above it.
+# That slot is reserved whether or not the dev UI is on, so toggling the dev UI
+# never moves the map. Keyed off the dev-UI constants rather than hard-coded so
+# the two cannot drift apart: an overlap is invisible in review and obvious on
+# the road, and stacking them vertically does not fit (see the note on
+# RIGHT_TOP_OFFSET in developer_ui/__init__.py).
+MAP_RIGHT_INSET = dev_ui.RIGHT_COL_WIDTH + dev_ui.RIGHT_COL_MARGIN + 24
 SPEED_Y = 44
 ROADNAME_Y = 6
 STRIP_Y = 290
@@ -195,7 +203,7 @@ class HudRendererSP(HudRenderer):
     try:
       n, learn_active, _conf = read_learn_shm()
       if learn_active:
-        pills.append(stations.Pill(tr("LRN"), T.LAT_ONLY, True))
+        pills.append(stations.Pill("LRN", T.LAT_ONLY, True))
       elif n:
         pills.append(stations.Pill(f"LRN {n}", T.MUTED, False))
     except Exception:
@@ -311,7 +319,7 @@ class HudRendererSP(HudRenderer):
         return
     except Exception:
       return
-    x = rect.x + rect.width - MAP_W - X_GUTTER
+    x = rect.x + rect.width - MAP_W - MAP_RIGHT_INSET
     self._route_map.render(rl.Rectangle(x, rect.y + Y_TOP, MAP_W, MAP_H))
 
   def _draw_vitals(self, rect: rl.Rectangle) -> None:

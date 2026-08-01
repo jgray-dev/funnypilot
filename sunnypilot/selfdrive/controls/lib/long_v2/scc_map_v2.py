@@ -55,7 +55,7 @@ import math
 import numpy as np
 
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CurveSpeedCap, CAP_INACTIVE
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CurveSpeedCap, CAP_INACTIVE, ACTIVATE_MARGIN
 
 try:
   from openpilot.common.params import Params
@@ -289,12 +289,25 @@ class SCCMapV2:
     trim = speed_trim(fric)
     self.raw_v_target, v_curve = self._raw_cap_from_map(v_cruise, trim)
 
-    # v3.5.0: a posted advisory limit may only ever LOWER the cap. It is folded
-    # in before the debounce/smoothing so it inherits the same no-step seeding
-    # and rate-limited release as everything else.
+    # v3.5.0: a posted advisory limit may only ever LOWER the cap, and ONLY
+    # WHERE GEOMETRY HAS ALREADY FOUND A CORNER.
+    #
+    # THE BUG THIS GUARD FIXES, because the unguarded min() reads as obviously
+    # correct: an advisory tag belongs to a WAY, not to a point. A curvy road
+    # carries one for its whole length, so folding it in unconditionally holds
+    # the car at advisory * ADVISORY_MARGIN along every straight between the
+    # bends — a permanent, unexplained slowdown with no corner in sight, which
+    # is the exact complaint this fork has spent releases chasing. Requiring
+    # geometry to be constraining first keeps the useful case (a bend the
+    # curvature under-rates, where the surveyed number is better than ours) and
+    # drops the harmful one. Where there is no corner the advisory still speaks
+    # — as CORROBORATION, via advisory_active below, which is bounded by
+    # MAP_SOLO_MAX_CUT and cannot introduce a slowdown on its own.
     self.advisory_v_target = self._advisory_cap(v_cruise)
     self.advisory_active = self.advisory_v_target < v_cruise - 1.0
-    self.raw_v_target = min(self.raw_v_target, self.advisory_v_target)
+    geometry_constraining = self.raw_v_target < v_cruise - ACTIVATE_MARGIN
+    if geometry_constraining:
+      self.raw_v_target = min(self.raw_v_target, self.advisory_v_target)
 
     cap = self._cap.update(self.raw_v_target, v_ego, v_cruise)
     self.is_active = self._cap.active

@@ -106,6 +106,29 @@ class TestObserveFolding:
     assert moved_up == pytest.approx(4.0 * S.ALPHA_UP)
     assert moved_down == pytest.approx(4.0 * S.ALPHA_DOWN)
 
+  def test_a_pass_we_governed_cannot_raise_the_estimate(self, store):
+    """THE SELF-REINFORCEMENT LOOP. If the cap sets v_min, and v_min comes back
+    in at +LEARN_MARGIN above the cap, and ALPHA_UP adopts half of that, the
+    estimate ratchets up ~2.5% per visit — measured at 16.8 -> 22.0 m/s over
+    eleven commutes, i.e. the feature quietly stops working on exactly the
+    roads it is meant for. The visit still counts; only the raise is refused."""
+    k = S.key_for(37.5, -122.0, 90.0)
+    store.observe(37.5, -122.0, 90.0, 16.0, now=1.0)
+    for i in range(10):
+      v = store.corners[k].v
+      store.observe(37.5, -122.0, 90.0, v * L.LEARN_MARGIN, flags=L.FLAG_SELF,
+                    now=float(i + 2), allow_raise=False)
+    assert store.corners[k].v == pytest.approx(16.0)
+    assert store.corners[k].n == 11
+
+  def test_it_can_still_learn_to_go_slower_from_a_governed_pass(self, store):
+    """The car needing LESS than we allowed is real information about the bend,
+    whoever was driving. Only the raise is blocked."""
+    k = S.key_for(37.5, -122.0, 90.0)
+    store.observe(37.5, -122.0, 90.0, 20.0, now=1.0)
+    store.observe(37.5, -122.0, 90.0, 15.0, flags=L.FLAG_SELF, now=2.0, allow_raise=False)
+    assert store.corners[k].v < 20.0
+
   def test_repeat_sightings_count_visits(self, store):
     for i in range(5):
       store.observe(37.5, -122.0, 90.0, 18.0, now=float(i))

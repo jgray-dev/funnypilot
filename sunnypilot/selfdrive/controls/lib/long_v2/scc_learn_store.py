@@ -254,12 +254,17 @@ class LearnStore:
       return None
 
   def observe(self, lat: float, lon: float, bearing: float, v: float,
-              flags: int = 0, now: float | None = None) -> str:
+              flags: int = 0, now: float | None = None,
+              allow_raise: bool = True) -> str:
     """Fold one observation in. Returns the key it landed on.
 
     The estimate rises fast and falls slow (see ALPHA_UP/ALPHA_DOWN): a cap
     can only slow the car, so learning to brake HARDER is the change that
     deserves more evidence.
+
+    `allow_raise=False` records the visit but refuses to move the estimate UP.
+    The caller passes it when the observed speed was one WE commanded, which is
+    not evidence about the corner at all — see scc_learn.FLAG_SELF.
     """
     now = time.time() if now is None else now  # noqa: TID251 (persisted across boots; monotonic cannot be)
     key = key_for(lat, lon, bearing)
@@ -272,6 +277,10 @@ class LearnStore:
       c = Corner(lat, lon, bearing, v, n=1, t=now, flags=flags)
       self.corners[key] = c
       self._index_add(key, c)
+    elif v > c.v and not allow_raise:
+      c.n += 1                 # the visit counts; the estimate does not move
+      c.t = now
+      c.flags |= flags
     else:
       alpha = ALPHA_UP if v > c.v else ALPHA_DOWN
       c.v += (v - c.v) * alpha
@@ -279,6 +288,15 @@ class LearnStore:
       c.t = now
       c.flags |= flags
     self._dirty.add(key)
+    # Bounded in MEMORY, not merely on disk. `load()` evicts once at startup,
+    # which in practice is enough -- reaching MAX_RECORDS inside a single drive
+    # would take 25,000 committed corners. "In practice" is not a bound though,
+    # and the rule this module is written under (v3.4.6) is that anything
+    # running beside a moving car must be bounded by construction.
+    if len(self.corners) > self.max_records:
+      self._evict()
+      self._reindex()
+      self._dirty &= self.corners.keys()
     return key
 
   def maybe_flush(self, now: float) -> bool:
