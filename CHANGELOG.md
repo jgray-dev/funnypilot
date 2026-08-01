@@ -1,6 +1,8 @@
 FunnyPilot v3.5.4 (2026-08-01)
 ========================
-Three comfort changes, all longitudinal, all off-device testable.
+Three comfort changes, all longitudinal, all off-device testable, plus three
+onroad visual refinements. Zero schema changes, zero new params, zero new
+assets -- this branch cannot trigger a device rebuild.
 
 1. TURN LIMITING IS NOW ANTICIPATORY
 ------------------------------------------------------------------------
@@ -66,13 +68,91 @@ where the two jobs meet. Mutation-tested against a flipped schedule, which
 would give a gentle brake release and a snappy launch -- exactly backwards, and
 a plausible-looking edit.
 
+4. THE SCREEN HAS ONE EASING, AND EVERYTHING USES IT
+------------------------------------------------------------------------
+Almost every state on this HUD was a CUT. The engagement glow snapped between
+grey, cyan and green; the long-status dot cut between green and red, which on a
+solid disc is the most visually violent transition on the screen; the sign halo
+jumped the instant a zone was confirmed or lost, and since WEIGHT is the halo's
+whole message, a step in weight is a step in the message.
+
+* feat: NEW `Eased` / `EasedColor` in `hud/tokens.py`. First-order ease with
+  ONE house time constant, `EASE_TAU = 0.18 s`.
+
+WHY IT IS A PRIMITIVE AND NOT THREE LOCAL LERPS. The point of a design system
+is that unrelated things move alike; three hand-rolled fades drift the moment
+either is touched. `hud_renderer` owns the glow and dot easers, `SpeedSign`
+owns the halo's, and all three read the same tau.
+
+THREE THINGS IN IT ARE LOAD-BEARING, none of them taste:
+
+  * `exp(-dt / tau)`, NOT a fixed per-frame fraction. A fraction makes the feel
+    a function of frame rate, so it changes when the device is hot and
+    throttling -- a bug that only appears in the conditions you can least
+    reproduce. Mutation-tested.
+  * `EASE_SNAP` so a value actually REACHES its target. An asymptote leaves a
+    pill parked at 99% alpha forever.
+  * `_EASE_DT_MAX = 0.25 s`, so a stalled or backgrounded frame does not
+    teleport the value and undo the whole point.
+
+The easers must be stepped EXACTLY ONCE per frame -- they read the clock
+themselves, so a second call in the same frame sees dt ~= 0 and silently halves
+the rate. `SpeedSign.render` carries a comment saying so at the call site.
+
+5. RADIUS IS A SCALE, AND THE LIGHT COMES FROM ONE PLACE
+------------------------------------------------------------------------
+Corner radii were picked per widget, so a pill, a plate and a chip were three
+unrelated shapes. They are now three steps of one scale (`R_CHIP`, `R_PLATE`,
+`R_PILL`) chosen by the widget's SIZE, which is what makes a set of surfaces
+read as one material.
+
+`plate()` also gained a single top highlight line (`SPECULAR`). One implied
+light source from above is the cheapest thing that makes a flat scrim read as a
+surface rather than as a hole punched in the image -- and it is one extra
+`draw_line_ex`, not a gradient or a texture.
+
+COLLAPSED TO ONE PALETTE. `speed_sign.py` had declared RED/GREEN/CYAN as
+byte-identical copies of three tokens; `tokens.py` exists precisely to stop
+that, and it had already happened once. They are aliases now, so the halo turns
+the same red as the long-status dot and the same green as the engagement glow.
+A driver should learn one red, not two.
+
+* test: an AST guard -- `speed_sign.py` may not construct `rl.Color` with a
+  literal argument at all. VALUE equality alone would pass if someone re-typed
+  the same hex, so the guard checks the SOURCE: the drift is the problem, not
+  the current value. Mutation-tested by pasting a byte-identical local copy
+  back in; both palette tests fail on it.
+
+6. THE CHROME FOLLOWS THE SCENE
+------------------------------------------------------------------------
+The vignette and horizon bands were tuned for daylight and applied at full
+strength regardless. At night the camera image is already dark, so a 72%
+vignette plus a 350 px 80% top scrim is far heavier than the scene needs and
+eats road view for nothing.
+
+`chrome_scale()` reads `deviceState.screenBrightnessPercent`, which hardwared
+already drives from the ambient light sensor and which `ui_state` already
+subscribes to -- no new signal, no new param.
+
+FLOORED WELL ABOVE ZERO, AND THAT IS THE WHOLE DESIGN. v3.5.0 established that
+the vignette is LOAD-BEARING for the state glow: a glow drawn straight onto a
+bright sky washes out completely, which is exactly when you most want to know
+whether the car is steering. Scaling the vignette to nothing at night would
+trade one failure for another, so `CHROME_MIN = 0.55` is a constraint and not a
+tuning knob. Mutation-tested against removing the floor. Garbage input returns
+1.0 -- full chrome is the daylight-safe answer, so an unreadable sensor
+degrades to exactly today's behaviour rather than guessing "dark".
+
 TESTS
 ------------------------------------------------------------------------
-* 551 green, 0 failed. NEW `test_turn_limit.py` (14) and six longcontrol cases.
-* FIVE guards MUTATION-TESTED: evaluating at the model's speed instead of ours,
-  the predicted term replacing rather than tightening the measured one, the
-  lookahead window removed, the starting schedule flipped, and a stop taper
-  that amplifies instead of softening.
+* 565 green, 0 failed. NEW `test_turn_limit.py` (14), six longcontrol cases,
+  and 20 UI cases (`TestEased`, `TestChromeScale`, `TestLongDotColor`,
+  `TestOnePalette`).
+* EIGHT guards MUTATION-TESTED: evaluating at the model's speed instead of
+  ours, the predicted term replacing rather than tightening the measured one,
+  the lookahead window removed, the starting schedule flipped, a stop taper
+  that amplifies instead of softening, a fixed per-frame ease fraction, the
+  chrome floor removed, and a local colour re-declaration.
 * PROCESS NOTE: the first version of the max() guard PASSED its mutation,
   because it compared two calls that the mutant moved together. Relative
   assertions are worthless against a mutation that shifts both sides -- it is
@@ -82,7 +162,11 @@ TESTS
   less of a final nod; (3) pulling away from a light should start just as
   promptly but build more gently. If (3) feels SLOW TO MOVE, that is the brake
   release and NOT this change -- the schedule keeps full rate there; look at
-  CP.stopAccel instead.
+  CP.stopAccel instead. (4) NONE OF THE VISUAL WORK CAN BE TESTED OFF-DEVICE --
+  no GL context, no camera. Logic is unit-tested and the import path is
+  guarded, but the LOOK has to be judged on the car. If a widget vanishes
+  on-road, grep the log for "onroad hud widget ... disabled": safe_draw names
+  the failure exactly.
 
 FunnyPilot v3.5.3 (2026-08-01)
 ========================

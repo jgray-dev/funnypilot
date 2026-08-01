@@ -144,7 +144,12 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     if not gui_app.sunnypilot_ui():
       return
     try:
-      chrome.draw_vignette(self._content_rect)
+      # v3.5.4: the vignette and bands scale with ambient brightness; the GLOW
+      # does not. The vignette exists to give the glow a dark ground it cannot
+      # wash out against, so scaling the glow with it would undo the very thing
+      # the pair was built to guarantee.
+      scale = self._hud_renderer.chrome_scale()
+      chrome.draw_vignette(self._content_rect, scale)
       color = self._hud_renderer.state_color()
       chrome.draw_state_glow(self._content_rect, color, self._hud_renderer.glow_intensity())
     except Exception:

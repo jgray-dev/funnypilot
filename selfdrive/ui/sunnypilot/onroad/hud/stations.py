@@ -126,14 +126,25 @@ def draw_accel_spine(x: float, cy: float, accel: float) -> None:
   rl.draw_rectangle_rounded(bar, T.R_PILL, 8, T.with_alpha(col, 0.85))
 
 
-def draw_long_dot(x: float, y: float, state: str) -> None:
+DOT_IDLE = rl.Color(126, 138, 153, 255)
+
+
+def long_dot_color(state: str) -> rl.Color:
+  """Colour for a long-status classification. Split out in v3.5.4 so the
+  renderer can cross-fade it — the dot used to CUT between green and red,
+  which on a solid disc is the most visually violent transition on the
+  screen."""
+  return {"green": T.ENGAGED, "red": T.HALT}.get(state, DOT_IDLE)
+
+
+def draw_long_dot(x: float, y: float, col: rl.Color) -> None:
   """green = throttle, gray = coasting or inactive, red = brake lamp lit.
 
   (x, y) is the dot's CENTRE since v3.5.1 — it lives in the bottom-left corner
   now, where a top-left anchor would have made the margin depend on the glyph
-  box rather than on the thing you actually see.
+  box rather than on the thing you actually see. Takes a COLOUR since v3.5.4,
+  because the caller owns the cross-fade.
   """
-  col = {"green": T.ENGAGED, "red": T.HALT}.get(state, rl.Color(126, 138, 153, 255))
   rl.draw_circle(int(x), int(y), 16.0, T.with_alpha(col, 0.28))
   rl.draw_circle(int(x), int(y), 11.0, col)
   T.text_at(T.font_bold(), "LONG", x + 26, y - 11, T.SZ_MICRO, T.FAINT, 3.2)

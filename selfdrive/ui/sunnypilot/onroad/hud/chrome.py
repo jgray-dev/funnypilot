@@ -83,9 +83,39 @@ def _edges(rect: rl.Rectangle, depth: int, color: rl.Color, alpha0: float) -> No
     rl.draw_rectangle_lines_ex(ring, _STEP_PX, rl.Color(color.r, color.g, color.b, a))
 
 
-def draw_vignette(rect: rl.Rectangle) -> None:
+# v3.5.4 — SCENE-ADAPTIVE CHROME.
+#
+# The vignette and bands were tuned for daylight and applied at full strength
+# regardless. At night the camera image is already dark, so a 72% vignette plus
+# a 350 px 80% top scrim is far heavier than it needs to be and eats road view
+# for nothing.
+#
+# `deviceState.screenBrightnessPercent` is driven by the ambient light sensor
+# via hardwared's auto-brightness, and the UI already subscribes to deviceState
+# (ui_state.py:47) — so this costs no new signal and no new param.
+#
+# FLOORED WELL ABOVE ZERO, DELIBERATELY. The vignette is LOAD-BEARING for the
+# state glow: v3.5.0 established that a glow drawn straight onto a bright sky
+# washes out completely, which is exactly when you most want to know whether
+# the car is steering. Scaling it to nothing at night would trade one failure
+# for another, so the floor is a real constraint and not a taste value.
+CHROME_MIN = 0.55
+
+
+def chrome_scale(brightness_pct: float) -> float:
+  """Chrome strength for an ambient brightness, 0..100 -> CHROME_MIN..1.0.
+
+  Pure and unit-tested. Any garbage input returns 1.0 — full chrome is the
+  daylight-safe answer, so an unreadable sensor degrades to today's behaviour.
+  """
+  if not isinstance(brightness_pct, (int, float)) or brightness_pct != brightness_pct:
+    return 1.0
+  return CHROME_MIN + (1.0 - CHROME_MIN) * clamp(float(brightness_pct) / 100.0, 0.0, 1.0)
+
+
+def draw_vignette(rect: rl.Rectangle, scale: float = 1.0) -> None:
   """Darken the frame edges. MUST run before draw_state_glow."""
-  _edges(rect, VIG_DEPTH, rl.Color(0, 0, 0, 255), VIG_ALPHA)
+  _edges(rect, VIG_DEPTH, rl.Color(0, 0, 0, 255), VIG_ALPHA * clamp(scale, 0.0, 1.0))
 
 
 def draw_state_glow(rect: rl.Rectangle, color: rl.Color, intensity: float = 1.0) -> None:
@@ -97,15 +127,16 @@ def draw_state_glow(rect: rl.Rectangle, color: rl.Color, intensity: float = 1.0)
   _edges(rect, GLOW_DEPTH, color, clamp(GLOW_ALPHA * intensity, 0.0, 1.0))
 
 
-def draw_bands(rect: rl.Rectangle) -> None:
+def draw_bands(rect: rl.Rectangle, scale: float = 1.0) -> None:
   """The two scrims chrome is allowed to live in."""
   x, y = int(rect.x), int(rect.y)
   w, h = int(rect.width), int(rect.height)
+  s = clamp(scale, 0.0, 1.0)
 
   top = min(BAND_TOP_H, h)
   rl.draw_rectangle_gradient_v(x, y, w, top,
-                               rl.Color(6, 9, 13, int(BAND_TOP_A * 255)), _BLANK)
+                               rl.Color(6, 9, 13, int(BAND_TOP_A * s * 255)), _BLANK)
 
   bot = min(BAND_BOT_H, h)
   rl.draw_rectangle_gradient_v(x, y + h - bot, w, bot,
-                               _BLANK, rl.Color(6, 9, 13, int(BAND_BOT_A * 255)))
+                               _BLANK, rl.Color(6, 9, 13, int(BAND_BOT_A * s * 255)))

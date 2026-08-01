@@ -54,9 +54,14 @@ HALO_W_MAX = 11.0      # px at the boundary
 HALO_PAD = 13          # how far the halo sits outside the sign
 BLOOM_PAD = 11         # second, fainter pass
 
-RED = rl.Color(0xFF, 0x5A, 0x52, 255)
-GREEN = rl.Color(0x41, 0xE0, 0x8C, 255)
-CYAN = rl.Color(0x3A, 0xD8, 0xD8, 255)
+# v3.5.4 — THESE WERE BYTE-IDENTICAL COPIES OF THREE TOKENS. tokens.py exists
+# precisely to stop "eleven widgets, eleven visual languages", and three of them
+# had been re-declared here. Aliases now, so the halo turns the same red as the
+# long-status dot and the same green as the engagement glow — a driver should
+# learn one red, not two.
+RED = T.HALT
+GREEN = T.ENGAGED
+CYAN = T.LAT_ONLY
 
 
 def halo_spec(next_limit: float, cur_limit: float, dist_m: float, sla_active: bool):
@@ -80,6 +85,11 @@ class SpeedSign:
 
   def __init__(self):
     self._phase = 0.0
+    # v3.5.4: the halo used to JUMP the instant a zone was confirmed or lost.
+    # Weight is the signal, so a step in weight is a step in the message.
+    self._prox = T.Eased(0.0)
+    self._tint = T.EasedColor(T.LAT_ONLY)
+    self._tint_last = T.LAT_ONLY
 
   def height(self) -> int:
     """Reserved height. Constant whether or not a second sign is showing —
@@ -103,9 +113,23 @@ class SpeedSign:
     if pre_active and color is not None:
       prox = T.clamp(prox + 0.30 * (0.5 + 0.5 * math.sin(self._phase * math.pi)), 0.0, 1.0)
 
-    sign_rect = rl.Rectangle(x, y, SIGN_W, SIGN_H)
+    # Ease both channels. Fading the WEIGHT to zero is what lets the halo
+    # leave without a cut; the tint keeps easing underneath so a red->green
+    # change (a lower zone replaced by a higher one) cross-fades rather than
+    # snapping through the wrong colour.
+    # NOTE both easers must be stepped EXACTLY ONCE per frame — they read
+    # time.monotonic() internally, so a second call in the same frame sees
+    # dt ~= 0 and silently halves the effective rate.
+    shown_prox = self._prox.update(prox if color is not None else 0.0)
     if color is not None:
-      self._halo(sign_rect, color, prox)
+      shown_tint = self._tint.update(color)
+    else:
+      shown_tint = self._tint.update(self._tint_last)   # hold hue while fading out
+    self._tint_last = color if color is not None else self._tint_last
+
+    sign_rect = rl.Rectangle(x, y, SIGN_W, SIGN_H)
+    if shown_prox > 0.01:
+      self._halo(sign_rect, shown_tint, shown_prox)
 
     self._face(sign_rect, limit, metric, overspeed, primary=True)
 
@@ -134,8 +158,8 @@ class SpeedSign:
     # is what makes it read as light rather than as a second border.
     bloom = rl.Rectangle(ring.x - BLOOM_PAD, ring.y - BLOOM_PAD,
                          ring.width + BLOOM_PAD * 2, ring.height + BLOOM_PAD * 2)
-    rl.draw_rectangle_rounded_lines_ex(bloom, 0.30, 12, w * 2.4, T.with_alpha(color, a * 0.20))
-    rl.draw_rectangle_rounded_lines_ex(ring, 0.28, 12, w, T.with_alpha(color, a))
+    rl.draw_rectangle_rounded_lines_ex(bloom, T.R_PLATE, 12, w * 2.4, T.with_alpha(color, a * 0.20))
+    rl.draw_rectangle_rounded_lines_ex(ring, T.R_PLATE, 12, w, T.with_alpha(color, a))
 
   @staticmethod
   def _face(rect: rl.Rectangle, limit: float, metric: bool, overspeed: bool, primary: bool) -> None:
@@ -154,11 +178,11 @@ class SpeedSign:
       return
 
     # MUTCD: white plate, black inner keyline, SPEED / LIMIT, value
-    rl.draw_rectangle_rounded(rect, 0.14, 10, T.SIGN_FACE)
+    rl.draw_rectangle_rounded(rect, T.R_CHIP, 10, T.SIGN_FACE)
     inset = 8 * scale
     inner = rl.Rectangle(rect.x + inset, rect.y + inset,
                          rect.width - inset * 2, rect.height - inset * 2)
-    rl.draw_rectangle_rounded_lines_ex(inner, 0.13, 10, max(2.0, 3.5 * scale), T.INK)
+    rl.draw_rectangle_rounded_lines_ex(inner, T.R_CHIP, 10, max(2.0, 3.5 * scale), T.INK)
 
     cx = rect.x + rect.width / 2
     lab = int(26 * scale)
@@ -178,8 +202,8 @@ class SpeedSign:
     # sits directly above the upcoming sign and the two must line up.
     rect = rl.Rectangle(x, y, SIDE_W, TAB_H)
     w = SIDE_W
-    rl.draw_rectangle_rounded(rect, T.R_PILL, 10, rl.Color(CYAN.r, CYAN.g, CYAN.b, 40))
-    rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, rl.Color(CYAN.r, CYAN.g, CYAN.b, 140))
+    rl.draw_rectangle_rounded(rect, T.R_PILL, 10, T.with_alpha(CYAN, 0.16))
+    rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, T.with_alpha(CYAN, 0.55))
     T.text_centered(T.font_bold(), s, rect.x + w / 2, y + 5, T.SZ_LABEL, CYAN, T.TRACK_LABEL)
 
   @staticmethod

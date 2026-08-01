@@ -140,6 +140,10 @@ class HudRendererSP(HudRenderer):
     self._sla_ratio: float = 0.0
     self._sla_on: bool = False
     self._glow_phase: float = 0.0
+    # v3.5.4 motion + scene adaptation
+    self._state_tint = T.EasedColor(T.DISENGAGED)
+    self._dot_tint = T.EasedColor(T.NOMINAL)
+    self._chrome = T.Eased(1.0)
     self._long_state: str = 'gray'
     self._pills: list = []
 
@@ -266,7 +270,18 @@ class HudRendererSP(HudRenderer):
   # ── chrome, called from AugmentedRoadView before the HUD ────────────────
 
   def state_color(self) -> rl.Color:
-    return _STATE_COLORS.get(ui_state.status, T.DISENGAGED)
+    """v3.5.4: cross-faded. Engaging used to CUT from slate to green at the
+    frame boundary; on a 120 px glow that is a flash in peripheral vision."""
+    return self._state_tint.update(_STATE_COLORS.get(ui_state.status, T.DISENGAGED))
+
+  def chrome_scale(self) -> float:
+    """Ambient-adaptive chrome strength, eased so a passing streetlight or a
+    tunnel mouth cannot make the vignette pump."""
+    try:
+      pct = float(ui_state.sm['deviceState'].screenBrightnessPercent)
+    except Exception:
+      pct = 100.0
+    return self._chrome.update(chrome.chrome_scale(pct))
 
   def glow_intensity(self) -> float:
     """Breathe while the driver is overriding. This is the channel that
@@ -287,7 +302,7 @@ class HudRendererSP(HudRenderer):
     # NOTE: HudRenderer._render is deliberately NOT called. It draws the old
     # header gradient, the boxed set speed, the centred speed and the wheel
     # button — all replaced below. Its _update_state IS still used.
-    T.safe_draw("bands", chrome.draw_bands, rect)
+    T.safe_draw("bands", chrome.draw_bands, rect, self._chrome.x)
     T.safe_draw("speed", self._draw_centre, rect)
     T.safe_draw("set_speed", self._draw_set_speed, rect)
     T.safe_draw("sign", self._draw_sign, rect)
@@ -363,4 +378,4 @@ class HudRendererSP(HudRenderer):
     stations.draw_long_dot(rect.x + DOT_MARGIN + 16,
                            rect.y + rect.height - DOT_MARGIN - 16
                            - DeveloperUiRenderer.get_bottom_dev_ui_offset(),
-                           self._long_state)
+                           self._dot_tint.update(stations.long_dot_color(self._long_state)))

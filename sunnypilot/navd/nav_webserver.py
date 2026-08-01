@@ -143,6 +143,9 @@ _CODE_MARKERS = [
   ("def predicted_lat_accel", "/data/openpilot/selfdrive/controls/lib/turn_limit.py", "anticipatory turn limiting"),
   ("def starting_accel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "scheduled creep launch"),
   ("def stopping_decel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "tapered stop settle"),
+  ("class Eased", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py", "one house easing primitive"),
+  ("def chrome_scale", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "scene-adaptive chrome"),
+  ("def long_dot_color", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/stations.py", "cross-faded long dot"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

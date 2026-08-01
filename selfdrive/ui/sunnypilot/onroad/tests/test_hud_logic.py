@@ -21,6 +21,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.tests.test_hud_imports import _loa
 _rm = _load('route_map')
 _ss = _load('speed_sign')
 _tok = _load('tokens')
+_ch = _load('chrome')
+_st = _load('stations')
 
 ramp_color = _rm.ramp_color
 to_ego_frame = _rm.to_ego_frame
@@ -349,3 +351,130 @@ class TestTokenHelpers:
     assert not _tok.finite(float('inf'))
     assert not _tok.finite("42")
     assert not _tok.finite(None)
+
+
+class TestEased:
+  """v3.5.4. One time constant for the whole screen — see tokens.EASE_TAU."""
+
+  def test_it_moves_toward_the_target(self):
+    e = _tok.Eased(0.0)
+    e.update(1.0, now=0.0)
+    a = e.update(1.0, now=0.05)
+    b = e.update(1.0, now=0.10)
+    assert 0.0 < a < b < 1.0
+
+  def test_it_settles_exactly(self):
+    """EASE_SNAP exists so a value can actually REACH its target. An asymptote
+    that never arrives leaves a pill at 99% alpha forever."""
+    e = _tok.Eased(0.0)
+    t = 0.0
+    for _ in range(400):
+      t += 0.016
+      e.update(1.0, now=t)
+    assert e.x == 1.0
+
+  def test_it_is_frame_rate_independent(self):
+    """MUTATION: use a fixed per-frame fraction instead of exp(-dt/tau). The
+    feel would then change whenever the frame rate moves — a bug that only
+    shows up when the device is hot and throttling."""
+    fast, slow = _tok.Eased(0.0), _tok.Eased(0.0)
+    t = 0.0
+    for _ in range(60):          # 120 fps
+      t += 1 / 120.0
+      fast.update(1.0, now=t)
+    t = 0.0
+    for _ in range(30):          # 60 fps, same half-second
+      t += 1 / 60.0
+      slow.update(1.0, now=t)
+    assert abs(fast.x - slow.x) < 0.02
+
+  def test_a_stalled_frame_does_not_teleport(self):
+    e = _tok.Eased(0.0)
+    e.update(1.0, now=0.0)
+    e.update(1.0, now=30.0)      # 30 s gap: a paused/backgrounded UI
+    assert e.x < 1.0
+
+  def test_snap_is_immediate(self):
+    e = _tok.Eased(0.0)
+    assert e.snap(0.7) == 0.7 and e.x == 0.7
+
+  def test_a_non_finite_target_is_ignored(self):
+    e = _tok.Eased(0.5)
+    e.update(float('nan'), now=0.0)
+    e.update(float('inf'), now=0.1)
+    assert e.x == 0.5
+
+
+class TestChromeScale:
+  """v3.5.4. The vignette and bands were tuned for daylight and applied at full
+  strength regardless; at night that is far heavier than the scene needs."""
+
+  def test_full_chrome_in_daylight(self):
+    assert _ch.chrome_scale(100.0) == 1.0
+
+  def test_reduced_in_the_dark(self):
+    assert _ch.chrome_scale(0.0) < 1.0
+
+  def test_it_is_floored_well_above_zero(self):
+    """LOAD-BEARING: the vignette is what stops the state glow washing out
+    (v3.5.0). Scaling it to nothing at night trades one failure for another.
+    MUTATION: drop CHROME_MIN and let it reach 0."""
+    for pct in (-50.0, 0.0, 1.0):
+      assert _ch.chrome_scale(pct) >= _ch.CHROME_MIN
+    assert _ch.CHROME_MIN > 0.4
+
+  def test_it_is_monotone_and_bounded(self):
+    vals = [_ch.chrome_scale(p) for p in (0, 10, 25, 50, 75, 100, 400)]
+    assert vals == sorted(vals)
+    assert all(_ch.CHROME_MIN <= v <= 1.0 for v in vals)
+
+  def test_garbage_reads_as_daylight(self):
+    """An unreadable sensor must degrade to TODAY's behaviour — full chrome is
+    the daylight-safe answer, and guessing 'dark' would dim the vignette in
+    exactly the conditions it is needed."""
+    for junk in (None, "x", float('nan')):
+      assert _ch.chrome_scale(junk) == 1.0
+
+
+def rgba(c):
+  """Compare colours BY VALUE, not identity: `_load` imports each module
+  independently, so `speed_sign`'s tokens and `_tok` are separate objects even
+  when the source is shared. Value equality is also the stronger assertion —
+  it is what 'one palette' actually means."""
+  return (c.r, c.g, c.b, c.a)
+
+
+class TestLongDotColor:
+  def test_states_map_to_the_shared_palette(self):
+    assert rgba(_st.long_dot_color("green")) == rgba(_tok.ENGAGED)
+    assert rgba(_st.long_dot_color("red")) == rgba(_tok.HALT)
+    assert rgba(_st.long_dot_color("gray")) == rgba(_st.DOT_IDLE)
+    assert rgba(_st.long_dot_color("nonsense")) == rgba(_st.DOT_IDLE)
+
+
+class TestOnePalette:
+  """v3.5.4. speed_sign.py had declared RED/GREEN/CYAN as byte-identical copies
+  of three tokens. tokens.py exists to stop exactly that drift, and it had
+  already happened once."""
+
+  def test_the_sign_uses_the_shared_colours(self):
+    assert rgba(_ss.RED) == rgba(_tok.HALT)
+    assert rgba(_ss.GREEN) == rgba(_tok.ENGAGED)
+    assert rgba(_ss.CYAN) == rgba(_tok.LAT_ONLY)
+
+  def test_the_sign_declares_no_colours_of_its_own(self):
+    """MUTATION: paste a literal rl.Color back into speed_sign.py. Value
+    equality alone would still pass if someone re-typed the same hex, so this
+    checks the SOURCE — the drift is the problem, not the current value."""
+    import ast
+    import pathlib
+    src = pathlib.Path(_ss.__file__).read_text()
+    literals = [
+      n for n in ast.walk(ast.parse(src))
+      if isinstance(n, ast.Call) and ast.unparse(n.func) in ("rl.Color", "pyray.Color")
+      and any(isinstance(a, ast.Constant) for a in n.args)
+    ]
+    assert not literals, (
+      "speed_sign.py must take its colours from tokens.py: " +
+      ", ".join(ast.unparse(n) for n in literals)
+    )

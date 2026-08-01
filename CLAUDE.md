@@ -121,7 +121,8 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 ### v3.5.4 Changes (based on funnypilot-3.5.3)
 
-Three longitudinal comfort changes.
+Three longitudinal comfort changes plus three onroad visual refinements. ZERO
+schema, ZERO new params, ZERO new assets — cannot trigger a device rebuild.
 
 - `selfdrive/controls/lib/turn_limit.py` — NEW, import-light. `limit_accel_in_turns`
   MOVED here out of the planner (which imports acados and so cannot be tested
@@ -152,7 +153,58 @@ Three longitudinal comfort changes.
   brisk, or the car sits at a green light), POSITIVE output is launch torque
   (where the head-snap is). Now interpolated on the current accel, 6.0 -> 2.5
   m/s^3, so the rate itself stays continuous across the handover.
-- TESTS: 551 green. NEW `test_turn_limit.py` (14). Five guards mutation-tested.
+- `selfdrive/ui/sunnypilot/onroad/hud/tokens.py` — NEW `Eased` / `EasedColor`,
+  ONE house time constant `EASE_TAU` 0.18 s. Almost every state on this HUD was
+  a CUT: the engagement glow snapped between grey/cyan/green, the long dot cut
+  between green and red (on a solid disc, the most violent transition on the
+  screen), and the sign halo jumped on zone confirm/loss — and since WEIGHT is
+  the halo's whole message, a step in weight is a step in the MESSAGE. THREE
+  LOAD-BEARING DETAILS, none of them taste: (1) `exp(-dt/tau)`, NOT a fixed
+  per-frame fraction — a fraction makes the feel a function of FRAME RATE, so
+  it changes when the device is hot and throttling, i.e. a bug that only appears
+  where you cannot reproduce it (mutation-tested); (2) `EASE_SNAP` so a value
+  actually REACHES its target — an asymptote parks a pill at 99% alpha forever;
+  (3) `_EASE_DT_MAX` 0.25 s so a stalled/backgrounded frame does not teleport
+  the value. THE EASERS MUST BE STEPPED EXACTLY ONCE PER FRAME — they read
+  `time.monotonic()` themselves, so a second call in the same frame sees
+  dt ≈ 0 and SILENTLY HALVES the rate; the call site in `SpeedSign.render`
+  carries that warning.
+- Same file — RADIUS IS A SCALE (`R_CHIP`/`R_PLATE`/`R_PILL`) chosen by widget
+  SIZE, not per-widget taste; that is what makes a set of surfaces read as one
+  material. `plate()` gained one `SPECULAR` top highlight — a single implied
+  light from above is the cheapest thing that makes a flat scrim read as a
+  surface rather than a hole punched in the image, and it is one extra
+  `draw_line_ex`, not a gradient or a texture.
+- `selfdrive/ui/sunnypilot/onroad/hud/speed_sign.py` — RED/GREEN/CYAN had been
+  declared here as BYTE-IDENTICAL COPIES of three tokens. They are aliases now
+  (`T.HALT`/`T.ENGAGED`/`T.LAT_ONLY`) so the halo turns the same red as the long
+  dot and the same green as the engagement glow — a driver should learn ONE red.
+  GUARDED BY AST, not by value: `speed_sign.py` may not call `rl.Color` with a
+  literal argument at all, because value equality alone would pass if someone
+  re-typed the same hex and THE DRIFT IS THE PROBLEM, NOT THE CURRENT VALUE.
+  Consequence worth knowing: derived-alpha calls must go through
+  `T.with_alpha(TOKEN, a)` — the guard is deliberately blunt (any constant arg),
+  since a narrower rule would let `rl.Color(0x2E, 0xC5, 0x8B, alpha_var)` past,
+  which is exactly the shape it exists to catch.
+- `selfdrive/ui/sunnypilot/onroad/hud/chrome.py` — NEW `chrome_scale()` reading
+  `deviceState.screenBrightnessPercent` (hardwared already drives it from the
+  ambient light sensor and ui_state already subscribes — no new signal, no new
+  param). The vignette and bands were tuned for daylight and applied at full
+  strength regardless; at night a 72% vignette plus a 350 px 80% scrim eats road
+  view for nothing. `CHROME_MIN = 0.55` IS A CONSTRAINT, NOT A KNOB: v3.5.0
+  established the vignette is LOAD-BEARING for the state glow (a glow on a
+  bright sky washes out completely, exactly when you most want to know whether
+  the car is steering), so scaling it to nothing at night trades one failure for
+  another. Garbage input returns 1.0 — full chrome is the daylight-safe answer,
+  so an unreadable sensor degrades to TODAY's behaviour rather than guessing
+  "dark".
+- `selfdrive/ui/sunnypilot/onroad/hud/stations.py` — `long_dot_color(state)`
+  split out of `draw_long_dot`, which now takes a COLOUR: the renderer owns the
+  cross-fade, because the fade needs frame-to-frame state and the drawing
+  function has none.
+- TESTS: 565 green. NEW `test_turn_limit.py` (14) plus 20 UI cases. EIGHT
+  guards mutation-tested, incl. a fixed per-frame ease fraction, removing the
+  chrome floor, and a local colour re-declaration.
   PROCESS NOTE worth remembering: the first max() guard PASSED its mutation
   because it compared two calls the mutant moved TOGETHER — a relative
   assertion is worthless against that; it is absolute now.

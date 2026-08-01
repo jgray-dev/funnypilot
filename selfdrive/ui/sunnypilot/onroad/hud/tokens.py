@@ -29,6 +29,7 @@ the alternative is an exception every frame at 60 Hz filling the log and
 burning the CPU budget the rest of the UI needs.
 """
 import math
+import time
 
 import pyray as rl
 
@@ -67,10 +68,21 @@ FAINT = rl.Color(255, 255, 255, 108)
 # below full strength; its job is to be noticed, not read.
 TORQUE_OPACITY = 0.55
 
-R_PLATE = 0.26      # roundness for chips and plates
+# v3.5.4 — THREE RADII, AND ONLY THREE. Before this there were four ad-hoc
+# values living next to the code that drew them (0.13, 0.14, 0.28, 0.30 in
+# speed_sign.py), which is the same drift tokens.py was created to stop.
+# Mixed corner radii do not read as a decision, they read as carelessness.
+R_CHIP = 0.14       # small faces and keylines
+R_PLATE = 0.26      # plates, chips, and the sign halo
 R_PILL = 0.5        # full
 BORDER_W = 2
 PAD = 40            # station gutter
+
+# The implied light comes from ABOVE. A uniform hairline on all four sides
+# reads as an OUTLINE; a brighter line inset along the top edge reads as a lit
+# surface. One extra draw call per plate, and it is what makes the remaining
+# containers look intentional rather than boxed.
+SPECULAR = rl.Color(255, 255, 255, 64)
 
 # ── type ──────────────────────────────────────────────────────────────────
 # NOTE these are NOMINAL sizes: gui_app multiplies both draw_text_ex and
@@ -157,9 +169,78 @@ def text_centered_shadowed(font, s: str, cx: float, y: float, size: int, color, 
 
 
 def plate(rect: rl.Rectangle, roundness: float = R_PLATE) -> None:
-  """The one container in the system: a 62% scrim with a hairline edge."""
+  """The one container in the system: a 62% scrim, a hairline edge, and a
+  specular highlight along the top (v3.5.4 — see SPECULAR)."""
   rl.draw_rectangle_rounded(rect, roundness, 10, SCRIM)
   rl.draw_rectangle_rounded_lines_ex(rect, roundness, 10, BORDER_W, HAIRLINE)
+  # inset so the highlight sits ON the surface rather than on its edge, and
+  # short of the corners so it does not fight the rounding
+  inset = max(6.0, rect.width * 0.12)
+  y = rect.y + BORDER_W + 1.0
+  rl.draw_line_ex((rect.x + inset, y), (rect.x + rect.width - inset, y), 2.0, SPECULAR)
+
+
+# ── motion ────────────────────────────────────────────────────────────────
+# v3.5.4 — ONE TIME CONSTANT FOR THE WHOLE SCREEN.
+#
+# Before this, almost nothing transitioned: pills appeared and vanished on a
+# frame, the sign halo jumped the instant a zone was confirmed, the engagement
+# colour snapped. Each of those is a small visual shock, and a screen full of
+# them reads as a set of widgets rather than one instrument.
+#
+# Everything that APPEARS, DISAPPEARS or CHANGES VALUE now goes through Eased,
+# on a shared tau, so the whole HUD settles on one clock. This is the same
+# decision the minimap's pose smoothing made in v3.5.1, applied to the rest.
+#
+# FRAME-RATE INDEPENDENT BY CONSTRUCTION: alpha comes from exp(-dt/tau), not
+# from a fixed per-frame fraction. A fixed fraction silently changes the feel
+# whenever the frame rate moves, which on a device that throttles is a bug that
+# only appears when it is hot.
+EASE_TAU = 0.18       # s, the house time constant
+EASE_SNAP = 0.002     # settle exactly, so a value can reach its target
+_EASE_DT_MAX = 0.25   # a paused/stalled frame must not teleport the value
+
+
+class Eased:
+  """First-order ease toward a target. Pure apart from the clock."""
+
+  def __init__(self, value: float = 0.0, tau: float = EASE_TAU):
+    self.x = float(value)
+    self.tau = float(tau)
+    self._last = 0.0
+
+  def snap(self, value: float) -> float:
+    """Jump with no transition — for re-engage and other discontinuities where
+    there is no continuity worth preserving."""
+    self.x = float(value)
+    return self.x
+
+  def update(self, target: float, now: float | None = None) -> float:
+    t = time.monotonic() if now is None else now
+    dt = (t - self._last) if self._last else (1.0 / 60.0)
+    self._last = t
+    if not finite(target):
+      return self.x
+    dt = clamp(dt, 0.0, _EASE_DT_MAX)
+    a = 1.0 - math.exp(-dt / self.tau) if self.tau > 0.0 else 1.0
+    self.x += (float(target) - self.x) * a
+    if abs(float(target) - self.x) < EASE_SNAP:
+      self.x = float(target)
+    return self.x
+
+
+class EasedColor:
+  """Eases the four channels of a colour together, so a state change is a
+  cross-fade rather than a cut."""
+
+  def __init__(self, color: rl.Color, tau: float = EASE_TAU):
+    self._c = [float(color.r), float(color.g), float(color.b), float(color.a)]
+    self._e = [Eased(v, tau) for v in self._c]
+
+  def update(self, color: rl.Color, now: float | None = None) -> rl.Color:
+    tgt = (color.r, color.g, color.b, color.a)
+    vals = [int(clamp(e.update(float(v), now), 0.0, 255.0)) for e, v in zip(self._e, tgt, strict=True)]
+    return rl.Color(*vals)
 
 
 # ── the blast shield ──────────────────────────────────────────────────────
