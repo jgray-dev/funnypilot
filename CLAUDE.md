@@ -51,12 +51,16 @@ CA path, so nothing tells it where the trust store is. Fix, keeping verification
 ON:
 
 ```bash
-git config --global http.sslCAInfo /etc/ssl/certs/ca-certificates.crt
+cd /data/openpilot && git config --local http.sslCAInfo /etc/ssl/certs/ca-certificates.crt
 ```
 
-(`http.sslCAPath /etc/ssl/certs` if that build wants the directory.) This lands
-in `/home/comma/.gitconfig` and may not survive an AGNOS OS update — re-run it
-before assuming a new bug. NEVER reach for `http.sslVerify=false` here: it is an
+(`http.sslCAPath /etc/ssl/certs` if that build wants the directory.)
+USE `--local`, NOT `--global`. `--global` under `sudo` resolves HOME to `/root`,
+which is on the READ-ONLY AGNOS rootfs, so it fails with "could not lock config
+file /root/.gitconfig: Read-only file system" — and adding more sudo makes it
+worse, not better. `--local` writes `/data/openpilot/.git/config`, which is
+guaranteed writable and is not reported by `git status --porcelain`, so the
+Verify page stays green. NEVER reach for `http.sslVerify=false` here: it is an
 unverified fetch of code that steers a car, and the offline options below get
 the same result with none of the exposure.
 
@@ -91,12 +95,20 @@ ssh comma@192.168.86.31 \
 ```
 The version, the hash, AND port 8888 must all be right. A flash that "ran" proves nothing.
 
-**If `git fetch` on the device errors with `Permission denied` on `.git/logs/refs/...`:**
-root-owned files inside `.git` (left by a `sudo git` or a root-run flash) block
-checkout — `.git/HEAD` itself becomes unwritable, so the `&&` chain dies silently
-before `reset --hard`. Fix:
+**Root-owned files in the checkout.** Left by a `sudo git` or a root-run flash.
+SAME CAUSE, SEVERAL DIFFERENT ERROR STRINGS — v3.5.1 hit a new one and did not
+recognise it, so all the wordings seen so far are listed here to grep for:
+```
+Permission denied            .git/logs/refs/...
+insufficient permission for adding an object to repository database .git/objects
+fatal: failed to write object / fatal: unpack-objects failed
+```
+The `&&` deploy chain then dies before `reset --hard`, leaving old code running
+behind a command that looked successful. Fix — chown the WHOLE tree, not just
+`.git`: `checkout -f` and `reset --hard` rewrite working-tree files too, so
+fixing only `.git` just moves the failure one step later.
 ```bash
-ssh comma@192.168.86.31 "sudo chown -R comma:comma /data/openpilot/.git"
+ssh comma@192.168.86.31 "sudo chown -R comma:comma /data/openpilot"
 ```
 Never run `git` on the device under `sudo`. Also note `cmd | tail` returns *tail's*
 exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
