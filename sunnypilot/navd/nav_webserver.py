@@ -46,7 +46,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.6"
+EXPECTED_VERSION = "3.5.7"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -157,6 +157,8 @@ _CODE_MARKERS = [
   ("DECIMATE_M", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap route decimation"),
   ("def _rings", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "chrome ring cache"),
   ("def zone_change", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap zone-boundary marker"),
+  # v3.5.7
+  ("power watchdog not kicked", "/data/openpilot/system/manager/manager.py", "AGNOS watchdog failure is logged"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

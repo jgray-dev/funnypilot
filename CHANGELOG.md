@@ -1,3 +1,66 @@
+FunnyPilot v3.5.7 (2026-08-02)
+========================
+The three missing v3.5.6 minimap tests, plus one diagnostic change aimed at a
+reported reboot loop. READ THE REBOOT SECTION FIRST -- it does NOT contain a
+fix, because the cause is not identified yet.
+
+1. THE REBOOT LOOP IS NOT DIAGNOSED, AND THIS RELEASE DOES NOT FIX IT
+------------------------------------------------------------------------
+Reported: the device boots, stays up and online for about 45 s, then reboots
+through the comma splash. Onroad and offroad alike. Not bricked, network fine.
+
+WHAT THAT SYMPTOM MEANS. `manager_thread` kicks the AGNOS power-monitoring
+watchdog once per loop by touching /var/tmp/power_watchdog. AGNOS power-cycles
+the board when that file stops being touched. A device that runs for a fixed
+interval and then reboots, in both states, is the signature of that watchdog
+not being kicked -- which happens if EITHER
+
+  * /var/tmp is not writable (a full or read-only data partition), or
+  * `sm.all_checks(['deviceState'])` is failing (hardwared dead/slow/restarting)
+
+and the whole thing was wrapped in `except Exception: pass`, so neither leaves
+a trace.
+
+* fix: the kick failure is now LOGGED -- `cloudlog.exception` on a raise, and a
+  throttled `cloudlog.error` naming how many consecutive cycles have been
+  missed. NOTHING ABOUT WHEN THE WATCHDOG IS KICKED HAS CHANGED. This only
+  turns a silent reboot into a named one, so the next occurrence produces
+  evidence instead of a guess.
+
+WHY v3.5.6 IS NOT ACCUSED HERE. Everything v3.5.6 touched that runs offroad is
+inert: four onroad-HUD modules whose changed code only executes while the
+onroad screen is drawing, and whose module level gained nothing but constants
+and two pure functions; plus two data tables in nav_webserver. The rest is
+plannerd, which does not run offroad at all. That does not clear it, but it
+does mean shipping a speculative "fix" would have been guessing, and this
+project's history is unambiguous about where that leads.
+
+FALSIFIABLE, and the next drive should settle it: if the log now shows "power
+watchdog not kicked", read `df -h /data` and hardwared's state. If it does NOT
+show up, the watchdog is being kicked and the reboot is coming from somewhere
+else entirely -- power, thermal, or the updater -- and `LastManagerExitReason`
+plus `dmesg` name which.
+
+2. THE THREE MISSING v3.5.6 TESTS
+------------------------------------------------------------------------
+v3.5.6 shipped three minimap changes with no unit coverage, which was called
+out at the time. They have it now.
+
+* `TestZoneChange` (6) -- the boundary marker. The load-bearing case is
+  `test_the_reference_zone_is_the_one_we_are_in`: the base zone must come from
+  the first point AT OR AHEAD of the car, not from `pts[0]`, because BEHIND_M
+  keeps ~170 m of trail and a boundary already driven through would otherwise
+  be re-reported as one still ahead.
+* `TestTintIsVisible` (4) -- that an ordinary 4-10 mph corner actually reads as
+  a colour rather than as road, which is the reported "white 99% of the time".
+* `TestTheTrailOutlivesTheScreen` (3) -- the tail arithmetic, asserted against
+  the widget's real geometry rather than against the constant, so it stays true
+  if EGO_FROM_BOTTOM or RANGE_M ever move.
+
+* 616 green, 0 failed. All three MUTATION-TESTED fail-then-restore: the base
+  zone taken from a point behind the car, DELTA_HI back to 25, and BEHIND_M
+  back to 90.
+
 FunnyPilot v3.5.6 (2026-08-02)
 ========================
 Corner braking starts far earlier, the SLA arrow points at the button you

@@ -554,3 +554,112 @@ class TestStitchToEgo:
 
   def test_empty_is_safe(self):
     assert _rm.stitch_to_ego([]) == []
+
+
+class TestZoneChange:
+  """v3.5.6. The ribbon has carried the zone limit at every point since v3.5.2
+  and nothing read it; `zone_change` is what finally draws the boundary."""
+
+  @staticmethod
+  def _route(limits, start=-40.0, step=20.0):
+    return [(start + i * step, 0.0, 20.0, lim) for i, lim in enumerate(limits)]
+
+  def test_no_change_reads_as_none(self):
+    assert _rm.zone_change(self._route([20.0] * 6)) is None
+
+  def test_it_finds_the_first_boundary_ahead(self):
+    pts = self._route([20.0, 20.0, 20.0, 11.2, 11.2])
+    zc = _rm.zone_change(pts)
+    assert zc is not None
+    i, new_lim, old_lim = zc
+    assert pts[i][0] > 0.0, "the boundary must be AHEAD of us, not behind"
+    assert (new_lim, old_lim) == (11.2, 20.0)
+
+  def test_the_reference_zone_is_the_one_we_are_in(self):
+    """MUTATION: take the base limit from pts[0]. That point is BEHIND the car
+    (BEHIND_M keeps ~170 m of trail), so a boundary already crossed would be
+    re-reported as one still ahead."""
+    pts = self._route([11.2, 11.2, 20.0, 20.0, 20.0], start=-40.0)
+    zc = _rm.zone_change(pts)
+    assert zc is None, "a boundary we have already driven through is not ahead"
+
+  def test_a_faster_zone_is_reported_as_such(self):
+    """The caller colours on new < old, so the ORDER of the pair is the whole
+    contract — swapping it turns every red gate green."""
+    _i, new_lim, old_lim = _rm.zone_change(self._route([11.2, 11.2, 11.2, 20.0, 20.0]))
+    assert (new_lim, old_lim) == (20.0, 11.2)
+
+  def test_missing_limits_are_ignored(self):
+    assert _rm.zone_change([]) is None
+    assert _rm.zone_change(self._route([0.0, 0.0, 0.0])) is None
+
+  def test_noise_is_not_a_boundary(self):
+    """Zone limits arrive as floats; a fractional wobble is not a new zone."""
+    assert _rm.zone_change(self._route([20.0, 20.0, 20.1, 20.0])) is None
+
+
+class TestTintIsVisible:
+  """v3.5.6. Reported as "white 99% of the time": full red needed 25 mph under
+  the expected speed, so an ordinary corner rendered as barely-tinted grey."""
+
+  @staticmethod
+  def _coloured(c):
+    """Reads as a warning colour rather than as road."""
+    return c[0] > 200 and c[0] - c[2] > 60
+
+  def test_an_ordinary_corner_is_actually_coloured(self):
+    """MUTATION: put DELTA_HI back to 25. A 4 mph trim then sits at t = 0.04
+    and is indistinguishable from a straight road."""
+    assert not self._coloured(_rm.ramp_color(0.0)), "flat road must stay neutral"
+    for delta in (4.0, 6.0, 8.0, 10.0):
+      assert self._coloured(_rm.ramp_color(delta)), f"{delta} mph under must show"
+
+  def test_it_saturates_at_a_plausible_corner(self):
+    assert _rm.DELTA_HI <= 15.0, "full red must be reachable by a real corner"
+    assert _rm.ramp_color(_rm.DELTA_HI) == _rm.ramp_color(40.0)
+
+  def test_the_ramp_is_monotone_toward_red(self):
+    reds = [_rm.ramp_color(d)[0] for d in (0, 2, 4, 6, 8, 10, 13, 20)]
+    assert reds == sorted(reds)
+    greens = [_rm.ramp_color(d)[1] for d in (4, 6, 8, 10, 13, 20)]
+    assert greens == sorted(greens, reverse=True)
+
+  def test_the_neutral_is_not_white(self):
+    """It is the ROAD. It was competing with the white ego marker and text."""
+    r, g, b = _rm.ramp_color(0.0)
+    assert max(r, g, b) < 180 and b > r
+
+
+class TestTheTrailOutlivesTheScreen:
+  """v3.5.6. Reported: ~150 px of already-driven road vanishing while still on
+  screen. Arithmetic, not taste -- see BEHIND_M."""
+
+  H = 1020.0   # onroad content height
+
+  def _geom(self):
+    scale = self.H * (_rm.EGO_FROM_BOTTOM - 0.04) / _rm.RANGE_M
+    below_px = self.H * (1.0 - _rm.EGO_FROM_BOTTOM)
+    return scale, below_px
+
+  def test_the_tail_reaches_past_the_bottom_edge(self):
+    """MUTATION: put BEHIND_M back to 90. It is then FIVE PIXELS short of the
+    visible area before any lag at all."""
+    scale, below_px = self._geom()
+    assert _rm.BEHIND_M * scale > below_px
+
+  def test_it_survives_a_poll_interval_of_travel_plus_pose_lag(self):
+    """The filter trims from the pose of THAT INSTANT while the car keeps
+    moving, and the displayed pose lags the polled one by POSE_TAU. Both eat
+    into the tail, and together they are what made the gap visible."""
+    scale, below_px = self._geom()
+    worst_lag_m = (_rm.POLL_S + _rm.POSE_TAU) * 30.0   # 30 m/s
+    assert _rm.BEHIND_M * scale - below_px > worst_lag_m * scale
+
+  def test_the_fade_is_what_ends_the_ribbon(self):
+    """Removal must be done by the edge fade, which knows where the screen is,
+    not by a distance filter, which does not."""
+    rect = _Rect(0.0, 0.0, 240.0, self.H)
+    assert _rm.edge_fade(120.0, self.H, rect) == 0.0          # at the edge
+    assert _rm.edge_fade(120.0, self.H + 50.0, rect) == 0.0    # past it
+    assert _rm.edge_fade(120.0, self.H - 1.0, rect) < 0.1      # essentially gone
+    assert _rm.edge_fade(120.0, self.H / 2.0, rect) == 1.0     # well inside

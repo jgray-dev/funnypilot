@@ -119,6 +119,39 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.7 Changes (based on funnypilot-3.5.6)
+
+The three missing v3.5.6 minimap tests, plus ONE DIAGNOSTIC change for a
+reported reboot loop. **IT IS NOT A FIX — the cause is not identified.**
+
+- REPORTED: device boots, runs ~45 s, reboots through the comma splash, onroad
+  AND offroad, network fine, not bricked.
+- `system/manager/manager.py` — **THE AGNOS POWER WATCHDOG IS THE ONLY THING IN
+  THIS LOOP THAT CAN REBOOT THE BOARD**, and its failure was completely silent.
+  `manager_thread` touches `/var/tmp/power_watchdog` once per loop; AGNOS
+  power-cycles when that stops. It is skipped if `/var/tmp` is unwritable (full
+  or read-only data partition) or if `sm.all_checks(['deviceState'])` fails
+  (hardwared dead/slow), and the whole thing sat inside `except Exception:
+  pass`. A device that runs for a fixed interval then reboots in BOTH states is
+  exactly that signature. Now logged (`cloudlog.exception` + a throttled count).
+  **WHEN the watchdog is kicked is UNCHANGED** — this only produces evidence.
+- WHY v3.5.6 IS NOT ACCUSED: everything it touched that runs offroad is inert —
+  four onroad-HUD modules whose changed code only runs while the onroad screen
+  draws and whose module level gained only constants and two pure functions,
+  plus two data tables in nav_webserver. The rest is plannerd (`only_onroad`).
+  That does not clear it, but shipping a speculative fix would have been a
+  guess, and this repo's history is unambiguous about that.
+- FALSIFIABLE: if the log now shows "power watchdog not kicked", check
+  `df -h /data` and hardwared. If it does NOT, the watchdog is fine and the
+  reboot is power/thermal/updater — `LastManagerExitReason` and `dmesg` name it.
+- TESTS: **616 green.** NEW `TestZoneChange` (6), `TestTintIsVisible` (4),
+  `TestTheTrailOutlivesTheScreen` (3) — the coverage v3.5.6 deliberately
+  skipped. THREE guards mutation-tested: the base zone read from a point BEHIND
+  the car (which would re-report a boundary already driven through), `DELTA_HI`
+  back to 25, `BEHIND_M` back to 90. The tail tests assert against the widget's
+  REAL geometry (`EGO_FROM_BOTTOM`, `RANGE_M`), not against the constant, so
+  they stay meaningful if the layout moves.
+
 ### v3.5.6 Changes (based on funnypilot-3.5.5)
 
 Corner braking starts far earlier, the SLA arrow points at the right button,

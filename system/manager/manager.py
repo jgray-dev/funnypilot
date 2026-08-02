@@ -146,6 +146,7 @@ def manager_thread() -> None:
 
   started_prev = False
   ignition_prev = False
+  watchdog_missed = 0
 
   while True:
     sm.update(1000)
@@ -181,12 +182,30 @@ def manager_thread() -> None:
     pm.send('managerState', msg)
 
     # kick AGNOS power monitoring watchdog
+    #
+    # FunnyPilot v3.5.7 — THIS FAILURE WAS COMPLETELY SILENT, and it is the one
+    # failure in this loop that REBOOTS THE DEVICE. AGNOS power-cycles the board
+    # when /var/tmp/power_watchdog stops being touched, so any of
+    #   * /var/tmp not writable (a full or read-only data partition)
+    #   * deviceState failing all_checks (hardwared dead, slow, or restarting)
+    # produces a device that boots, runs for the watchdog's timeout and reboots,
+    # forever, onroad and offroad alike -- with nothing in the log to say why,
+    # because `except Exception: pass` swallowed the only evidence.
+    #
+    # Nothing here changes WHEN the watchdog is kicked. It only makes a
+    # not-kicked cycle say so, throttled so a genuine outage cannot spam.
+    kicked = False
     try:
       if sm.all_checks(['deviceState']):
         with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
           f.write(str(time.monotonic()))
+        kicked = True
     except Exception:
-      pass
+      cloudlog.exception("power watchdog kick FAILED")
+
+    watchdog_missed = 0 if kicked else watchdog_missed + 1
+    if watchdog_missed and watchdog_missed % 10 == 0:
+      cloudlog.error(f"power watchdog not kicked for {watchdog_missed} cycles, AGNOS will reboot")
 
     # Exit main loop when uninstall/shutdown/reboot is needed
     shutdown = False
