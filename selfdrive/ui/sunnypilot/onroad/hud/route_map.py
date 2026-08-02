@@ -170,6 +170,82 @@ def edge_fade(px: float, py: float, rect: rl.Rectangle) -> float:
   return T.clamp(d / FADE_PX, 0.0, 1.0)
 
 
+# v3.5.5 — LANE OFFSET AND THE GAP. Two reports, one root each.
+#
+# 1. "the position marker sits to the right of the road line". It does, and the
+#    geometry is honest: mapd's route points are the OSM way, i.e. the road
+#    CENTRELINE, while the GPS fix is the car — in the right-hand lane, a lane
+#    half-width off it, plus whatever the fix is out by. The marker is drawn at
+#    the projection origin, so the ribbon lands beside it.
+#
+#    This map is about the road AHEAD — its shape, and the speeds SCC-M reads
+#    off it. Lane position is not information here, it is the one thing that
+#    stops the widget reading as "this is the road I am on". So the ribbon is
+#    SHIFTED LATERALLY to pass through the marker. Translation only: no
+#    rotation, no per-point warping, so every curve and every distance is
+#    untouched and only the constant offset goes away.
+#
+# 2. "the current segment disappears too soon, leaving a gap between the marker
+#    and the road ahead". mapd publishes the route from its matched position
+#    forward, so after a re-match the first point can be tens of metres ahead
+#    and there is nothing to draw between us and it. The ribbon is stitched
+#    back to the origin in that case.
+#
+# BOTH ARE BOUNDED, and the bound is the safety property: a bad match must be
+# allowed to look wrong rather than be allowed to drag the whole ribbon
+# somewhere it does not belong.
+LANE_SHIFT_MAX_M = 12.0   # beyond this the match is wrong, not the lane
+STITCH_MAX_M = 60.0       # further than this and a straight line would be fiction
+
+
+def lateral_offset_at_ego(pts) -> float:
+  """The route's lateral offset where we are, metres (+right).
+
+  Interpolated at fwd == 0 between the two points that bracket us, so it moves
+  CONTINUOUSLY as the route slides past — picking the nearest point instead
+  would step every time the nearest index changed, which is the jitter v3.5.1
+  went to some trouble to remove. Falls back to the closest point when the
+  route does not bracket us (i.e. it begins ahead), and returns 0.0 — no shift
+  at all — for anything it cannot trust.
+  """
+  if not pts or len(pts) < 1:
+    return 0.0
+  best = None
+  for i in range(1, len(pts)):
+    f0, r0 = pts[i - 1][0], pts[i - 1][1]
+    f1, r1 = pts[i][0], pts[i][1]
+    if (f0 <= 0.0 <= f1) or (f1 <= 0.0 <= f0):
+      if f1 == f0:
+        best = r0
+      else:
+        t = (0.0 - f0) / (f1 - f0)
+        best = r0 + (r1 - r0) * t
+      break
+  if best is None:
+    # no bracket: use whichever end of the route is nearest to us
+    nearest = min(pts, key=lambda p: abs(p[0]))
+    best = nearest[1]
+  if not T.finite(best) or abs(best) > LANE_SHIFT_MAX_M:
+    return 0.0
+  return float(best)
+
+
+def stitch_to_ego(pts):
+  """Prepend a point at the origin when the route begins AHEAD of us.
+
+  Only ever adds; never moves or drops a real point. Bounded by STITCH_MAX_M
+  because past that a straight segment would be inventing road geometry, which
+  is the one thing this widget must not do.
+  """
+  if not pts:
+    return pts
+  f0 = pts[0][0]
+  if not T.finite(f0) or f0 <= 0.0 or f0 > STITCH_MAX_M:
+    return pts
+  _f, _r, v, lim = pts[0]
+  return [(0.0, 0.0, v, lim), *pts]
+
+
 class RouteMap:
   def __init__(self):
     self._params = None
@@ -336,11 +412,21 @@ class RouteMap:
       return north * cb + east * sb, -north * sb + east * cb
 
     pts = [(*to_ego(plat, plon), v, lim) for plat, plon, v, lim in self._raw]
+
+    # v3.5.5: take the lane/centreline offset out so the ribbon runs through
+    # the marker. Computed BEFORE the stitch (the stitch adds a point at the
+    # origin, which would otherwise answer the question with its own input) and
+    # applied to the governing point too, or the marker SCC-M chose would drift
+    # off the road it belongs to.
+    shift = lateral_offset_at_ego(pts)
+    if shift:
+      pts = [(f, r - shift, v, lim) for f, r, v, lim in pts]
+
     gov = None
     if self._gov_ll is not None:
       gf, gr = to_ego(self._gov_ll[0], self._gov_ll[1])
-      gov = (gf, gr, self._gov_ll[2])
-    return pts, gov
+      gov = (gf, gr - shift, self._gov_ll[2])
+    return stitch_to_ego(pts), gov
 
   def render(self, rect: rl.Rectangle, ref_mps: float = 0.0,
              sla_ratio: float = 0.0, sla_active: bool = False) -> None:

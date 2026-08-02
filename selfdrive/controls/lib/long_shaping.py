@@ -43,8 +43,15 @@ JERK_UP_DEFAULT = 1.8
 # itself is mild. Keep the sequence MONOTONICALLY DECREASING — a later edit
 # that raises a value in the middle would make firmer braking gentler, which is
 # the one thing this module promises never to do (test_jerk_down_is_monotone).
+#
+# FunnyPilot v3.5.5 PULLED THE RELAXATION OUT OF THE NEGATIVE REGION. v3.5.3
+# put 3.0 at a demand of 0.0, which meant every demand between -1.0 and 0 was
+# slewed more slowly than before — and that band is precisely "ease off for a
+# lead that is slowing". The intent was only ever to soften a THROTTLE LIFT, so
+# the relaxation now begins at 0 and the whole demand <= 0 half of the table is
+# bit-identical to the pre-v3.5.3 constant. A demand of +1.0 still gets 2.5.
 JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]
-JERK_DOWN_V = [12.0, 4.0, 3.0, 2.5]
+JERK_DOWN_V = [12.0, 4.0, 4.0, 2.5]
 
 
 class AccelJerkShaper:

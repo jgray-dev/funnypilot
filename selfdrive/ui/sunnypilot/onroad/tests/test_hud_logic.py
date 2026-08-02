@@ -478,3 +478,79 @@ class TestOnePalette:
       "speed_sign.py must take its colours from tokens.py: " +
       ", ".join(ast.unparse(n) for n in literals)
     )
+
+
+class TestLaneOffset:
+  """v3.5.5. mapd's route points are the OSM way — the road CENTRELINE — while
+  the GPS fix is the car, in the right-hand lane. The marker is drawn at the
+  projection origin, so the ribbon landed beside it. Reported as "the position
+  marker is offset to the right of the minimap road line"."""
+
+  @staticmethod
+  def _straight(right, n=8, spacing=20.0, start=-40.0):
+    return [(start + i * spacing, right, 20.0, 25.0) for i in range(n)]
+
+  def test_it_finds_the_offset_where_we_actually_are(self):
+    assert _rm.lateral_offset_at_ego(self._straight(3.0)) == pytest.approx(3.0)
+
+  def test_it_interpolates_rather_than_snapping_to_a_point(self):
+    """MUTATION: use the nearest point instead of interpolating. The value then
+    STEPS every time the nearest index changes, which is precisely the 1 Hz
+    jitter v3.5.1 went to some trouble to remove."""
+    pts = [(-10.0, 0.0, 20.0, 25.0), (10.0, 4.0, 20.0, 25.0)]
+    assert _rm.lateral_offset_at_ego(pts) == pytest.approx(2.0)
+
+  def test_the_shift_removes_it_exactly(self):
+    pts = self._straight(3.2)
+    shift = _rm.lateral_offset_at_ego(pts)
+    assert all(abs(r - shift) < 1e-9 for _f, r, _v, _l in pts)
+
+  def test_an_implausible_offset_is_refused(self):
+    """BOUNDED: a bad route match must be allowed to look wrong rather than be
+    allowed to drag the whole ribbon somewhere it does not belong.
+    MUTATION: drop LANE_SHIFT_MAX_M."""
+    assert _rm.lateral_offset_at_ego(self._straight(400.0)) == 0.0
+    assert _rm.lateral_offset_at_ego(self._straight(-400.0)) == 0.0
+    assert _rm.LANE_SHIFT_MAX_M < 20.0
+
+  def test_a_route_entirely_ahead_still_answers(self):
+    pts = [(20.0, 2.5, 20.0, 25.0), (40.0, 2.6, 20.0, 25.0)]
+    assert _rm.lateral_offset_at_ego(pts) == pytest.approx(2.5)
+
+  def test_garbage_is_no_shift_at_all(self):
+    assert _rm.lateral_offset_at_ego([]) == 0.0
+    assert _rm.lateral_offset_at_ego([(0.0, float('nan'), 20.0, 25.0)]) == 0.0
+
+
+class TestStitchToEgo:
+  """v3.5.5. mapd publishes the route from its matched position forward, so
+  after a re-match the first point can be well ahead of us and nothing joins it
+  to the car. Reported as "a gap between the road ahead and my marker"."""
+
+  def test_a_route_starting_ahead_is_joined_to_the_car(self):
+    pts = [(30.0, 0.0, 18.0, 25.0), (60.0, 0.0, 18.0, 25.0)]
+    out = _rm.stitch_to_ego(pts)
+    assert len(out) == len(pts) + 1
+    assert out[0][0] == 0.0 and out[0][1] == 0.0
+    assert out[1:] == pts          # never moves or drops a real point
+
+  def test_it_carries_the_first_points_speed_and_zone(self):
+    """The stitched segment must be tinted like the road it leads to, or the
+    join reads as a different piece of road."""
+    pts = [(30.0, 0.0, 18.0, 25.0)]
+    assert _rm.stitch_to_ego(pts)[0][2:] == (18.0, 25.0)
+
+  def test_a_route_that_already_covers_us_is_untouched(self):
+    pts = [(-20.0, 0.0, 18.0, 25.0), (20.0, 0.0, 18.0, 25.0)]
+    assert _rm.stitch_to_ego(pts) is pts
+
+  def test_a_distant_route_is_not_invented(self):
+    """BOUNDED: past STITCH_MAX_M a straight segment would be fiction, and
+    drawing geometry the controller cannot see is the one thing this widget
+    exists not to do. MUTATION: remove the bound."""
+    pts = [(300.0, 0.0, 18.0, 25.0)]
+    assert _rm.stitch_to_ego(pts) is pts
+    assert _rm.STITCH_MAX_M <= 100.0
+
+  def test_empty_is_safe(self):
+    assert _rm.stitch_to_ego([]) == []

@@ -26,26 +26,35 @@ STARTING_ACCEL_RATE = 6.0
 STARTING_CREEP_RATE = 2.5      # m/s^3, once actually pulling away
 STARTING_RATE_BP = [-0.5, 0.5]  # m/s^2 of current output accel
 
-# The stopping ramp's rate is likewise tapered WHILE STILL ROLLING. It walks
-# accel down toward CP.stopAccel after the plan has decided to stop; at full
-# rate that last bite of brake pressure arrives while the car is still moving
-# and is exactly the nod you feel at the end of a stop. Below STOP_TAPER_V the
-# full rate is restored so the brake hold is always secured firmly.
-# THIS CANNOT MAKE THE CAR STOP LATER THAN COMMANDED: the ramp starts from
-# `last_output_accel`, which is already whatever the planner asked for, and
-# only ever adds MORE braking on top.
-STOP_TAPER_V = [0.5, 1.5]      # m/s
-STOP_TAPER_SCALE = [1.0, 0.35]  # fraction of CP.stoppingDecelRate
+# FunnyPilot v3.5.5 — THE v3.5.4 STOPPING TAPER IS REVERTED. POST-MORTEM, and
+# it is the useful part of this file:
+#
+# v3.5.4 scaled `CP.stoppingDecelRate` down to 0.35x while the car was still
+# rolling, to soften the last bite of brake at the end of a stop. The stated
+# safety argument was "this cannot stop the car later than commanded, because
+# the ramp starts from last_output_accel and only adds more on top". That
+# sentence is true and IRRELEVANT, which is the trap worth remembering: in the
+# `stopping` state the PID IS RESET AND PRODUCES NOTHING, so this ramp is the
+# ONLY brake authority the car has. Slowing it does not merely soften an extra
+# bite — it slows the entire completion of the stop.
+#
+# The numbers were never checked against THIS car, and that is what made it a
+# defect rather than a taste call. Upstream's default `stoppingDecelRate` is
+# 0.8 m/s^3, but the K5 takes sunnypilot's Hyundai DEFAULT config, which is
+# 0.40 (opendbc/sunnypilot/car/hyundai/longitudinal/config.py). Walking from
+# 0 to `stopAccel` -2.0 therefore takes 5 s at full rate — and 14 s at 0.35x.
+# The stopping state became very nearly a HOLD of whatever accel happened to be
+# commanded when it engaged, with the deficit paid back at full rate only once
+# under 0.5 m/s. Softer, then a grab: exactly the "too hard, too late" the
+# driver reported, at the one moment it is most obvious.
+#
+# GENERALIZED: a rate limiter is only "just a comfort scale" when something
+# else owns the target. Check what else is driving before you slow one down.
 
 
 def starting_accel_rate(a_now: float) -> float:
   """Slew rate for the starting state, m/s^3. See STARTING_RATE_BP."""
   return float(np.interp(a_now, STARTING_RATE_BP, [STARTING_ACCEL_RATE, STARTING_CREEP_RATE]))
-
-
-def stopping_decel_rate(base_rate: float, v_ego: float) -> float:
-  """Slew rate for the stopping state, m/s^3. See STOP_TAPER_V."""
-  return float(base_rate * np.interp(v_ego, STOP_TAPER_V, STOP_TAPER_SCALE))
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
@@ -117,8 +126,9 @@ class LongControl:
       output_accel = self.last_output_accel
       if output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
-        # v3.5.4: tapered while still rolling, full rate once nearly stopped
-        output_accel -= stopping_decel_rate(self.CP.stoppingDecelRate, CS.vEgo) * DT_CTRL
+        # v3.5.5: full rate again — this ramp is the ONLY brake authority in
+        # this state (the PID is reset below), so it may not be scaled.
+        output_accel -= self.CP.stoppingDecelRate * DT_CTRL
       self.reset()
 
     elif self.long_control_state == LongCtrlState.starting:

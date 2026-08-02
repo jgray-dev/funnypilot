@@ -130,6 +130,71 @@ class TestArming:
     assert sla.state == SpeedLimitAssistState.preActive
 
 
+class TestInactiveIsEscapable:
+  """FunnyPilot v3.5.5 — the reported "SLA refuses to re-enable; the only fix
+  is toggling the setting off and on".
+
+  preActive is a 6 s window and, before this, the only doors into it were a
+  ZONE CHANGE or the first limit of the drive — both events the driver does not
+  control. Miss the window and there was no gesture that could reopen it.
+  """
+
+  def _timed_out(self):
+    sla = make_sla()
+    events = FakeEvents()
+    engage(sla, events, cluster_mph=40., limit_mph=45.)
+    assert sla.state == SpeedLimitAssistState.preActive
+    # let the window expire with the SAME zone still in force, which is exactly
+    # the case that had no exit
+    step(sla, events, cluster_mph=40., limit_mph=45., n=WINDOW_FRAMES + 2)
+    assert sla.state == SpeedLimitAssistState.inactive
+    return sla, events
+
+  def test_it_really_does_time_out_first(self):
+    """Anti-vacuous: if this stopped landing in `inactive` the tests below
+    would pass without exercising anything."""
+    sla, _ = self._timed_out()
+    assert not sla.is_active
+
+  def test_a_cruise_press_reopens_the_window(self):
+    """MUTATION: delete the `_button_event_recent()` branch. The driver is then
+    locked out until the next sign — the reported bug, verbatim."""
+    sla, events = self._timed_out()
+    release(sla, ButtonType.decelCruise)
+    step(sla, events, cluster_mph=40., limit_mph=45.)
+    assert sla.state == SpeedLimitAssistState.preActive
+
+  def test_reopening_does_not_by_itself_activate(self):
+    """The reopening press must NOT double as the confirm: activation adopts
+    the set speed, so a single stray tap silently locking SLA on at whatever
+    the cluster happens to read is the failure mode to avoid."""
+    sla, events = self._timed_out()
+    release(sla, ButtonType.accelCruise)
+    step(sla, events, cluster_mph=40., limit_mph=45.)
+    assert sla.state == SpeedLimitAssistState.preActive
+    assert not sla.is_active
+
+  def test_a_second_directional_press_then_confirms(self):
+    """End to end, this is the gesture the driver described: adjust speed, see
+    the arrow, press again in its direction."""
+    sla, events = self._timed_out()
+    release(sla, ButtonType.decelCruise)
+    step(sla, events, cluster_mph=40., limit_mph=45.)
+    release(sla, ButtonType.accelCruise)  # 40 in a 45 zone -> the arrow says UP
+    step(sla, events, cluster_mph=40., limit_mph=45.)
+    assert sla.is_active
+
+  def test_no_limit_means_no_prompt(self):
+    """A press with nothing to assist toward must stay quiet."""
+    sla = make_sla()
+    events = FakeEvents()
+    engage(sla, events, has_limit=False, limit_mph=0.)
+    assert sla.state == SpeedLimitAssistState.inactive
+    release(sla, ButtonType.decelCruise)
+    step(sla, events, has_limit=False, limit_mph=0.)
+    assert sla.state == SpeedLimitAssistState.inactive
+
+
 class TestPreActiveConfirm:
   def test_up_confirm_activates_and_adopts_set_speed(self):
     # 40 set in a 45 zone: up arrow; pressing UP within the window activates.

@@ -38,6 +38,7 @@ _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/bump_damper.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
   "/data/openpilot/selfdrive/controls/lib/turn_limit.py",
+  "/data/openpilot/selfdrive/controls/lib/lead_physics.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
   "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py",
@@ -45,7 +46,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.4"
+EXPECTED_VERSION = "3.5.5"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -142,10 +143,14 @@ _CODE_MARKERS = [
   # v3.5.4
   ("def predicted_lat_accel", "/data/openpilot/selfdrive/controls/lib/turn_limit.py", "anticipatory turn limiting"),
   ("def starting_accel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "scheduled creep launch"),
-  ("def stopping_decel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "tapered stop settle"),
   ("class Eased", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py", "one house easing primitive"),
   ("def chrome_scale", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "scene-adaptive chrome"),
   ("def long_dot_color", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/stations.py", "cross-faded long dot"),
+  # v3.5.5
+  ("def believed_lead_decel", "/data/openpilot/selfdrive/controls/lib/lead_physics.py", "lead stopping-distance physics"),
+  ("def lateral_offset_at_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap lane alignment"),
+  ("def stitch_to_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ribbon reaches the car"),
+  ("INACTIVE WAS A TRAP", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA re-arm on a cruise press"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

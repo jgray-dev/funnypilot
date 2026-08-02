@@ -119,6 +119,91 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.5 Changes (based on funnypilot-3.5.4)
+
+Three reported defects. Read the stop-taper post-mortem first — it is a v3.5.4
+regression that shipped behind a safety argument that was true and irrelevant.
+
+- `selfdrive/controls/lib/longcontrol.py` — **THE v3.5.4 STOPPING TAPER IS
+  REVERTED.** It scaled `CP.stoppingDecelRate` to 0.35x while rolling, claiming
+  "cannot stop the car later than commanded, the ramp only adds brake on top of
+  `last_output_accel`". TRUE AND IRRELEVANT, AND THAT IS THE TRAP: in the
+  `stopping` state THE PID IS RESET AND PRODUCES NOTHING, so this ramp is the
+  ONLY brake authority the car has. The numbers were also never checked against
+  THIS car — upstream's default rate is 0.8 m/s^3 but the K5 takes sunnypilot's
+  Hyundai DEFAULT config, `stopping_decel_rate = 0.40`
+  (`opendbc/sunnypilot/car/hyundai/longitudinal/config.py`). 0 -> `stopAccel`
+  -2.0 is 5 s at full rate and **14 s at 0.35x**, so the stopping state became
+  very nearly a HOLD with the deficit repaid at full rate only under 0.5 m/s:
+  soft, then a grab. GENERALIZED: **a rate limiter is only "just a comfort
+  scale" when something else owns the target.** Check what else is driving
+  before you slow one down.
+- `selfdrive/controls/lib/lead_physics.py` — NEW, stdlib-only (long_mpc.py
+  imports acados and cannot be constructed off-device, so anything testable
+  lives outside it — same reason as turn_limit.py / long_shaping.py).
+  THE MPC ASSERTED SOMETHING FACTUALLY FALSE: it turns a moving lead into a
+  stationary obstacle with `x_lead + v_lead^2/(2*COMFORT_BRAKE)`, i.e. it
+  assumed the LEAD decelerates at OUR comfort rate regardless of what the lead
+  is observably doing. A real stop is 3-5 m/s^2, so the term overstates how far
+  the lead travels, the obstacle is placed too far away, and braking starts
+  late — then needs MORE than COMFORT_BRAKE to recover. ARITHMETIC, NOT
+  OPINION: at 20 m/s with the lead at 4.0 m/s^2 the geometry needs a 48.4 m gap
+  and the old constant asked for 39.5 m. Now
+  `decel = clip(-a_lead, COMFORT_BRAKE, LEAD_DECEL_MAX)`.
+  FLOORED AT COMFORT_BRAKE IS THE WHOLE SAFETY ARGUMENT — a lead coasting,
+  holding speed or easing off gently returns the BIT-IDENTICAL old number, so
+  "don't brake constantly for a lead simply slowing down" holds BY
+  CONSTRUCTION, not by tuning, and no input can brake later than v3.5.4.
+  `LEAD_DECEL_MAX` 4.0 is a NOISE bound, not a safety one: `aLeadK` is a Kalman
+  output on a radar track and an uncapped spike would yank the obstacle tens of
+  metres closer for one frame — the jab this exists to remove. `LeadDecelBelief`
+  is seeded at COMFORT_BRAKE and RESET ON LEAD LOSS, because a fresh track's
+  first samples are its least reliable. One instance PER LEAD; sharing would
+  let lead1's accel bleed into lead0's obstacle.
+- `selfdrive/controls/lib/long_shaping.py` — `JERK_DOWN_V` 3.0 -> 4.0 at demand
+  0.0. v3.5.3's relaxation reached into the NEGATIVE region, slewing every
+  demand in [-1.0, 0] more slowly than before — and that band is exactly "ease
+  off for a lead that is slowing". The whole demand <= 0 half of the table is
+  now bit-identical to pre-v3.5.3; a genuine throttle lift at +1.0 still gets
+  2.5. Keep `JERK_DOWN_V` non-increasing (`test_jerk_down_is_monotone`).
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — NEW
+  `lateral_offset_at_ego()` and `stitch_to_ego()`. The marker sat right of the
+  ribbon because the geometry was HONEST: mapd's points are the OSM way (road
+  CENTRELINE) and the fix is the car, in the right-hand lane. This map is about
+  the road AHEAD and its speeds, so lane position is not information here — it
+  is the one thing stopping the widget reading as "the road I am on". The
+  ribbon is shifted laterally onto the marker, TRANSLATION ONLY (no rotation,
+  no per-point warp), so every curve and distance is untouched. INTERPOLATED at
+  fwd == 0, never snapped to the nearest point — snapping steps whenever the
+  nearest index changes, which is precisely the 1 Hz jitter v3.5.1 removed.
+  The gap ahead of the marker is mapd publishing the route from its MATCHED
+  position, so after a re-match the first point can be tens of metres out;
+  `stitch_to_ego` prepends the origin carrying that point's speed and zone.
+  BOTH BOUNDED (`LANE_SHIFT_MAX_M` 12, `STITCH_MAX_M` 60) AND THE BOUND IS THE
+  POINT: a bad match must be allowed to LOOK wrong rather than drag the ribbon
+  somewhere it does not belong or invent geometry the controller cannot see.
+- `sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py` —
+  **`inactive` WAS A TRAP.** `preActive` is a 6 s window and its only doors were
+  a ZONE CHANGE or the first limit of the drive — both events THE DRIVER DOES
+  NOT CONTROL. Miss it once and no gesture could reopen it; toggling the setting
+  worked only because it routes through `disabled`, which re-arms. THE LEAD
+  CORRELATION IS THE CLUE THAT FOUND IT (user noticed it cleared when the car
+  ahead turned off): braking for a lead disengages, re-engaging opens the window
+  exactly when the driver is busy, AND behind a lead you sit BELOW the limit so
+  the arrow asks for `+` — the one press you will not make while closing on
+  someone. A recent cruise button event now reopens the window; it cannot
+  activate anything alone, because `_enter_pre_active` clears pending releases
+  so the confirm is still a second DIRECTIONAL press. That half is pinned:
+  activation ADOPTS the set speed, so a stray tap silently locking SLA on at
+  whatever the cluster reads is the failure mode to avoid.
+- TESTS: 603 green. NEW `test_lead_physics.py` (24) plus 12 minimap and 6 SLA
+  cases. SIX guards mutation-tested.
+  PROCESS NOTE, WORTH MORE THAN THE FIX: the first lead-physics mutation
+  PASSED. The guard was fine — the `sed` used four-space indentation and this
+  repo uses two, so NOTHING WAS MUTATED. A mutation run that does not visibly
+  break something proves nothing; assert the mutation applied before believing
+  a green result.
+
 ### v3.5.4 Changes (based on funnypilot-3.5.3)
 
 Three longitudinal comfort changes plus three onroad visual refinements. ZERO

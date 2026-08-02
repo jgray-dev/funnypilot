@@ -9,6 +9,7 @@ from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
+from openpilot.selfdrive.controls.lib.lead_physics import LeadDecelBelief, stopped_equivalence_distance
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -100,8 +101,11 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=None):
     t_follow += _LOW_SPEED_HEADWAY_CUSHION * float(np.interp(v_ego, [4., 14.], [1., 0.]))
   return float(t_follow)
 
-def get_stopped_equivalence_factor(v_lead):
-  return (v_lead**2) / (2 * COMFORT_BRAKE)
+def get_stopped_equivalence_factor(v_lead, decel: float = COMFORT_BRAKE):
+  """FunnyPilot v3.5.5 — `decel` is now the deceleration we believe the LEAD is
+  running, not unconditionally our own comfort rate. See lead_physics.py for
+  the derivation; the default keeps every existing call site byte-identical."""
+  return stopped_equivalence_distance(v_lead, decel)
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
@@ -246,6 +250,10 @@ class LongitudinalMpc:
     # governors (SCC-V/M, SLA, hidden offset) binding in E2E. Runtime-only
     # (weights/params/yref) — the prebuilt aarch64 solver is unchanged.
     self.mode = 'acc'
+    # v3.5.5: one belief per tracked lead. Separate instances on purpose --
+    # sharing one filter would let lead1's accel bleed into lead0's obstacle,
+    # and lead0 is the one that is usually braking us.
+    self._lead_decel = [LeadDecelBelief(COMFORT_BRAKE, dt), LeadDecelBelief(COMFORT_BRAKE, dt)]
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
@@ -364,8 +372,16 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    # v3.5.5: how far each lead needs to stop is computed from the decel that
+    # lead is ACTUALLY running, floored at COMFORT_BRAKE. A lead that is
+    # coasting or easing off returns exactly the old number, so ordinary
+    # following is unchanged; a lead braking hard places its obstacle closer,
+    # so we begin braking earlier instead of catching up later. See
+    # lead_physics.py -- the old constant was short by ~9 m at 20 m/s.
+    decel_0 = self._lead_decel[0].update(radarstate.leadOne.aLeadK, bool(radarstate.leadOne.status))
+    decel_1 = self._lead_decel[1].update(radarstate.leadTwo.aLeadK, bool(radarstate.leadTwo.status))
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1], decel_0)
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1], decel_1)
 
     self.params[:,0] = ACCEL_MIN
     self.params[:,1] = ACCEL_MAX

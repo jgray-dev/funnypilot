@@ -1,3 +1,142 @@
+FunnyPilot v3.5.5 (2026-08-02)
+========================
+Three reported defects. The first is mine, from v3.5.4.
+
+1. LEAD BRAKING: THE MPC NOW BELIEVES THE LEAD
+------------------------------------------------------------------------
+Reported: "slowing down for vehicles ahead feels wrong -- historically too
+hard too late, and this one is the same impression but worse."
+
+FIRST, THE REGRESSION, AND IT WAS MINE. v3.5.4 tapered `CP.stoppingDecelRate`
+to 0.35x while the car was still rolling, to soften the last bite of brake at
+the end of a stop. It shipped with a safety argument that was true and
+IRRELEVANT: "the ramp starts from last_output_accel and only ever adds more on
+top". In the `stopping` state THE PID IS RESET AND PRODUCES NOTHING, so that
+ramp is the only brake authority the car has -- slowing it does not soften an
+extra bite, it slows the completion of the whole stop.
+
+The numbers were never checked against THIS car, which is what makes it a
+defect rather than a taste call. Upstream's default `stoppingDecelRate` is 0.8
+m/s^3; the K5 takes sunnypilot's Hyundai DEFAULT config, which is 0.40. Walking
+from 0 to `stopAccel` -2.0 takes 5 s at full rate and 14 s at 0.35x. The
+stopping state became very nearly a HOLD, with the deficit repaid at full rate
+only below 0.5 m/s: soft, then a grab.
+
+* fix: the taper is REVERTED. `test_stopping_ramp_runs_at_the_cars_full_rate`
+  now pins the per-frame step to `CP.stoppingDecelRate` exactly.
+* GENERALIZED: a rate limiter is only "just a comfort scale" when something
+  else owns the target. Check what else is driving before you slow one down.
+
+SECOND, THE PART THAT WAS ALWAYS WRONG. The MPC turns a moving lead into a
+stationary obstacle by adding the lead's own stopping distance to its position,
+and it computed that distance with OUR comfort deceleration:
+
+    obstacle = x_lead + v_lead^2 / (2 * COMFORT_BRAKE)
+
+That asserts the lead will decelerate at 2.2 m/s^2 no matter what the lead is
+observably doing. A real stop is 3-5 m/s^2, so the term over-estimates how far
+the lead will travel, the obstacle is placed too far away, and we start braking
+too late -- then need MORE than COMFORT_BRAKE to recover. The shortfall is
+arithmetic, not opinion:
+
+    v_ego = v_lead = 20 m/s, lead braking at 4.0 m/s^2, t_follow 1.6 s
+      lead actually travels    400 / (2*4.0) = 50.0 m
+      we need to stop in       400 / (2*2.2) = 90.9 m, plus STOP_DISTANCE 7.5
+      -> the gap we must already have is           48.4 m
+      what the old constant asked for is           39.5 m
+
+* feat: NEW `selfdrive/controls/lib/lead_physics.py` (stdlib-only, because
+  long_mpc.py imports acados and cannot be constructed off-device).
+  `decel = clip(-a_lead, COMFORT_BRAKE, LEAD_DECEL_MAX)`.
+
+BOUNDED SO IT CAN ONLY EVER HELP, WHICH IS THE WHOLE SAFETY ARGUMENT. Floored
+at COMFORT_BRAKE, so a lead that is coasting, holding speed, or easing off more
+gently than we would returns the BIT-IDENTICAL old number -- "not constantly
+braking when following a lead vehicle simply slowing down" is preserved by
+construction, not by tuning. A bigger believed decel only ever moves the
+obstacle CLOSER, so no input makes this brake later than v3.5.4 did. Capped at
+4.0 not for safety but for NOISE: `aLeadK` is a Kalman output on a radar track,
+and an uncapped spike would yank the obstacle tens of metres closer for one
+frame -- the brake jab this change exists to remove. A short filter, seeded at
+COMFORT_BRAKE and reset on lead loss, does the rest.
+
+THIRD, a smaller one from v3.5.3. `JERK_DOWN_V` put 3.0 at a demand of 0.0,
+which slewed every demand between -1.0 and 0 more slowly than before -- and
+that band is exactly "ease off for a lead that is slowing". The intent was only
+ever to soften a THROTTLE LIFT, so the relaxation now starts at 0 and the whole
+demand <= 0 half of the table is bit-identical to pre-v3.5.3. A lift at +1.0
+still gets 2.5.
+
+2. THE MINIMAP RUNS THROUGH THE CAR
+------------------------------------------------------------------------
+Reported: the position marker sits to the right of the road line, and sometimes
+there is a gap between the marker and the road ahead.
+
+* fix: NEW `lateral_offset_at_ego()`. The offset is real and the geometry was
+  honest -- mapd's points are the OSM way, i.e. the road CENTRELINE, while the
+  GPS fix is the car, in the right-hand lane. But this map is about the road
+  AHEAD and its speeds; lane position is not information here, it is the one
+  thing stopping the widget reading as "the road I am on". The ribbon is
+  shifted laterally to pass through the marker. TRANSLATION ONLY -- no
+  rotation, no per-point warping, so every curve and distance is untouched.
+  Interpolated at fwd == 0 rather than snapped to the nearest point, because
+  snapping steps every time the nearest index changes, which is precisely the
+  1 Hz jitter v3.5.1 removed. Mutation-tested.
+* fix: NEW `stitch_to_ego()`. mapd publishes the route from its matched
+  position forward, so after a re-match the first point can be tens of metres
+  ahead with nothing joining it to the car. The ribbon is stitched back to the
+  origin, carrying the first point's speed and zone so the join is tinted like
+  the road it leads to.
+* BOTH ARE BOUNDED (`LANE_SHIFT_MAX_M` 12, `STITCH_MAX_M` 60), and the bound is
+  the safety property: a bad route match must be allowed to LOOK wrong rather
+  than drag the ribbon somewhere it does not belong, or invent geometry the
+  controller cannot see. Both bounds mutation-tested.
+
+3. SLA COULD NOT BE RE-ENABLED
+------------------------------------------------------------------------
+Reported: "I can see the indicator by the speed limit, but changing speed to
+enable it does nothing" -- cleared only by toggling the setting off and on.
+
+THE DEFECT: `preActive` is a 6 s window, and the only doors into it were a ZONE
+CHANGE or the first limit of the drive. Both are events the DRIVER DOES NOT
+CONTROL. Miss the window once and there was no gesture that could reopen it;
+toggling the setting worked only because it routes through `disabled`, which
+re-arms.
+
+WHY A LEAD MAKES IT LIKELY, which is the clue that found it -- the driver
+noticed it cleared once the car ahead turned off. Braking for a lead
+disengages, and re-engaging opens the window at the exact moment the driver is
+busy with the car in front. Behind a lead you also sit with a set speed BELOW
+the limit, so the arrow asks for `+`, and `+` is the one press you will not
+make while closing on someone. Either way the window expires unconfirmed.
+
+* fix: a recent cruise button event while inactive REOPENS the window. It
+  cannot activate anything by itself -- `_enter_pre_active` clears the pending
+  releases, so the confirming press is still a second, DIRECTIONAL one. All
+  this restores is the driver's ability to ask. Mutation-tested, and
+  `test_reopening_does_not_by_itself_activate` pins the half that matters:
+  activation ADOPTS the set speed, so a stray tap silently locking SLA on at
+  whatever the cluster reads is the failure mode to avoid.
+
+TESTS
+------------------------------------------------------------------------
+* 603 green, 0 failed. NEW `test_lead_physics.py` (24), plus 12 minimap and
+  6 SLA cases.
+* SIX guards MUTATION-TESTED fail-then-restore: a hard-braking lead no longer
+  believed, the noise cap removed, the v3.5.4 stop taper reintroduced, the SLA
+  re-arm branch deleted (reproduces the reported bug verbatim), the lane offset
+  snapping instead of interpolating, and the stitch bound removed.
+* PROCESS NOTE: the first run of the lead-physics mutation PASSED, and the
+  guard was fine -- the `sed` had four-space indentation and this repo uses
+  two, so nothing was mutated at all. A mutation test that does not visibly
+  break something proves NOTHING; check the mutation applied before believing
+  the result.
+* ON-ROAD VERIFICATION REQUIRED: (1) braking for a lead that is stopping should
+  begin noticeably earlier and stay lighter; (2) following a lead that is
+  merely slowing should feel IDENTICAL to v3.5.4 -- if it does not, the floor
+  in `believed_lead_decel` is not doing its job and that is a bug, not a tuning
+  question; (3) coming to rest should be back to the v3.5.3 feel.
+
 FunnyPilot v3.5.4 (2026-08-01)
 ========================
 Three comfort changes, all longitudinal, all off-device testable, plus three

@@ -533,6 +533,34 @@ class SpeedLimitAssist:
         elif self.set_speed_matches_limit:
           # dialing the set speed onto the limit activates at any time
           self._activate()
+        elif self._has_speed_limit and self._button_event_recent():
+          # FunnyPilot v3.5.5 — INACTIVE WAS A TRAP, AND THIS IS THE WAY OUT.
+          #
+          # Reported: "SLA refuses to re-enable — I can see the indicator by the
+          # speed limit, but changing speed to enable it does nothing", cleared
+          # only by toggling the setting off and on. That toggle works because
+          # it routes through `disabled`, which re-enters preActive; nothing
+          # else did.
+          #
+          # THE DEFECT: preActive is a 6 s window, and the ONLY other doors into
+          # it were a zone change or the very first limit of the drive. Miss the
+          # window once and the driver is locked out until the next sign, with
+          # no gesture that can reopen it. Every escape route needed an event the
+          # DRIVER DOES NOT CONTROL.
+          #
+          # WHY A LEAD MAKES IT LIKELY, which is the clue that found it: braking
+          # for a lead disengages, and re-engaging re-arms the window — so the
+          # 6 s runs out at the exact moment the driver is busy with the car in
+          # front. Behind a lead you also sit with a set speed BELOW the limit,
+          # so the arrow asks for `+`, and `+` is the one press you do not want
+          # to make while closing on someone. Either way the window expires
+          # unconfirmed.
+          #
+          # A cruise press now REOPENS the window. It cannot activate anything
+          # on its own — `_enter_pre_active` clears the pending releases, so the
+          # confirming press is still a second, DIRECTIONAL one, exactly as
+          # before. All this restores is the driver's ability to ask.
+          self._enter_pre_active()
 
     else:  # DISABLED
       if self.long_enabled and self.enabled:

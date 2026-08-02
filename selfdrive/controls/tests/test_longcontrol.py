@@ -1,8 +1,9 @@
+import pytest
+
 from cereal import car, custom
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.longcontrol import (LongControl, LongCtrlState, STARTING_ACCEL_RATE,
                                                           STARTING_CREEP_RATE, starting_accel_rate,
-                                                          stopping_decel_rate, STOP_TAPER_V,
                                                           long_control_state_trans)
 
 
@@ -15,6 +16,8 @@ def _make_long_control(starting_state=False):
   CP.startingState = starting_state
   CP.vEgoStarting = 0.5
   CP.startAccel = 1.5
+  CP.stopAccel = -2.0
+  CP.stoppingDecelRate = 0.40  # the K5's value (Hyundai DEFAULT config)
   CP_SP = custom.CarParamsSP.new_message()
   return LongControl(CP, CP_SP)
 
@@ -108,7 +111,7 @@ def test_starting_rate_is_brisk_while_releasing_the_brake():
   releasing the brake, and slowing that is a car that sits at a green light —
   so the full rate must survive there."""
   assert starting_accel_rate(-2.0) == STARTING_ACCEL_RATE
-  assert starting_accel_rate(STOP_TAPER_V[0] * 0 - 1.0) == STARTING_ACCEL_RATE
+  assert starting_accel_rate(-1.0) == STARTING_ACCEL_RATE
 
 
 def test_starting_rate_is_gentle_once_pulling_away():
@@ -126,32 +129,18 @@ def test_starting_rate_is_monotone_and_continuous():
   assert rates[0] == STARTING_ACCEL_RATE and rates[-1] == STARTING_CREEP_RATE
 
 
-def test_stopping_taper_is_gentle_rolling_and_full_at_rest():
-  """v3.5.4. The last bite of brake pressure used to arrive at full rate while
-  the car was still moving — the nod at the end of a stop. Below STOP_TAPER_V
-  the full rate is restored so the hold is always secured firmly."""
-  base = 0.8
-  assert stopping_decel_rate(base, 0.0) == base
-  assert stopping_decel_rate(base, STOP_TAPER_V[0]) == base
-  assert stopping_decel_rate(base, 3.0) < base
-
-
-def test_stopping_taper_never_inverts():
-  """SAFETY: it may only ever SOFTEN the extra brake ramp, never amplify it.
-  MUTATION: a scale above 1.0 would apply more brake than the car asked for."""
-  base = 0.8
-  for v in (0.0, 0.25, 0.5, 1.0, 1.5, 5.0, 40.0):
-    assert 0.0 < stopping_decel_rate(base, v) <= base + 1e-9
-
-
-def test_stopping_ramp_only_ever_adds_braking():
-  """The ramp starts from last_output_accel — already whatever the planner
-  asked for — and the taper only changes how fast MORE brake is added. It can
-  never make the car brake less than commanded."""
+def test_stopping_ramp_runs_at_the_cars_full_rate():
+  """v3.5.5 REGRESSION GUARD. In the stopping state the PID is reset, so this
+  ramp is the ONLY brake authority the car has — v3.5.4 scaled it to 0.35x
+  while rolling and thereby slowed the whole completion of the stop, not just
+  a final bite. MUTATION: reintroduce any speed-dependent scale here and the
+  per-frame step stops matching CP.stoppingDecelRate exactly."""
   LC = _make_long_control()
   LC.long_control_state = LongCtrlState.pid
   LC.last_output_accel = -1.2
   CS = car.CarState.new_message(vEgo=2.0, aEgo=-1.2)
+  CS.vEgo = 2.0  # still ROLLING: the case v3.5.4 tapered
   out = LC.update(True, CS, a_target=-1.2, should_stop=True, accel_limits=[-3.5, 2.0])
   assert LC.long_control_state == LongCtrlState.stopping
-  assert out <= -1.2 + 1e-9
+  # exactly one full-rate step of brake was added, with no scaling
+  assert out == pytest.approx(-1.2 - LC.CP.stoppingDecelRate * DT_CTRL, abs=1e-9)
