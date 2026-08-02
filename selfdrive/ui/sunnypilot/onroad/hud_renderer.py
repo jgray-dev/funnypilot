@@ -388,7 +388,8 @@ class HudRendererSP(HudRenderer):
       return
     x = rect.x + rect.width - MAP_W - MAP_RIGHT_INSET
     self._route_map.render(rl.Rectangle(x, rect.y, MAP_W, rect.height),
-                           self._map_ref_mps, self._sla_ratio, self._sla_on)
+                           self._map_ref_mps, self._sla_ratio, self._sla_on,
+                           ui_state.is_metric)
 
   def _draw_vitals(self, rect: rl.Rectangle) -> None:
     if ui_state.rocket_fuel:

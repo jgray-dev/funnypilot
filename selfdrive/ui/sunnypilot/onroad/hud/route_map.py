@@ -57,7 +57,19 @@ MPS_TO_MPH = 2.23694
 # full screen height, so the extra range costs nothing and the map shows
 # precisely the horizon SCC-M reasons over — no more, no less.
 RANGE_M = 400.0        # how far up the strip the route runs
-BEHIND_M = 90.0        # keep this much of the road already driven, to fade out
+# v3.5.6 — 90 m was almost exactly the space below the ego marker, so the tail
+# ended right at the bottom edge with nothing to spare. Two things then ate into
+# it: the filter runs at POLL_S with the pose OF THAT INSTANT, so between polls
+# the tail is trimmed from a position the car has since left, and the displayed
+# pose lags the polled one by POSE_TAU. The result is a chunk of already-driven
+# road vanishing while it is still on screen, once a second.
+#
+# THE REMOVAL MUST BE DONE BY THE EDGE FADE, WHICH KNOWS WHERE THE SCREEN IS --
+# not by a distance filter, which does not. So the tail is now kept well past
+# the visible span and `edge_fade` is the only thing that ends it. Decimation
+# (see DECIMATE_M) makes the extra points nearly free: 170 m of tail is about
+# twenty of them.
+BEHIND_M = 170.0       # keep this much of the road already driven, to fade out
 POLL_S = 1.0           # source data is 1 Hz; parsing faster buys nothing
 MAX_POINTS = 400       # hard bound on how much JSON we will walk
 RING_M = (100.0, 200.0, 300.0)
@@ -93,14 +105,26 @@ POSE_SNAP_M = 120.0    # a jump bigger than this is a new fix, not motion: snap
 # drawn hard against the edge -- there is no scissor here (see render()).
 FADE_PX = 26.0
 
-# delta (mph under the posted limit) -> tint. Below DELTA_LO the road is simply
-# the road and gets no colour at all.
-DELTA_LO = 3.0
-DELTA_HI = 25.0
-_RAMP = ((0.00, (143, 163, 184)),
-         (0.30, (255, 209, 102)),
-         (0.62, (255, 138, 61)),
-         (1.00, (255, 77, 77)))
+# delta (mph under the expected speed) -> tint. Below DELTA_LO the road is
+# simply the road and gets no colour at all.
+#
+# v3.5.6 — THE RAMP WAS CALIBRATED FOR A DROP NOBODY EVER MAKES. Reaching full
+# red needed 25 mph under the expected speed, so an ordinary 8-10 mph corner sat
+# at t = 0.2-0.3 and rendered as barely-tinted grey. Reported as "it is white
+# 99% of the time", and it was: most of the ribbon is straight road at delta 0,
+# and the corners that were not straight still had no colour to show.
+#
+# DELTA_HI is now 13 mph, which is a firm corner rather than an implausible one,
+# and the first coloured stop sits at t = 0.15 so a 4 mph trim is already
+# visibly amber. The neutral is also darkened: it is the ROAD, and it was
+# competing with the white ego marker and the white text for attention.
+DELTA_LO = 2.0
+DELTA_HI = 13.0
+_RAMP = ((0.00, (118, 134, 152)),
+         (0.15, (255, 214, 112)),
+         (0.45, (255, 158, 66)),
+         (0.75, (255, 104, 58)),
+         (1.00, (255, 68, 68)))
 
 _M_PER_DEG = 111320.0
 
@@ -139,6 +163,30 @@ def expected_speed_at(ref_mps: float, zone_limit_mps: float,
     ratio = float(sla_ratio) if T.finite(sla_ratio) else 0.0
     ref = min(ref, zone_limit_mps * (1.0 + max(-0.9, ratio)))
   return ref
+
+
+def zone_change(pts):
+  """(index, new_limit, old_limit) of the first speed-limit change ahead, else None.
+
+  v3.5.6 — the ribbon already carries the zone limit in force at every point
+  (stored raw since v3.5.2 so the tint can be recomputed per frame), and nothing
+  was drawing it. A boundary is exactly the kind of thing this widget is for:
+  it is ahead, it is on the road, and it changes what the car will do there.
+  It reuses the SIGN'S OWN palette -- red for a slower zone, green for a faster
+  one -- so the marker on the map and the halo on the sign are the same
+  statement about the same event, rather than two colour languages.
+  """
+  base = 0.0
+  for f, _r, _v, lim in pts:
+    if f >= 0.0 and lim > 0.0:
+      base = lim
+      break
+  if base <= 0.0:
+    return None
+  for i, (f, _r, _v, lim) in enumerate(pts):
+    if f > 0.0 and lim > 0.0 and abs(lim - base) > 0.3:
+      return i, lim, base
+  return None
 
 
 def to_ego_frame(lat: float, lon: float, lat0: float, lon0: float, bearing_deg: float):
@@ -458,7 +506,8 @@ class RouteMap:
     return stitch_to_ego(pts), gov
 
   def render(self, rect: rl.Rectangle, ref_mps: float = 0.0,
-             sla_ratio: float = 0.0, sla_active: bool = False) -> None:
+             sla_ratio: float = 0.0, sla_active: bool = False,
+             metric: bool = False) -> None:
     now = time.monotonic()
     self._poll(now)
     self._ease_pose(now)
@@ -524,6 +573,25 @@ class RouteMap:
       rl.draw_line_ex(a, b, w + halo_w, rl.Color(0, 0, 0, ha))
     for a, b, w, _ha, cr, cg, cb, ca in segs:
       rl.draw_line_ex(a, b, w, rl.Color(cr, cg, cb, ca))
+
+    # v3.5.6 zone boundary. A gate across the ribbon plus the new number, in the
+    # sign's red/green. Drawn AFTER the ribbon so it reads as a marker on the
+    # road, and before the governing point so a corner cap still wins the
+    # foreground when the two land together.
+    zc = zone_change(pts)
+    if zc is not None:
+      zi, new_lim, old_lim = zc
+      zf, zr = pts[zi][0], pts[zi][1]
+      g = px(zf, zr)
+      if edge_fade(g[0], g[1], rect) >= 1.0:
+        col = T.HALT if new_lim < old_lim else T.ENGAGED
+        half = rect.width * 0.16
+        rl.draw_line_ex((g[0] - half, g[1] + 1), (g[0] + half, g[1] + 1), 7.0,
+                        rl.Color(0, 0, 0, 170))
+        rl.draw_line_ex((g[0] - half, g[1]), (g[0] + half, g[1]), 3.0, col)
+        conv = 3.6 if metric else MPS_TO_MPH
+        T.text_centered_shadowed(T.font_bold(), str(round(new_lim * conv)),
+                                 g[0], g[1] - 30, T.SZ_MICRO, col, 2.0)
 
     if gov is not None:
       gf, gr, auth = gov

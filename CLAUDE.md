@@ -180,10 +180,40 @@ and the onroad HUD stops eating the frame budget. NO NEW TESTS by request.
   * MEASURED AND THEN NOT DONE, worth recording: throttling the three /dev/shm
     reads in `_update_derived` from 60 Hz to their 20 Hz publish rate is
     11.3 us per read = 1.35 ms per SECOND. Noise, for a real sampling delay.
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — THE TINT RAMP WAS
+  CALIBRATED FOR A DROP NOBODY MAKES. Full red needed 25 mph under the expected
+  speed, so an ordinary 8-10 mph corner sat at t 0.2-0.3 and rendered as
+  barely-tinted grey — the reported "white 99% of the time". `DELTA_HI` 25 -> 13
+  and the first coloured stop at t 0.15: a 4 mph trim goes grey -> AMBER, 8 mph
+  grey -> ORANGE, 10 mph amber -> RED. Neutral darkened, because it is the ROAD
+  and it was competing with the white ego marker and text.
+- Same file — NEW `zone_change()`. The ribbon has carried the zone limit per
+  point since v3.5.2 and nothing read it. Draws a gate across the ribbon plus
+  the new number at the first boundary ahead, in THE SIGN'S OWN RED/GREEN so the
+  map marker and the sign halo are one statement about one event.
+- Same file — `BEHIND_M` 90 -> 170. ARITHMETIC, NOT TASTE: at 1.99 px/m the
+  space below the ego marker is 184 px = 92 m, so 90 was five pixels short
+  BEFORE any lag; the poll-time filter then trims from the pose of that instant
+  while the car keeps moving, and the displayed pose lags by `POSE_TAU` — 81 px
+  more at 30 m/s. GENERALIZED: **removal must be done by the edge fade, which
+  knows where the screen is, not by a distance filter, which does not.** 170 m
+  overshoots the edge by 155 px; decimation makes the extra tail ~20 points.
+- `sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py` — the release ceiling
+  was `max(raw, v_cruise)`, and while the map is STILL CONSTRAINING that is just
+  `v_cruise`, so the cap climbed toward the full set speed while the envelope
+  for the NEXT corner said stay down. Now the raw envelope while a constraint
+  exists; can only ever LOWER the ceiling. **MEASURED AND HONEST: this is a real
+  hole but NOT the mechanism the driver hit** — over 150-800 ft gaps between two
+  25 mph corners it moves the peak by <= 0.2 mph, because the release rate is
+  slower than the envelope's own loosening. What actually kept SCC-M alive
+  between corners is the fusion change above. Do not credit this fix for it.
 - TESTS: 603 green, NONE ADDED. THREE expectations updated, all for the
   intentional SCC-M change; the graded-authority case gained the small-ask
   assertion that the old `cut * c` multiplied away — the behaviour this release
-  exists to restore.
+  exists to restore. NOTE the minimap additions have NO unit coverage as a
+  result — pure functions that would normally get some. They sit inside
+  `safe_draw` (worst case: that widget disables itself), and every number was
+  computed rather than eyeballed. Add tests next version.
 
 ### v3.5.5 Changes (based on funnypilot-3.5.4)
 

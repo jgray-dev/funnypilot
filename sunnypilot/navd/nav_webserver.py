@@ -156,6 +156,7 @@ _CODE_MARKERS = [
   ("def proximity_authority", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "SCC-M proximity authority"),
   ("DECIMATE_M", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap route decimation"),
   ("def _rings", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "chrome ring cache"),
+  ("def zone_change", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap zone-boundary marker"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

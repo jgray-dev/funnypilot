@@ -112,10 +112,59 @@ per read, so the whole saving is 1.35 ms per SECOND -- noise next to the above,
 and it would have introduced a sampling delay for nothing. Recorded because
 "we considered it and it was not worth it" is worth more than silence.
 
+4. THE MINIMAP SAYS MORE, AND KEEPS THE ROAD IT HAS DRIVEN
+------------------------------------------------------------------------
+* fix: THE TINT RAMP WAS CALIBRATED FOR A DROP NOBODY EVER MAKES. Full red
+  needed 25 mph under the expected speed, so an ordinary 8-10 mph corner sat at
+  t = 0.2-0.3 and rendered as barely-tinted grey. Reported as "white 99% of the
+  time", and it was: most of the ribbon is straight road at delta 0, and the
+  corners that were not straight still had no colour to show. DELTA_HI is now
+  13 mph -- a firm corner rather than an implausible one -- with the first
+  coloured stop at t = 0.15. Measured against the old ramp: a 4 mph trim goes
+  grey -> AMBER, 8 mph grey -> ORANGE, 10 mph amber -> RED. The neutral is also
+  darkened, because it is the ROAD and it was competing with the white ego
+  marker and the white text.
+* feat: SPEED-LIMIT BOUNDARIES ARE DRAWN. The ribbon has carried the zone limit
+  at every point since v3.5.2 (stored raw so the tint can be recomputed per
+  frame) and nothing read it. `zone_change()` finds the first boundary ahead and
+  draws a gate across the ribbon plus the new number, in THE SIGN'S OWN RED AND
+  GREEN -- so the marker on the map and the halo on the sign are one statement
+  about one event rather than two colour languages.
+* fix: THE DRIVEN ROAD WAS BEING TRIMMED WHILE STILL ON SCREEN. Arithmetic, not
+  taste: at this widget's 1.99 px/m the space below the ego marker is 184 px =
+  92 m, and BEHIND_M was 90 -- five pixels short before any lag at all. Then the
+  poll-time filter trims from the pose OF THAT INSTANT while the car keeps
+  moving, and the displayed pose lags the polled one by POSE_TAU, which together
+  cost another 81 px at 30 m/s. That is the ~150 px of vanishing tail.
+  THE REMOVAL MUST BE DONE BY THE EDGE FADE, WHICH KNOWS WHERE THE SCREEN IS --
+  not by a distance filter, which does not. BEHIND_M is now 170 m, overshooting
+  the bottom edge by 155 px so the fade is the only thing that ever ends the
+  ribbon. Decimation makes the extra tail almost free: about twenty points.
+
+5. SCC-M BETWEEN BACK-TO-BACK CORNERS
+------------------------------------------------------------------------
+* fix: `CurveSpeedCap`'s release ceiling was `max(raw, v_cruise)`, and while the
+  map is STILL CONSTRAINING that expression is just `v_cruise` -- so the cap
+  climbed toward the full set speed even though the envelope for the NEXT corner
+  said to stay down. It is now the raw envelope while a constraint exists. This
+  can only ever LOWER the ceiling, so it needs no new safety argument.
+* MEASURED, AND HONEST: this is a real hole but it is NOT the mechanism the
+  driver hit. Simulated over 150-800 ft gaps between two 25 mph corners it moves
+  the peak by at most 0.2 mph, because the release rate is slower than the
+  envelope's own loosening and the `raw < value` branch takes over almost
+  immediately. What actually kept SCC-M alive between corners is item 1(b) in
+  this release: before it, corroboration collapsed on the short straight and the
+  map was vetoed outright, which IS "accelerate back to the set speed".
+
 TESTS
 ------------------------------------------------------------------------
 * 603 green, 0 failed. NO NEW TESTS by request; the existing suite is what
-  guarantees the performance pass changed nothing.
+  guarantees the performance pass changed nothing. NOTE that the minimap
+  additions in item 4 therefore have NO unit coverage -- they are pure
+  functions that would normally get some. They sit inside `safe_draw`, so the
+  worst case is that widget disabling itself for the session rather than a UI
+  crash, and the numbers above were checked by computing them rather than by
+  eye. Worth adding tests for in the next version.
 * THREE tests had expectations updated, all for the intentional SCC-M change:
   the envelope now uses J(), and authority is a ceiling rather than a scale.
   The graded-authority case gained the small-ask assertion that the old

@@ -52,7 +52,20 @@ class CurveSpeedCap:
       self.value += (raw - self.value) * DOWN_ALPHA
       self.releasing = False
     else:
-      self.value = min(self.value + RELEASE_RATE * self.dt, max(raw, v_cruise), v_cruise + 1.0)
+      # FunnyPilot v3.5.6 — BACK-TO-BACK CORNERS. The release used to walk the
+      # cap up toward `max(raw, v_cruise)`, and while the map is STILL
+      # CONSTRAINING that expression is just v_cruise -- so the moment the
+      # envelope loosened on the exit of one corner, the cap climbed toward the
+      # full set speed even though the envelope for the NEXT corner said to stay
+      # down. Exit a 25 mph bend with another 25 mph bend 150 ft further on and
+      # the car would try to accelerate into it.
+      #
+      # While a constraint exists the release ceiling is the RAW ENVELOPE, which
+      # already knows about the next corner. Only when nothing is constraining
+      # does the cap head back to cruise. This can only ever LOWER the ceiling,
+      # never raise it, so it is strictly more conservative than v3.5.5.
+      ceiling = raw if constraining else min(max(raw, v_cruise), v_cruise + 1.0)
+      self.value = min(self.value + RELEASE_RATE * self.dt, ceiling)
       self.releasing = not constraining
 
     if not constraining and self.value >= v_cruise - RELEASE_DONE_MARGIN:
