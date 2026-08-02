@@ -176,9 +176,9 @@ class TestAdvisoryAsCorroboration:
     without = fuse_map_target(20.0, 30.0, False, 0.0, advisory_active=False)
     with_adv = fuse_map_target(20.0, 30.0, False, 0.0, advisory_active=True)
     assert without == CAP_INACTIVE, "no corroboration at all must still veto"
-    # the cut it asked for is 10 m/s; the floor lets ADVISORY_CORROB_FLOOR of
-    # that through, still under the MAP_SOLO_MAX_CUT ceiling
-    expected = 30.0 - min(10.0 * ADVISORY_CORROB_FLOOR, MAP_SOLO_MAX_CUT)
+    # v3.5.6: authority is a CEILING on the cut, not a scale factor -- the map
+    # gets what it asked for up to MAP_SOLO_MAX_CUT * c.
+    expected = 30.0 - min(10.0, MAP_SOLO_MAX_CUT * ADVISORY_CORROB_FLOOR)
     assert abs(with_adv - expected) < 1e-6
 
   def test_it_is_a_floor_not_a_ceiling(self):

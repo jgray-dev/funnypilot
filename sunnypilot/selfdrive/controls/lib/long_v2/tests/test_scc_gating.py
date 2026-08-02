@@ -44,9 +44,16 @@ class TestFullVisionActivationUnchanged:
 class TestGradedAuthority:
   """MUTATION: make corroboration binary again (any c > 0 -> full cut)."""
 
-  def test_partial_corroboration_takes_a_proportional_cut(self):
+  def test_partial_corroboration_bounds_the_cut(self):
+    """v3.5.6: authority is a CEILING, not a scale factor. A big ask at half
+    corroboration is clipped to half of MAP_SOLO_MAX_CUT; a SMALL ask under
+    that ceiling now passes through whole, which is what lets an early,
+    gentle approach happen at all (see scc_fusion.py)."""
     v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=0.5)
-    assert abs(v - 25.0) < 1e-9  # half of the 10 m/s the map asked for
+    assert abs(v - (30.0 - MAP_SOLO_MAX_CUT * 0.5)) < 1e-9
+    # the small-ask case, which the old `cut * c` multiplied away to nothing
+    small = fuse_map_target(28.8, 30.0, vision_is_active=False, vision_corroboration=0.5)
+    assert abs(small - 28.8) < 1e-9
 
   def test_full_corroboration_takes_the_whole_cut(self):
     v = fuse_map_target(25.0, 30.0, vision_is_active=False, vision_corroboration=1.0)

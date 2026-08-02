@@ -11,7 +11,7 @@ speed tv_j:
 
     v_curve_j   = max(MIN_V, tv_j * trim)          # bounded friction/comfort trim
     d_eff_j     = max(0, d_j - v_curve_j * LEAD_T)  # arrive at speed ~2 s early
-    allowed now = sqrt(v_curve_j^2 + 2 * A_DECEL_APPROACH * d_eff_j)
+    allowed now = sqrt(v_curve_j^2 + 2 * J(d_eff_j))   # v3.5.6, see _J_BP
     raw cap     = min_j(allowed now)
 
 The constant-decel envelope replaces the old jerk-integral braking-point
@@ -67,7 +67,44 @@ except Exception:
 _DT = 0.05
 _V_MIN_ACTIVE = 5.0
 _MIN_V_TARGET = 3.0
-_A_DECEL_APPROACH = 1.0   # m/s^2 comfortable approach decel budget
+# FunnyPilot v3.5.6 — THE APPROACH BUDGET IS INTEGRATED OVER DISTANCE-TO-GO.
+#
+# A single flat 1.0 m/s^2 sets ONE engagement distance for a given cut, and for
+# the reported case (~20 mph off at motorway speed) that is ~220 m -- by which
+# point the whole reduction has to happen in a hurry. Reported as: the minimap
+# shows the corner far ahead, the car does nothing, then slows once it is
+# already in the bend.
+#
+# So the budget varies with how far there is still to go: small far out (the
+# car simply stops adding speed and coasts), rising to the full comfort budget
+# near the corner. THE INTEGRAL IS THE LOAD-BEARING PART. Evaluating a(d) at
+# the point's own distance is the obvious way to write this and it is WRONG:
+# the cap it produces is not monotone in d, so on some approaches the cap
+# LOOSENS as you close on the corner and the car speeds back up mid-approach.
+# Integrating instead,
+#
+#     v_allowed(s)^2 = v_curve^2 + 2 * J(s),   J(s) = integral of a from 0 to s
+#
+# makes the cap monotone BY CONSTRUCTION (J is non-decreasing), and has the
+# nicer property that the deceleration implied at distance-to-go s is exactly
+# a(s) -- so the schedule below reads as the profile the driver actually feels.
+#
+# Worked, 29 -> 20 m/s (65 -> 45 mph), which is the case that was reported:
+#
+#     d = 400 m (1310 ft)   a 0.55   cap 30.0 -- above cruise, nothing yet
+#     d = 305 m (1000 ft)   a 0.66   cap 28.3 -- engages; coasting
+#     d = 200 m ( 660 ft)   a 0.79   cap 26.4
+#     d = 120 m ( 390 ft)   a 1.11   cap 24.0
+#     d =  40 m ( 130 ft)   a 1.20   cap 20.0 -- at corner speed, 2 s early
+#
+# 1.2 m/s^2 IS THE CEILING FOR A REASON, and it is not a comfort guess: this is
+# a SPEED cap, and long_mpc's CRUISE_MIN_ACCEL bounds what a falling cruise
+# target can command at -1.2. A steeper envelope than that is theatre -- the
+# MPC cannot follow it. Do not raise one without the other.
+_J_BP = [0.0, 60.0, 150.0, 400.0]   # m of distance-to-go (after the arrival lead)
+_J_V = [0.0, 72.0, 144.0, 269.0]    # integral of the budget, m^2/s^2
+                                    # -> 1.20 m/s^2 inside 60 m, 0.80 to 150, 0.50 beyond
+
 _ARRIVAL_LEAD_T = 2.0     # s — reach curve speed this early
 _MAX_LOOKAHEAD_M = 400.0  # beyond this a curve cannot meaningfully constrain us
 _FRIC_NOMINAL = 0.8
@@ -181,6 +218,9 @@ class SCCMapV2:
     # lat/lon of the point argmin(v_allowed) selected; 0,0 = none
     self.gov_lat = 0.0
     self.gov_lon = 0.0
+    # v3.5.6: distance to that point, m. 0 = none. Feeds the fusion's proximity
+    # authority, so it must be reset wherever gov_lat/gov_lon are.
+    self.gov_distance = 0.0
     self.frame = -1
     self.enabled = self._read_enabled_param()
     self.state = "INACTIVE"  # INACTIVE / ACTIVE / RELEASING
@@ -206,6 +246,7 @@ class SCCMapV2:
     pos = self._read_position()
     points = self._read_velocities()
     self.gov_lat = self.gov_lon = 0.0
+    self.gov_distance = 0.0
     if pos is None or not points:
       return CAP_INACTIVE, 0.0
 
@@ -230,10 +271,16 @@ class SCCMapV2:
     if not np.any(consider):
       return CAP_INACTIVE, 0.0
 
-    d_eff = np.maximum(0.0, d_fwd[consider] - v_curve[consider] * _ARRIVAL_LEAD_T)
-    v_allowed = np.sqrt(v_curve[consider] ** 2 + 2.0 * _A_DECEL_APPROACH * d_eff)
+    d_c = d_fwd[consider]
+    vc_c = v_curve[consider]
+    d_eff = np.maximum(0.0, d_c - vc_c * _ARRIVAL_LEAD_T)
+    # v3.5.6: the budget INTEGRATED over distance-to-go (see _J_BP), so the
+    # envelope engages far out, deepens as the corner arrives, and is monotone
+    # in distance. np.interp clamps, which is correct at both ends here.
+    v_allowed = np.sqrt(vc_c ** 2 + 2.0 * np.interp(d_eff, _J_BP, _J_V))
 
     best = int(np.argmin(v_allowed))
+    self.gov_distance = float(d_c[best])
     # v3.5.0: remember WHICH point won, so the onroad minimap can mark the exact
     # constraint the controller chose instead of re-deriving it from the same
     # array and drifting away from this code. Publishing beats duplicating.
@@ -267,7 +314,7 @@ class SCCMapV2:
       # same constant-decel approach envelope the curve points use, so an
       # advisory ahead tightens gradually instead of stepping at the sign
       d_eff = max(0.0, adv_d - v_a * _ARRIVAL_LEAD_T)
-      cap = min(cap, math.sqrt(v_a * v_a + 2.0 * _A_DECEL_APPROACH * d_eff))
+      cap = min(cap, math.sqrt(v_a * v_a + 2.0 * float(np.interp(d_eff, _J_BP, _J_V))))
 
     if cap >= CAP_INACTIVE:
       return CAP_INACTIVE
@@ -339,4 +386,5 @@ class SCCMapV2:
     self.advisory_v_target = CAP_INACTIVE
     self.gov_lat = 0.0
     self.gov_lon = 0.0
+    self.gov_distance = 0.0
     self._cap.reset()

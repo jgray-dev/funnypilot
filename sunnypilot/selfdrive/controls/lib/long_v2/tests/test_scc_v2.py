@@ -7,11 +7,13 @@ Import-light (numpy + long_v2 modules only):
 import math
 from types import SimpleNamespace
 
+import numpy as np
+
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import (
   CurveSpeedCap, CAP_INACTIVE, ACTIVATE_FRAMES, RELEASE_RATE,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2, lat_accel_limit
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, speed_trim
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, speed_trim, _J_BP, _J_V
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
 
 # v3.4.9: the comfort lat-accel target is a TUNING value, so the expectations
@@ -246,7 +248,8 @@ class TestSCCMap:
     assert scc.output_v_target == CAP_INACTIVE
 
   def test_slow_curve_ahead_braking_envelope(self):
-    # 10 m/s curve point ~222 m ahead; envelope: sqrt(v_c^2 + 2*a*d_eff)
+    # 10 m/s curve point ~222 m ahead. v3.5.6: the decel budget is INTEGRATED
+    # over distance-to-go, so the envelope is sqrt(v_c^2 + 2*J(d_eff)).
     points = route_north([30, 30, 30, 30, 10, 30])
     scc = make_map_scc(points)
     run_map(scc, n=200)
@@ -254,7 +257,7 @@ class TestSCCMap:
     v_curve = 10 * speed_trim(0.8)
     d = 4 * 55.66
     d_eff = d - v_curve * 2.0
-    expected = math.sqrt(v_curve ** 2 + 2.0 * 1.0 * d_eff)
+    expected = math.sqrt(v_curve ** 2 + 2.0 * float(np.interp(d_eff, _J_BP, _J_V)))
     assert abs(scc.raw_v_target - expected) < 1.0
     assert abs(scc.output_v_target - expected) < 1.5
 

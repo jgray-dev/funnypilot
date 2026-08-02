@@ -119,6 +119,72 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.6 Changes (based on funnypilot-3.5.5)
+
+Corner braking starts far earlier, the SLA arrow points at the right button,
+and the onroad HUD stops eating the frame budget. NO NEW TESTS by request.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — the approach decel
+  budget is INTEGRATED over distance-to-go (`_J_BP`/`_J_V`) instead of a flat
+  1.0 m/s^2. THE INTEGRAL IS THE LOAD-BEARING PART, not the numbers: evaluating
+  `a(d)` at the point's own distance is the obvious way to write this and it is
+  WRONG — the cap is then not monotone in distance, so on some approaches it
+  LOOSENS as you close and the car speeds back up mid-approach. Caught by
+  printing the table, not by reading the code. Integrating makes the cap
+  monotone BY CONSTRUCTION and makes the decel implied at distance-to-go `s`
+  exactly `a(s)`, so the schedule reads as the profile the driver feels.
+  Engages ~305 m (1000 ft) for a 20 mph cut and deepens progressively.
+  **1.20 m/s^2 IS THE CEILING BECAUSE `long_mpc.CRUISE_MIN_ACCEL` IS -1.2** —
+  this is a SPEED cap and the MPC cannot follow a steeper envelope. Do not raise
+  one without the other. Also publishes `gov_distance` (reset everywhere
+  `gov_lat`/`gov_lon` are, or the fusion reads a stale proximity).
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — **THE ENVELOPE
+  CHANGE ALONE WOULD HAVE DONE NOTHING.** `allowed = cut * c` CONFLATED TWO
+  QUESTIONS: `c` answers "is this corner real", the envelope answers "how far
+  under cruise now". Multiplying them multiplies a SMALL early trim down to
+  nothing — and a small early trim IS the early approach. At c 0.3 a 1.2 m/s
+  trim became 0.36, under `MAP_SOLO_MIN_CUT`, so it was dropped entirely. Now
+  `allowed = min(cut, MAP_SOLO_MAX_CUT * c)`: authority is a CEILING, and
+  anything under it passes at full strength (this is also STRICTER for large
+  cuts at middling corroboration, which is the right way round). NEW
+  `proximity_authority()` — a corner still in the map at 120 m is likelier real
+  than one at 400 m, so distance is evidence; capped at `MAP_PROX_MAX_AUTHORITY`
+  0.75 because it is WEAKER evidence than the model agreeing. HONEST COST: a
+  mistagged point near the car can now cost a bounded ~11 mph trim where it
+  previously cost nothing. That is the first knob to reach for if SCC-M starts
+  slowing for non-corners — NOT the envelope.
+- `selfdrive/ui/sunnypilot/onroad/hud/speed_sign.py` — `_chevron` was drawing
+  `next_limit > cur_limit`, i.e. WHICH WAY THE UPCOMING ZONE IS MOVING. That is
+  a fact about the road; the arrow is an INSTRUCTION. SLA's confirm compares SET
+  SPEED to the CURRENT limit (`_confirm_pressed`), and the two agree only by
+  coincidence — 55 set in a 45 zone with a faster zone ahead gives exactly the
+  reported wrong arrow. Takes `set_speed` now, threaded from `_set_speed_mps`
+  (kept separate from `_map_ref_mps`, which falls back to vEgo when cruise is
+  unset and would point the arrow at whatever we happen to be doing).
+- PERFORMANCE, all counted rather than guessed. The ribbon and chrome together
+  were ~2136 cffi calls/frame ≈ 4.3 ms of a 16.6 ms budget.
+  * `route_map.py` — ROUTE DECIMATION (`DECIMATE_M` 8 m). mapd spaces points
+    ~1 m apart and this widget is ~2 px/m, so the ribbon was drawing ~750
+    SUB-PIXEL segments twice a frame. 377 points -> 56. A point is kept anyway
+    if its speed or zone differs from the last kept one: decimation must lose
+    RESOLUTION, NEVER INFORMATION.
+  * Same file — geometry and colour computed ONCE into `segs`, two passes then
+    only draw. `px`/`edge_fade`/`expected_speed_at`/`ramp_color` were running
+    twice per segment for a result that cannot differ between passes.
+  * `chrome.py` — `_rings()` CACHE. 85 nested outlines each allocated a fresh
+    `rl.Rectangle` + `rl.Color` every frame. THE KEY IS THE QUANTISED RESULT:
+    alpha reaches the framebuffer as a byte, so two float alphas that round the
+    same are the same picture and must share an entry — otherwise the easers'
+    last few thousandths miss the cache forever.
+  * MEASURED ~2136 -> ~276 ops/frame (7.7x), ~3.7 ms/frame freed.
+  * MEASURED AND THEN NOT DONE, worth recording: throttling the three /dev/shm
+    reads in `_update_derived` from 60 Hz to their 20 Hz publish rate is
+    11.3 us per read = 1.35 ms per SECOND. Noise, for a real sampling delay.
+- TESTS: 603 green, NONE ADDED. THREE expectations updated, all for the
+  intentional SCC-M change; the graded-authority case gained the small-ask
+  assertion that the old `cut * c` multiplied away — the behaviour this release
+  exists to restore.
+
 ### v3.5.5 Changes (based on funnypilot-3.5.4)
 
 Three reported defects. Read the stop-taper post-mortem first — it is a v3.5.4

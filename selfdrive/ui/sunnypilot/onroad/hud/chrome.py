@@ -41,11 +41,63 @@ BAND_TOP_A = 0.80
 BAND_BOT_A = 0.78
 
 _BLANK = rl.Color(0, 0, 0, 0)
+_BLACK = rl.Color(0, 0, 0, 255)   # hoisted: allocating this per frame is pure waste
+_BAND_INK = (6, 9, 13)
 
 # v3.5.1: how many nested outlines make up one falloff. 4 px steps over a 120 px
 # glow is 30 draws — smooth to the eye, and cheap because each is a rect
 # outline, not a filled quad.
 _STEP_PX = 4
+
+
+# v3.5.6 — THE RINGS ARE BUILT ONCE AND REDRAWN, NOT REBUILT EVERY FRAME.
+#
+# The vignette is 55 rings and the glow another 30, and each one was allocating
+# a fresh `rl.Rectangle` and `rl.Color` through cffi on every single frame —
+# 255 allocations a frame for a gradient whose inputs are constant most of the
+# time. The rect never changes size; the colour and alpha come from easers that
+# SETTLE, so once a transition finishes every frame produces byte-identical
+# geometry and byte-identical bytes.
+#
+# The cache key is the quantised result, not the raw floats: alpha reaches the
+# framebuffer as an integer anyway, so two float alphas that round to the same
+# byte are the same picture and must share an entry — otherwise the easer's
+# last few thousandths would miss the cache forever. Bounded because the key
+# includes the colour, and a slow cross-fade walks through many of them.
+_RING_CACHE: dict = {}
+_RING_CACHE_MAX = 24
+
+
+def _rings(rect: rl.Rectangle, depth: int, color: rl.Color, alpha0: float):
+  key = (int(rect.x), int(rect.y), int(rect.width), int(rect.height),
+         depth, color.r, color.g, color.b, int(clamp(alpha0, 0.0, 1.0) * 255))
+  hit = _RING_CACHE.get(key)
+  if hit is not None:
+    return hit
+
+  d = int(min(depth, max(1, int(rect.width) // 2), max(1, int(rect.height) // 2)))
+  steps = max(1, d // _STEP_PX)
+  a0 = clamp(alpha0, 0.0, 1.0)
+  out = []
+  for i in range(steps):
+    inset = i * _STEP_PX
+    # linear falloff, evaluated at the middle of the ring so the first ring is
+    # not drawn at full alpha for its whole 4 px width
+    t = (inset + _STEP_PX * 0.5) / d
+    a = int(a0 * max(0.0, 1.0 - t) * 255)
+    if a <= 0:
+      continue
+    w = rect.width - inset * 2
+    h = rect.height - inset * 2
+    if w <= 0 or h <= 0:
+      break
+    out.append((rl.Rectangle(rect.x + inset, rect.y + inset, w, h),
+                rl.Color(color.r, color.g, color.b, a)))
+
+  if len(_RING_CACHE) >= _RING_CACHE_MAX:
+    _RING_CACHE.clear()
+  _RING_CACHE[key] = out
+  return out
 
 
 def _edges(rect: rl.Rectangle, depth: int, color: rl.Color, alpha0: float) -> None:
@@ -64,23 +116,8 @@ def _edges(rect: rl.Rectangle, depth: int, color: rl.Color, alpha0: float) -> No
   nearest edge — which is the definition of an even falloff. Corners are
   automatically consistent with the sides.
   """
-  d = int(min(depth, max(1, int(rect.width) // 2), max(1, int(rect.height) // 2)))
-  steps = max(1, d // _STEP_PX)
-  a0 = clamp(alpha0, 0.0, 1.0)
-
-  for i in range(steps):
-    inset = i * _STEP_PX
-    # linear falloff, evaluated at the middle of the ring so the first ring is
-    # not drawn at full alpha for its whole 4 px width
-    t = (inset + _STEP_PX * 0.5) / d
-    a = int(a0 * max(0.0, 1.0 - t) * 255)
-    if a <= 0:
-      continue
-    ring = rl.Rectangle(rect.x + inset, rect.y + inset,
-                        rect.width - inset * 2, rect.height - inset * 2)
-    if ring.width <= 0 or ring.height <= 0:
-      break
-    rl.draw_rectangle_lines_ex(ring, _STEP_PX, rl.Color(color.r, color.g, color.b, a))
+  for ring, col in _rings(rect, depth, color, alpha0):
+    rl.draw_rectangle_lines_ex(ring, _STEP_PX, col)
 
 
 # v3.5.4 — SCENE-ADAPTIVE CHROME.
@@ -115,7 +152,7 @@ def chrome_scale(brightness_pct: float) -> float:
 
 def draw_vignette(rect: rl.Rectangle, scale: float = 1.0) -> None:
   """Darken the frame edges. MUST run before draw_state_glow."""
-  _edges(rect, VIG_DEPTH, rl.Color(0, 0, 0, 255), VIG_ALPHA * clamp(scale, 0.0, 1.0))
+  _edges(rect, VIG_DEPTH, _BLACK, VIG_ALPHA * clamp(scale, 0.0, 1.0))
 
 
 def draw_state_glow(rect: rl.Rectangle, color: rl.Color, intensity: float = 1.0) -> None:

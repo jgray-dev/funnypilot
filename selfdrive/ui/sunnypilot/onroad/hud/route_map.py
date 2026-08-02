@@ -71,6 +71,11 @@ RING_M = (100.0, 200.0, 300.0)
 HALO_PX = 7.0
 HALO_ALPHA = 0.55
 
+# v3.5.6 route decimation. See the loop in _poll for why this is the biggest
+# single win available on this screen.
+DECIMATE_M = 8.0     # keep one point per 8 m of route (~16 px at this scale)
+DECIMATE_V = 0.4     # ...unless the speed changes by this much, m/s
+
 EGO_FROM_BOTTOM = 0.82   # where "you are here" sits, as a fraction of height
 
 # v3.5.1 — THE JITTER, and why it is fixed here rather than by polling faster.
@@ -333,10 +338,20 @@ class RouteMap:
       nxt_limit, nxt_fwd = 0.0, None
 
     pts = []
+    kept_at, kept_v, kept_lim = None, 0.0, 0.0
+    # v3.5.6: the same trig hoist _project already does. to_ego_frame recomputes
+    # cos(radians(lat0)) and the two bearing terms PER POINT, and all three are
+    # loop-invariant -- 1600 transcendental calls per poll where 4 will do.
+    _b = math.radians(bearing)
+    _cb, _sb = math.cos(_b), math.sin(_b)
+    _clat = math.cos(math.radians(lat0))
     for p in points[:MAX_POINTS]:
       try:
         plat, plon = float(p["latitude"]), float(p["longitude"])
-        fwd, _right = to_ego_frame(plat, plon, lat0, lon0, bearing)
+        _n = (plat - lat0) * _M_PER_DEG
+        _e = (plon - lon0) * _M_PER_DEG * _clat
+        fwd = _n * _cb + _e * _sb
+        right = -_n * _sb + _e * _cb
       except Exception:
         continue
       # Keep a little of the road already driven so it can FADE out of the box
@@ -351,6 +366,20 @@ class RouteMap:
       # delta: since v3.5.2 the comparison depends on the live set speed and
       # SLA offset, which change every frame while this poll is 1 Hz.
       lim = nxt_limit if (nxt_fwd is not None and nxt_limit > 0 and fwd > nxt_fwd) else limit_now
+
+      # v3.5.6 DECIMATION -- the single biggest cost on this screen. mapd
+      # spaces its points about a metre apart; at this widget's ~2 px/m that
+      # is a sub-pixel segment, and the ribbon was drawing ~800 of them twice
+      # per frame. Keeping one point per DECIMATE_M gives a 16 px segment,
+      # which is smooth at this size, for a sixteenth of the draw calls.
+      # A point is kept regardless if its speed or zone differs from the last
+      # kept one, so no colour transition is smeared -- decimation must lose
+      # RESOLUTION, never INFORMATION.
+      if kept_at is not None:
+        if (abs(v - kept_v) < DECIMATE_V and lim == kept_lim
+            and math.hypot(fwd - kept_at[0], right - kept_at[1]) < DECIMATE_M):
+          continue
+      kept_at, kept_v, kept_lim = (fwd, right), v, lim
       pts.append((plat, plon, v, lim))
     self._raw = pts
 
@@ -461,23 +490,40 @@ class RouteMap:
     # halo-then-colour per segment would let the next segment's halo paint over
     # the previous segment's colour at every joint, which reads as a dashed
     # line. All the dark first, then all the colour.
-    for _pass in (0, 1):
-      for i in range(1, len(pts)):
-        f0, r0, _v0, _l0 = pts[i - 1]
-        f1, r1, v1, lim1 = pts[i]
-        a, b = px(f0, r0), px(f1, r1)
-        edge = min(edge_fade(a[0], a[1], rect), edge_fade(b[0], b[1], rect))
-        if edge <= 0.0:
-          continue
-        depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
-        w = max(3.0, rect.width * 0.075 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
-        if _pass == 0:
-          rl.draw_line_ex(a, b, w + HALO_PX * 2, rl.Color(0, 0, 0, int(HALO_ALPHA * edge * 255)))
-        else:
-          expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
-          delta = (expected - v1) * MPS_TO_MPH if expected > 0 else 0.0
-          c = ramp_color(delta)
-          rl.draw_line_ex(a, b, w, rl.Color(c[0], c[1], c[2], int(depth * edge * 255)))
+    #
+    # v3.5.6: the geometry and the colour are computed ONCE into `segs` and the
+    # two passes then only draw. Before this, px(), edge_fade(),
+    # expected_speed_at() and ramp_color() all ran twice per segment for a
+    # result that cannot differ between passes. Identical output, half the work.
+    segs = []
+    x0, y_top = rect.x, rect.y
+    x1, y_bot = rect.x + rect.width, rect.y + rect.height
+    for i in range(1, len(pts)):
+      f0, r0, _v0, _l0 = pts[i - 1]
+      f1, r1, v1, lim1 = pts[i]
+      a, b = px(f0, r0), px(f1, r1)
+      # edge_fade inlined: two calls per segment at 60 Hz is one of the few
+      # places where the function-call overhead is a measurable fraction.
+      da = min(a[0] - x0, x1 - a[0], a[1] - y_top, y_bot - a[1])
+      db = min(b[0] - x0, x1 - b[0], b[1] - y_top, y_bot - b[1])
+      edge = min(da, db) / FADE_PX
+      if edge <= 0.0:
+        continue
+      if edge > 1.0:
+        edge = 1.0
+      depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
+      w = max(3.0, rect.width * 0.075 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
+      expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
+      delta = (expected - v1) * MPS_TO_MPH if expected > 0 else 0.0
+      c = ramp_color(delta)
+      segs.append((a, b, w, int(HALO_ALPHA * edge * 255),
+                   c[0], c[1], c[2], int(depth * edge * 255)))
+
+    halo_w = HALO_PX * 2
+    for a, b, w, ha, _cr, _cg, _cb, _ca in segs:
+      rl.draw_line_ex(a, b, w + halo_w, rl.Color(0, 0, 0, ha))
+    for a, b, w, _ha, cr, cg, cb, ca in segs:
+      rl.draw_line_ex(a, b, w, rl.Color(cr, cg, cb, ca))
 
     if gov is not None:
       gf, gr, auth = gov

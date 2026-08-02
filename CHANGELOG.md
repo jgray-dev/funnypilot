@@ -1,3 +1,133 @@
+FunnyPilot v3.5.6 (2026-08-02)
+========================
+Corner braking starts far earlier, the SLA arrow points at the button you
+actually have to press, and the onroad HUD stops eating the frame budget.
+NO NEW TESTS -- the existing suite is the regression harness for the
+performance work, and it is unchanged except where behaviour was asked to
+change.
+
+1. SCC-M BRAKES FOR THE CORNER IT CAN ALREADY SEE
+------------------------------------------------------------------------
+Reported: the minimap shows the corner and its speed far ahead, but the car
+does not slow until it is already in the bend.
+
+TWO CAUSES, AND THE SECOND WAS DOING MOST OF THE DAMAGE.
+
+(a) THE ENVELOPE ENGAGED TOO LATE. `sqrt(v_curve^2 + 2*a*d_eff)` with a flat
+a = 1.0 m/s^2 sets ONE engagement distance for a given cut. For the reported
+case (20 mph off at motorway speed) that is ~220 m, by which point the whole
+reduction has to happen at once.
+
+* feat: the budget is now INTEGRATED over distance-to-go, `v^2 = v_curve^2 +
+  2*J(s)`, at 1.20 m/s^2 inside 60 m, 0.80 to 150 m and 0.50 beyond.
+
+THE INTEGRAL IS THE LOAD-BEARING PART, not the numbers. Evaluating a(d) at the
+point's own distance is the obvious way to write this and it is WRONG: the
+resulting cap is not monotone in distance, so on some approaches it LOOSENS as
+you close on the corner and the car speeds back up mid-approach. That was
+caught by putting the table on screen, not by reading it. Integrating makes the
+cap monotone by construction, and has the nicer property that the decel implied
+at distance-to-go s is exactly a(s) -- so the schedule reads as the profile the
+driver feels. For 29 -> 20 m/s:
+
+    d = 400 m (1310 ft)   a 0.55   cap 30.0   above cruise; nothing yet
+    d = 305 m (1000 ft)   a 0.66   cap 28.3   engages; coasting
+    d = 200 m ( 660 ft)   a 0.79   cap 26.4
+    d = 120 m ( 390 ft)   a 1.11   cap 24.0
+    d =  40 m ( 130 ft)   a 1.20   cap 20.0   at corner speed, 2 s early
+
+1.20 IS THE CEILING FOR A REASON, and it is not a comfort guess: this is a
+SPEED cap, and long_mpc's CRUISE_MIN_ACCEL bounds what a falling cruise target
+can command at -1.2. A steeper envelope is theatre -- the MPC cannot follow it.
+
+(b) THE FUSION VETOED THE EARLY PART ENTIRELY, and this is why the envelope
+alone would have changed nothing. `allowed = cut * corroboration` CONFLATES TWO
+QUESTIONS: corroboration answers "is this corner real", the envelope answers
+"how far under cruise should we be right now". Multiplying them means a SMALL
+early trim is multiplied down to nothing -- and a small early trim is exactly
+what a progressive approach consists of. At corroboration 0.3 a 1.2 m/s trim
+became 0.36, under MAP_SOLO_MIN_CUT, so it was dropped and the car did nothing.
+
+Worse, corroboration came only from the model, whose plan reaches ~240 m at
+30 m/s while SCC-M reasons to 400 m. For the whole early approach it was ~0,
+and zero times anything is still zero. v3.4.9's own docstring predicted this;
+making corroboration continuous did not fix it.
+
+* fix: `allowed = min(cut, MAP_SOLO_MAX_CUT * c)`. Authority is a CEILING on
+  how much the map may take; anything under it passes through at full strength.
+  Note this is also STRICTER than before for large cuts at middling
+  corroboration, which is the right way round.
+* feat: `proximity_authority()`. A corner still in the map at 120 m is far more
+  likely to be real than one at 400 m, so distance is evidence in its own
+  right. It is WEAKER evidence than the model agreeing and is capped at 0.75 to
+  say so -- full authority still requires vision or a posted advisory.
+  HONEST COST: a mistagged map point near the car can now produce a bounded
+  trim where it previously produced none. Bounded at MAP_SOLO_MAX_CUT * 0.75,
+  about 11 mph, and only ever as a speed cap.
+
+2. THE SLA ARROW POINTS AT THE RIGHT BUTTON
+------------------------------------------------------------------------
+Reported: the up arrow shows when the driver has to press down.
+
+* fix: `_chevron` was drawing `next_limit > cur_limit` -- the direction the
+  UPCOMING ZONE is moving. That is a fact about the road, not an instruction.
+  SLA's confirm is a press toward the CURRENT limit from wherever the SET SPEED
+  is, which is what `_confirm_pressed` consumes: cluster < limit means press +.
+  The two agree only by coincidence; 55 set in a 45 zone with a faster zone
+  ahead produces exactly the reported wrong arrow. The chevron now asks the
+  same question the state machine answers.
+
+3. PERFORMANCE: THE ONROAD HUD GIVES THE FRAME BUDGET BACK
+------------------------------------------------------------------------
+Reported: the onroad camera view is laggy. Counted rather than guessed --
+the minimap ribbon and the chrome gradient were together doing ~2100 cffi
+calls per frame, roughly 4.3 ms of a 16.6 ms budget at 60 fps.
+
+* perf: THE ROUTE IS DECIMATED at poll time. mapd spaces its points about a
+  metre apart; at this widget's ~2 px/m that is a SUB-PIXEL segment, and the
+  ribbon was drawing ~750 of them twice a frame. One point per 8 m gives a
+  16 px segment -- 377 points become 56. A point is kept regardless if its
+  speed or zone differs from the last kept one, so no colour transition is
+  smeared: decimation must lose RESOLUTION, never INFORMATION.
+* perf: the ribbon computes geometry and colour ONCE into a list and the two
+  passes then only draw. `px()`, `edge_fade()`, `expected_speed_at()` and
+  `ramp_color()` were all running twice per segment for a result that cannot
+  differ between passes.
+* perf: THE CHROME RINGS ARE CACHED. 85 nested outlines were each allocating a
+  fresh `rl.Rectangle` and `rl.Color` every frame for a gradient whose inputs
+  are constant most of the time. The key is the QUANTISED result -- alpha
+  reaches the framebuffer as a byte anyway, so two float alphas that round the
+  same are the same picture and must share an entry, or the easer's last few
+  thousandths would miss forever.
+* perf: loop-invariant trig hoisted out of the poll projection (1600
+  transcendental calls per poll where 4 will do); the per-frame `import Mode`
+  in `_draw_sign` memoised.
+
+MEASURED: ~2136 -> ~276 cffi ops per frame for the ribbon and chrome together,
+about 7.7x, freeing roughly 3.7 ms per frame.
+
+WHAT WAS MEASURED AND THEN NOT DONE: throttling the three /dev/shm reads in
+`_update_derived` from 60 Hz to their 20 Hz publish rate. Measured at 11.3 us
+per read, so the whole saving is 1.35 ms per SECOND -- noise next to the above,
+and it would have introduced a sampling delay for nothing. Recorded because
+"we considered it and it was not worth it" is worth more than silence.
+
+TESTS
+------------------------------------------------------------------------
+* 603 green, 0 failed. NO NEW TESTS by request; the existing suite is what
+  guarantees the performance pass changed nothing.
+* THREE tests had expectations updated, all for the intentional SCC-M change:
+  the envelope now uses J(), and authority is a ceiling rather than a scale.
+  The graded-authority case gained the small-ask assertion that the old
+  `cut * c` multiplied away -- the behaviour this release exists to restore.
+* ON-ROAD VERIFICATION: (1) the car should begin easing off around 1000 ft from
+  a corner the minimap is already showing, and the reduction should feel
+  progressive rather than arriving at once; (2) the preActive arrow should
+  always point at the button that actually confirms; (3) the camera view should
+  be smooth again. If corners now slow for things that are not corners, the
+  proximity authority is the first suspect and MAP_PROX_MAX_AUTHORITY is the
+  knob -- not the envelope.
+
 FunnyPilot v3.5.5 (2026-08-02)
 ========================
 Three reported defects. The first is mine, from v3.5.4.

@@ -94,6 +94,21 @@ _STATE_COLORS = {
 }
 
 
+_SLA_MODE = None
+
+
+def _sla_mode():
+  """v3.5.6: memoised. This was a bare `from ... import Mode` inside
+  `_draw_sign`, i.e. a sys.modules lookup and an attribute walk on every frame
+  for a value that never changes. Same lazy-import discipline as _sla_states
+  below, just resolved once."""
+  global _SLA_MODE
+  if _SLA_MODE is None:
+    from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
+    _SLA_MODE = Mode
+  return _SLA_MODE
+
+
 def _sla_states():
   """The SLA state enum, resolved on first use.
 
@@ -137,6 +152,7 @@ class HudRendererSP(HudRenderer):
     self._accel: float = 0.0
     # v3.5.2 minimap colour reference — see hud/route_map.expected_speed_at
     self._map_ref_mps: float = 0.0
+    self._set_speed_mps: float = 0.0
     self._sla_ratio: float = 0.0
     self._sla_on: bool = False
     self._glow_phase: float = 0.0
@@ -203,14 +219,19 @@ class HudRendererSP(HudRenderer):
     """
     try:
       cs = ui_state.sm['carState']
-      self._map_ref_mps = (float(cs.vCruiseCluster) * CV.KPH_TO_MS
-                           if self.is_cruise_set else float(cs.vEgo))
+      # v3.5.6: the cluster set speed in m/s, kept separately from the map
+      # reference because the chevron needs the SET SPEED specifically -- the
+      # map falls back to vEgo when cruise is unset, which would point the
+      # arrow at whatever we happen to be doing.
+      self._set_speed_mps = float(cs.vCruiseCluster) * CV.KPH_TO_MS if self.is_cruise_set else 0.0
+      self._map_ref_mps = (self._set_speed_mps if self.is_cruise_set else float(cs.vEgo))
       slr = self.speed_limit_renderer
       states = _sla_states()
       self._sla_on = slr.speed_limit_assist_state in (states.active, states.adapting)
       self._sla_ratio = float(slr.sla_dynamic_offset)
     except Exception:
       self._map_ref_mps, self._sla_ratio, self._sla_on = 0.0, 0.0, False
+      self._set_speed_mps = 0.0
 
   def _build_pills(self, scc_gate: bool, sla_gate: bool) -> list:
     """The status strip. A source that is not saying anything is simply absent —
@@ -339,8 +360,7 @@ class HudRendererSP(HudRenderer):
 
   def _draw_sign(self, rect: rl.Rectangle) -> None:
     slr = self.speed_limit_renderer
-    from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
-    if ui_state.speed_limit_mode == Mode.off:
+    if ui_state.speed_limit_mode == _sla_mode().off:
       return
 
     states = _sla_states()
@@ -355,7 +375,8 @@ class HudRendererSP(HudRenderer):
                       limit=limit, next_limit=ahead, dist_m=slr.speed_limit_ahead_dist,
                       sla_active=active, pre_active=pre,
                       offset_ratio=slr.sla_dynamic_offset, metric=ui_state.is_metric,
-                      overspeed=overspeed, dt=1.0 / max(gui_app.target_fps, 1))
+                      overspeed=overspeed, dt=1.0 / max(gui_app.target_fps, 1),
+                      set_speed=self._set_speed_mps)
 
   def _draw_route_map(self, rect: rl.Rectangle) -> None:
     """Drawn whenever SCC-M is enabled — the feature it visualises. The slot is

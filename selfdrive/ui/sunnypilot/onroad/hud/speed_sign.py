@@ -103,7 +103,8 @@ class SpeedSign:
 
   def render(self, x: float, y: float, *, limit: float, next_limit: float, dist_m: float,
              sla_active: bool, pre_active: bool, offset_ratio: float,
-             metric: bool, overspeed: bool, dt: float = 1 / 60.0) -> None:
+             metric: bool, overspeed: bool, dt: float = 1 / 60.0,
+             set_speed: float = 0.0) -> None:
     self._phase = (self._phase + dt) % 4.0
 
     color, prox = halo_spec(next_limit, limit, dist_m, sla_active)
@@ -143,7 +144,10 @@ class SpeedSign:
       self._face(rl.Rectangle(sx, y + TAB_H + GAP, nw, nh), next_limit, metric, False, primary=False)
 
     if pre_active:
-      self._chevron(sign_rect, next_limit, limit)
+      # v3.5.6: the chevron is an INSTRUCTION (which button confirms), so it is
+      # driven by set speed vs the current limit -- the same comparison
+      # _confirm_pressed makes -- not by where the next zone is going.
+      self._chevron(sign_rect, set_speed, limit)
 
   # ── pieces ──────────────────────────────────────────────────────────────
 
@@ -207,10 +211,23 @@ class SpeedSign:
     T.text_centered(T.font_bold(), s, rect.x + w / 2, y + 5, T.SZ_LABEL, CYAN, T.TRACK_LABEL)
 
   @staticmethod
-  def _chevron(rect: rl.Rectangle, next_limit: float, cur_limit: float) -> None:
-    """Which way to press, drawn on the halo instead of floating beside it.
-    Two lines — no texture to load and nothing to fail."""
-    up = bool(next_limit and cur_limit and next_limit > cur_limit)
+  def _chevron(rect: rl.Rectangle, set_speed: float, cur_limit: float) -> None:
+    """WHICH BUTTON TO PRESS. Two lines — no texture to load, nothing to fail.
+
+    v3.5.6 — THIS WAS DRAWING THE WRONG QUANTITY. It took (next_limit,
+    cur_limit) and pointed up when the UPCOMING ZONE was faster. That is a fact
+    about the road, not an instruction: SLA's confirm is a press toward the
+    CURRENT limit from wherever the SET SPEED is, which is what
+    `speed_limit_assist._confirm_pressed` consumes —
+
+        cluster <  limit  -> press +      cluster >  limit  -> press -
+
+    The two agree only by coincidence. Reported as an up arrow shown when the
+    driver had to press down, which is exactly what a 55 set speed in a 45 zone
+    with a faster zone ahead produces. The arrow now asks the same question the
+    state machine answers.
+    """
+    up = bool(cur_limit and cur_limit > 0 and set_speed and set_speed < cur_limit)
     cx = rect.x + rect.width / 2
     cy = rect.y - HALO_PAD - 20 if up else rect.y + rect.height + HALO_PAD + 20
     s, t = 20.0, 6.0

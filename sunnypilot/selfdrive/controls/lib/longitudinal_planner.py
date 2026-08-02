@@ -152,7 +152,8 @@ class LongitudinalPlannerSP:
     v_scc_vision = self._scc_vision_v2.output_v_target
     v_scc_map = gate_map_target(self._scc_map_v2.output_v_target, self._scc_vision_v2.is_active,
                                 v_cruise, self._scc_vision_v2.corroboration,
-                                self._scc_map_v2.advisory_active)
+                                self._scc_map_v2.advisory_active,
+                                getattr(self._scc_map_v2, 'gov_distance', 0.0))
     # v3.5.0: what fraction of the cut SCC-M asked for actually survived the
     # fusion. 1.0 = passed through whole, 0.0 = vetoed. The onroad minimap draws
     # this as a solid vs hollow marker; publishing it beats having the UI
