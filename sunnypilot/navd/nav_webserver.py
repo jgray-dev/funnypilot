@@ -27,6 +27,8 @@ _VERSION_FILE = "/data/openpilot/FUNNYPILOT_VERSION"
 # selfdrive/controls/lib/triage_recorder.py for the format and rationale).
 TRIAGE_DIR = "/data/funnypilot_triage"
 _TRIAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(jsonl|jsonl\.1|log)$")
+# a git ref name we are willing to hand to a root shell
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _PULSE_PERIOD_S = 600  # code-identity pulse every 10 min, catches mid-parked swaps
 _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
@@ -46,7 +48,27 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.5.7"
+EXPECTED_VERSION = "3.5.8"
+
+# FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
+#
+# Both of these run ONLY after a checkout has actually succeeded, and only from
+# the explicit web flash. Neither is reachable from a background updater.
+#
+# BRANCH PRUNE. Every version ever flashed used to accumulate as a local branch.
+# The stated reason was an offline unbrick path -- check out an old branch
+# straight from local git objects with no network. That reason does not survive
+# contact with the device: reaching the CLI at all requires wifi or a hotspot,
+# so if you can run git you can also fetch. Versions ending in `st` are the
+# stable cuts and are kept; everything else goes, along with the disk it holds.
+KEEP_BRANCH_SUFFIX = "st"
+
+# DRIVE DATA. realdata is 60-70 GB of route segments with no consumer -- there
+# is no uploader configured and no viewer. FLIP THIS TO False once the
+# Cloudflare-backed dashcam viewer exists; at that point the data has a reader
+# and deleting it on every flash becomes destructive rather than tidy.
+PURGE_DRIVE_DATA_ON_FLASH = True
+_DRIVE_DATA_DIR = "/data/media/0/realdata"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
 # the user actually asks ("is my code intact / will it stay that way"),
@@ -159,6 +181,9 @@ _CODE_MARKERS = [
   ("def zone_change", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap zone-boundary marker"),
   # v3.5.7
   ("power watchdog not kicked", "/data/openpilot/system/manager/manager.py", "AGNOS watchdog failure is logged"),
+  # v3.5.8
+  ("PURGE_DRIVE_DATA_ON_FLASH", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash purges drive data"),
+  ("KEEP_BRANCH_SUFFIX", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash prunes non-stable branches"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
@@ -329,6 +354,11 @@ async def handle_flash(request: web.Request) -> web.Response:
       return web.json_response({"error": "missing branch"}, status=400)
     # Only allow funnypilot branches or sunnypilot main/dev/staging
     allowed = branch.startswith("funnypilot-") or branch in ("main", "dev", "staging")
+    # v3.5.8: `branch` is interpolated into a shell command that runs as root,
+    # and the prefix test alone does not make it safe -- "funnypilot-;<anything>"
+    # passes startswith(). Restrict to characters a git ref can actually contain.
+    if not _BRANCH_RE.match(branch):
+      allowed = False
     if not allowed:
       return web.json_response({"error": "disallowed branch"}, status=403)
 
@@ -345,13 +375,38 @@ async def handle_flash(request: web.Request) -> web.Response:
     # After a successful checkout, also discard any previously staged update
     # (unmount the updater overlay first) so the reboot below can't swap in
     # code that was finalized before this flash.
+    # v3.5.8 housekeeping, in the tail block so it runs ONLY after the fetch,
+    # checkout and reset have all succeeded -- a failed flash must never delete
+    # anything.
+    #
+    # The prune keeps `*st` and the branch just flashed. `grep -vx` on the
+    # flashed branch is load-bearing: git refuses to delete the checked-out
+    # branch anyway, but relying on that would make the pipeline's exit status
+    # depend on it.
+    prune = (
+      "sudo git for-each-ref --format='%(refname:short)' refs/heads" +
+      f" | grep -vE '{KEEP_BRANCH_SUFFIX}$' | grep -vx '{branch}'" +
+      " | xargs -r sudo git branch -D; "
+    )
+    # -mindepth 1 keeps the directory itself, which loggerd expects to exist,
+    # and `-exec ... +` avoids a glob that would blow ARG_MAX on a device
+    # holding tens of thousands of segments.
+    purge = (
+      f"sudo find {_DRIVE_DATA_DIR} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} + 2>/dev/null; "
+    ) if PURGE_DRIVE_DATA_ON_FLASH else ""
+
     script = (
       "cd /data/openpilot && " +
       f"sudo git -c http.sslVerify=false fetch funnypilot {branch} && " +
       f"sudo git checkout {branch} && " +
       f"sudo git reset --hard funnypilot/{branch} && " +
-      "{ sudo umount -l /data/safe_staging/merged 2>/dev/null; " +
+      "{ " + prune + purge +
+      "sudo umount -l /data/safe_staging/merged 2>/dev/null; " +
       "sudo rm -rf /data/safe_staging; " +
+      # The git calls above run under sudo and leave root-owned objects behind;
+      # that is what made three previous deploys abort half-way with
+      # "insufficient permission for adding an object". Hand the tree back.
+      "sudo chown -R comma:comma /data/openpilot; " +
       "sudo reboot; }"
     )
     proc = await asyncio.create_subprocess_exec(

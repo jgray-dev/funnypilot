@@ -119,6 +119,39 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.8 Changes (based on funnypilot-3.5.7)
+
+Flash-time housekeeping plus one security fix found while adding it.
+
+- `sunnypilot/navd/nav_webserver.py` — `/api/flash` now prunes and purges after
+  a SUCCESSFUL checkout, before the reboot. `KEEP_BRANCH_SUFFIX` keeps `*st` and
+  the branch just flashed; `PURGE_DRIVE_DATA_ON_FLASH` empties
+  `/data/media/0/realdata` (66 GB with no uploader and no viewer).
+  **THE OFFLINE UNBRICK PATH WAS NEVER REAL** — the device-recovery notes above
+  claim old local branches let you recover with no network, but reaching the CLI
+  at all requires wifi or a hotspot, so anything that can run git can fetch.
+  Owner-corrected; the branches are not worth 2.8 GB.
+  FLIP `PURGE_DRIVE_DATA_ON_FLASH` TO FALSE once the Cloudflare dashcam viewer
+  exists — at that point the data has a reader.
+  BOUNDS: both live in the tail block the `&&` chain reaches only after
+  `reset --hard`, so A FAILED FLASH DELETES NOTHING; the purge is
+  `find -mindepth 1 -maxdepth 1 -exec rm -rf {} +` (keeps the directory loggerd
+  expects, and no glob to blow ARG_MAX); the prune reads `refs/heads` ONLY,
+  because remote-tracking refs are how the device finds anything again.
+  Also adds `chown -R comma:comma /data/openpilot` at the end — the sudo git
+  calls here are the documented source of the root-owned `.git` that aborted
+  three previous deploys.
+- Same file — **`branch` REACHES A ROOT SHELL.** Validation was
+  `startswith("funnypilot-")`, which `"funnypilot-;<anything>"` passes. Now also
+  matched against `_BRANCH_RE` `^[A-Za-z0-9._-]+$`. Pre-existing; adding a
+  second interpolation site surfaced it.
+- TESTS: 656 green. NEW `sunnypilot/navd/tests/test_flash_housekeeping.py` (40),
+  all SOURCE assertions — there is no safe way to exercise `sudo rm -rf`, and
+  the failure being guarded is an edit that reads fine. THREE mutation-tested.
+  PROCESS NOTE: the `-mindepth` guard PASSED its first mutation because it
+  asserted `"-mindepth 1" in _TEXT` and the COMMENT above the command contains
+  that phrase — **a test that can be satisfied by a comment is not a test.**
+
 ### v3.5.7 Changes (based on funnypilot-3.5.6)
 
 The three missing v3.5.6 minimap tests, plus ONE DIAGNOSTIC change for a

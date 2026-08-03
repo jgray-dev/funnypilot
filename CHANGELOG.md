@@ -1,3 +1,61 @@
+FunnyPilot v3.5.8 (2026-08-02)
+========================
+Flash-time housekeeping, plus one security fix found while adding it.
+
+1. THE FLASH PRUNES OLD BRANCHES AND DRIVE DATA
+------------------------------------------------------------------------
+`/api/flash` now, after a SUCCESSFUL checkout and before the reboot:
+
+* deletes every local branch except those ending in `st` and the branch just
+  flashed (`KEEP_BRANCH_SUFFIX`), and
+* empties `/data/media/0/realdata` (`PURGE_DRIVE_DATA_ON_FLASH`).
+
+WHY THE BRANCHES GO. They were kept as an offline unbrick path -- check out an
+old version straight from local git objects with no network. That reason does
+not survive contact with the device, as the owner pointed out: reaching the CLI
+at all requires wifi or a hotspot, so anything that can run git can also fetch.
+The path was never real, and it was holding 2.8 GB.
+
+WHY THE DRIVE DATA GOES. 66 GB of route segments with no uploader and no
+viewer. `PURGE_DRIVE_DATA_ON_FLASH` is a named constant precisely so it can be
+flipped to False the day the Cloudflare-backed dashcam viewer exists -- at that
+point the data has a reader and deleting it stops being tidying.
+
+BOUNDED, AND THE BOUNDS ARE THE POINT:
+* Both run inside the tail block, which the `&&` chain reaches only after
+  `git reset --hard` succeeds. A FAILED FLASH DELETES NOTHING.
+* The purge is `find ... -mindepth 1 -maxdepth 1 -exec rm -rf {} +`. `-mindepth
+  1` keeps the directory itself, which loggerd expects to exist; `-exec ... +`
+  avoids a glob that would blow ARG_MAX on tens of thousands of segments.
+* The prune reads `refs/heads` only. Remote-tracking refs are how the device
+  finds anything again afterwards.
+* `sudo chown -R comma:comma /data/openpilot` was added at the end. The git
+  calls here run under sudo and leave root-owned objects, which is what made
+  three previous deploys abort half-way with "insufficient permission for
+  adding an object to repository database".
+
+2. THE BRANCH NAME REACHES A ROOT SHELL
+------------------------------------------------------------------------
+* fix: `branch` is interpolated into a command that runs as root, and the only
+  validation was `startswith("funnypilot-")` -- which "funnypilot-;<anything>"
+  passes. It is now also matched against `^[A-Za-z0-9._-]+$`. This was
+  pre-existing; adding a second interpolation site is what surfaced it.
+
+TESTS
+------------------------------------------------------------------------
+* 656 green, 0 failed. NEW `sunnypilot/navd/tests/test_flash_housekeeping.py`
+  (40) -- every assertion is on the SOURCE, because there is no safe way to
+  exercise `sudo rm -rf` in a test and the failure being guarded is an edit
+  that looks reasonable in review. Mirrors the allow-list discipline
+  `storage_cleanup.py` has had since v3.4.5.
+* THREE guards MUTATION-TESTED: the injection regex removed, `-mindepth 1`
+  dropped from the find, and the purge root widened to `/data/media`.
+* PROCESS NOTE: the `-mindepth` guard PASSED its first mutation. It asserted
+  `"-mindepth 1" in _TEXT`, and the COMMENT above the command contains that
+  same phrase -- so the test was reading the documentation, not the code. It
+  matches the command with a regex now. A test that can be satisfied by a
+  comment is not a test.
+
 FunnyPilot v3.5.7 (2026-08-02)
 ========================
 The three missing v3.5.6 minimap tests, plus one diagnostic change aimed at a
