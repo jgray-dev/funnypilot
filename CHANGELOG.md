@@ -1,3 +1,70 @@
+FunnyPilot v3.5.9 (2026-08-02)
+========================
+Four reported items. The SLA arrow one is a unit error I introduced in v3.5.6.
+
+1. THE SLA ARROW — MY UNIT ERROR
+------------------------------------------------------------------------
+v3.5.6 changed the chevron to compare SET SPEED against the CURRENT limit,
+which was the right comparison, and then passed the two sides in DIFFERENT
+UNITS. `limit` is `speed_limit_final_last`, which SpeedLimitRenderer has
+already multiplied by `speed_conv` -- it is the number drawn on the sign face,
+so it is mph. I passed `_set_speed_mps`, in m/s. At a 45 mph set speed that is
+`20.1 < 45`, so the arrow pointed UP for every limit above about 20 mph.
+Permanently. Fixed to `self.set_speed`, which is display units. `_set_speed_mps`
+is deleted rather than left as a trap.
+
+2. SCC-M NO LONGER SLOWS FOR LANE MERGES
+------------------------------------------------------------------------
+Reported: where two lanes merge or one splits, the map claims a corner. The
+mechanism is real -- the OSM way jogs sideways over a short distance, mapd
+computes curvature from that geometry and publishes a low target velocity.
+
+WHAT LET IT THROUGH WAS v3.5.6. Before it, vision vetoed map-only cuts and a
+junction on a straight road produced nothing. v3.5.6 let PROXIMITY substitute
+for corroboration so the early part of an approach could act at all.
+
+That was right beyond the model's horizon and WRONG inside it. ABSENCE OF
+EVIDENCE IS EVIDENCE, BUT ONLY WHERE THE MODEL WAS LOOKING: at 400 m the model
+has no opinion, so proximity may stand in; at 120 m it is looking straight at
+the junction and reporting a straight road, and that is real evidence there is
+no corner. Proximity authority now applies only beyond `v_ego * MODEL_HORIZON_T`
+(8 s, the plan length SCC-V reasons over), and inside it a corroboration below
+VISION_DISAGREE_TH vetoes outright. Multiplying by v_ego is what makes this the
+distance the model actually covers instead of a fixed number that is wrong at
+every speed but one.
+
+3. THE MINIMAP
+------------------------------------------------------------------------
+* fix: OPACITY IS NOW A PROPERTY OF SCREEN POSITION, not of a segment. It was
+  `min(edge_fade(a), edge_fade(b))` over a segment's two endpoints. On a
+  highway mapd publishes very few points, so ONE segment can span the whole
+  strip -- and the instant either end left the box the ENTIRE segment was
+  dropped. That is the reported jumpiness, and on a straight enough road it is
+  the whole ribbon vanishing. The strip now has a fixed vertical profile the
+  road slides through: full above, 50% at the car, 0 at the bottom edge. Freeze
+  the frame at any instant and the gradient is the same.
+* fix: segments are SUBDIVIDED (MAX_SEG_PX 16). This is what makes the profile
+  apply ALONG a long segment, and what makes a partly-visible segment draw its
+  visible part instead of nothing.
+* fix: the ego marker is no longer drawn alone. With no route parsed -- no fix,
+  or mapd still loading after a reboot -- a lone triangle in an empty strip
+  reads as a broken widget. It says NO ROUTE instead.
+
+4. THE STATUS PILLS ARE A VERTICAL STACK
+------------------------------------------------------------------------
+* feat: every pill, every frame, in a fixed order, in the previously empty
+  column under the set speed. The old row was built CONDITIONALLY, so a source
+  with nothing to say was absent and the centred row re-flowed around it --
+  the one thing the station model forbids. A quiet source is now drawn muted in
+  its own row and nothing can move. Geometry checked by arithmetic: 22 px clear
+  of the set-speed plate, 15 px clear of the accel spine, 498 px clear of the
+  bottom rail.
+
+TESTS
+------------------------------------------------------------------------
+* 656 green, 0 failed. No new tests; the existing suite covers the pure
+  functions that changed shape.
+
 FunnyPilot v3.5.8 (2026-08-02)
 ========================
 Flash-time housekeeping, plus one security fix found while adding it.

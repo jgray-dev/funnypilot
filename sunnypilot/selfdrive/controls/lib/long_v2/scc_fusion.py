@@ -92,6 +92,13 @@ MAP_PROX_NONE_M = 400.0        # beyond this, distance grants nothing
 MAP_PROX_FULL_M = 120.0        # at or inside this, the distance term saturates
 MAP_PROX_MAX_AUTHORITY = 0.75  # distance alone may never grant FULL authority
 
+# v3.5.9. The model's plan horizon, in seconds — scc_vision_v2 reasons over
+# ~8 s. Inside `v_ego * MODEL_HORIZON_T` the model has actually looked at the
+# road, so its silence is informative and the map must earn corroboration.
+# Beyond it the model has no opinion and proximity may stand in.
+MODEL_HORIZON_T = 8.0
+VISION_DISAGREE_TH = 0.05   # below this the model is actively reporting "straight"
+
 
 def proximity_authority(dist_m: float) -> float:
   """[0, MAP_PROX_MAX_AUTHORITY] from distance to the governing point."""
@@ -108,7 +115,7 @@ def proximity_authority(dist_m: float) -> float:
 
 def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool,
                     vision_corroboration: float, advisory_active: bool = False,
-                    dist_m: float = 0.0) -> float:
+                    dist_m: float = 0.0, v_ego: float = 0.0) -> float:
   """Return the map's cap as the governor should see it.
 
   map_v_target: SCC-M's smoothed cap (CAP_INACTIVE when it has nothing to say)
@@ -117,6 +124,7 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   vision_corroboration: [0, 1], how much lateral action the model predicts
   advisory_active: a posted advisory speed agrees there is something here
   dist_m: distance to the governing point (0 = unknown, grants nothing)
+  v_ego: current speed, used to size the model's horizon (0 = unknown)
   """
   if not (map_v_target < CAP_INACTIVE):
     return CAP_INACTIVE
@@ -127,7 +135,35 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   c = min(max(float(vision_corroboration), 0.0), 1.0)
   if advisory_active:
     c = max(c, ADVISORY_CORROB_FLOOR)
-  c = max(c, proximity_authority(dist_m))
+
+  # FunnyPilot v3.5.9 — ABSENCE OF EVIDENCE IS EVIDENCE, BUT ONLY WHERE THE
+  # MODEL WAS LOOKING.
+  #
+  # v3.5.6 let proximity substitute for corroboration so the early part of an
+  # approach could act at all. That was right beyond the model's horizon, where
+  # the model genuinely has no opinion — and WRONG inside it, where the model
+  # looking straight at something and reporting a straight road is real
+  # evidence that there is no corner there.
+  #
+  # The reported failure is exactly that case: where two lanes merge, or one
+  # splits into two, the OSM way jogs sideways over a short distance. mapd
+  # computes curvature from that geometry and publishes a low target velocity,
+  # so the map claims a hard corner on what is a straight road. Those junctions
+  # are close — well inside the plan — so before v3.5.6 the vision veto killed
+  # them, and proximity authority is what let them through.
+  #
+  # So a map point INSIDE the model's horizon must still earn vision's
+  # agreement; only points beyond it may lean on proximity. `MODEL_HORIZON_T`
+  # is the plan length scc_vision_v2 reasons over, and multiplying by v_ego is
+  # what makes this the same distance the model actually covers rather than a
+  # fixed number that is wrong at every speed but one.
+  d = float(dist_m) if dist_m and dist_m == dist_m else 0.0
+  horizon = max(0.0, float(v_ego)) * MODEL_HORIZON_T if v_ego else 0.0
+  model_could_see_it = 0.0 < d <= horizon
+  if model_could_see_it and c < VISION_DISAGREE_TH:
+    return CAP_INACTIVE
+  if not model_could_see_it:
+    c = max(c, proximity_authority(d))
   if c <= 0.0:
     return CAP_INACTIVE
 

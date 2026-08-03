@@ -119,6 +119,44 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.5.9 Changes (based on funnypilot-3.5.8)
+
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — **THE SLA CHEVRON WAS A
+  UNIT ERROR OF MINE.** v3.5.6 compared SET SPEED to the CURRENT limit (right
+  comparison) in DIFFERENT UNITS: `limit` is `speed_limit_final_last`, already
+  multiplied by `speed_conv` by SpeedLimitRenderer — it is the number drawn on
+  the sign face, so mph — while `_set_speed_mps` was m/s. At 45 mph set speed
+  that is `20.1 < 45`, so the arrow pointed UP for every limit above ~20 mph,
+  permanently. Now `self.set_speed`; `_set_speed_mps` DELETED so it cannot be
+  reached for again.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — SCC-M slowing for
+  lane merges/splits. The OSM way jogs sideways at a junction, mapd computes
+  curvature from it and publishes a low target. **v3.5.6's proximity authority
+  is what let it through** — before that, vision vetoed map-only cuts.
+  ABSENCE OF EVIDENCE IS EVIDENCE, BUT ONLY WHERE THE MODEL WAS LOOKING:
+  proximity may stand in beyond `v_ego * MODEL_HORIZON_T` (8 s, SCC-V's plan
+  length) where the model has no opinion; INSIDE it, corroboration under
+  `VISION_DISAGREE_TH` vetoes outright, because the model looking at a junction
+  and reporting straight road is real evidence. Multiplying by v_ego is what
+  makes this the distance the model actually covers.
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — **OPACITY IS A PROPERTY
+  OF SCREEN POSITION, NOT OF A SEGMENT.** It was `min(edge_fade(a),
+  edge_fade(b))`, so a segment vanished ENTIRELY the moment either endpoint
+  left the box — and on a highway mapd publishes so few points that one segment
+  spans the strip. That is the reported jumpiness and the vanishing ribbon.
+  `screen_opacity` is a fixed vertical profile the road slides through (full
+  above, 0.5 at the car, 0 at the bottom); `side_fade` keeps horizontal
+  clipping only. Segments are SUBDIVIDED (`MAX_SEG_PX`) so the profile applies
+  along them and a partly-visible segment draws its visible part.
+  Ego marker no longer drawn alone — NO ROUTE instead of a floating triangle.
+- `selfdrive/ui/sunnypilot/onroad/hud/stations.py` — `draw_status_stack`. The
+  pill row was built CONDITIONALLY and re-centred, so a silent source made
+  every other pill slide — the reflow the station model forbids. Every pill,
+  every frame, fixed order, in the empty column under the set speed. Geometry
+  checked by ARITHMETIC: 22 px under the plate, 15 px clear of the spine,
+  498 px above the bottom rail.
+- TESTS: 656 green, none added.
+
 ### v3.5.8 Changes (based on funnypilot-3.5.7)
 
 Flash-time housekeeping plus one security fix found while adding it.

@@ -109,6 +109,46 @@ def draw_status_strip(cx: float, y: float, pills: list) -> None:
     x += w + PILL_GAP
 
 
+# FunnyPilot v3.5.9 — the status pills are a VERTICAL STACK under the set
+# speed, not a centred row under the hero speed.
+#
+# Two reasons, and the first is the one that was reported. The row was built
+# from a CONDITIONAL list, so a source that had nothing to say was absent and
+# every remaining pill slid sideways to re-centre -- the exact reflow this
+# file's docstring says nothing on this screen may do. A fixed vertical stack
+# of EVERY pill cannot move: a quiet source is drawn muted in its own place.
+#
+# Second, the column under the set speed was empty, and the centre column was
+# carrying the road name, the speed and the pills all at once.
+STACK_W = SET_W
+STACK_H = 44
+STACK_GAP = 10
+
+
+def draw_status_stack(x: float, y: float, pills: list) -> None:
+  """One pill per row, always the same rows in the same order."""
+  f = T.font_bold()
+  for i, p in enumerate(pills):
+    top = y + i * (STACK_H + STACK_GAP)
+    rect = rl.Rectangle(x, top, STACK_W, STACK_H)
+    if p.lit:
+      rl.draw_rectangle_rounded(rect, T.R_PILL, 10, T.with_alpha(p.color, 0.16))
+      rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, T.with_alpha(p.color, 0.60))
+      ink = p.color
+    else:
+      # unlit is not "off": it is a source that is watching and has nothing to
+      # report. Muted ink, no border colour, same footprint.
+      rl.draw_rectangle_rounded(rect, T.R_PILL, 10, T.SCRIM)
+      rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, T.HAIRLINE)
+      ink = T.MUTED
+    rl.draw_circle(int(x + 20), int(top + STACK_H / 2), 5.0, ink)
+    T.text_at(f, p.text, x + 36, top + 9, T.SZ_LABEL, ink, T.TRACK_LABEL)
+
+
+def stack_height(n: int) -> int:
+  return max(0, n) * (STACK_H + STACK_GAP)
+
+
 def draw_accel_spine(x: float, cy: float, accel: float) -> None:
   """Acceleration as length from the centre. Green up, red down."""
   track = rl.Rectangle(x, cy - SPINE_H / 2, SPINE_W, SPINE_H)

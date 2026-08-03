@@ -105,6 +105,23 @@ POSE_SNAP_M = 120.0    # a jump bigger than this is a new fix, not motion: snap
 # drawn hard against the edge -- there is no scissor here (see render()).
 FADE_PX = 26.0
 
+# FunnyPilot v3.5.9 — OPACITY IS A PROPERTY OF SCREEN POSITION, NOT OF A
+# SEGMENT. `edge_fade` answered "how close is this point to any edge", and the
+# ribbon took `min()` of its two endpoints. On a highway mapd publishes very
+# few points, so ONE segment can span the whole strip -- and the moment either
+# end left the box the ENTIRE segment was dropped. That is the reported
+# jumpiness, and on a straight enough road it is the whole ribbon vanishing.
+#
+# Now the strip has a fixed vertical opacity profile that the road slides
+# through: full above, half at the car, zero at the bottom edge. Freeze the
+# frame at any moment and the gradient is the same, which is what was asked
+# for. Long segments are SUBDIVIDED (MAX_SEG_PX) so the gradient applies ALONG
+# them and a partly-visible segment draws its visible part instead of nothing.
+OPACITY_BP = (0.00, 0.55, EGO_FROM_BOTTOM, 1.00)   # fraction of strip height
+OPACITY_V = (1.00, 1.00, 0.50, 0.00)
+MAX_SEG_PX = 16.0     # subdivide anything longer than this
+MAX_SUBDIV = 64       # bound: a single bad point cannot explode the draw count
+
 # delta (mph under the expected speed) -> tint. Below DELTA_LO the road is
 # simply the road and gets no colour at all.
 #
@@ -207,6 +224,29 @@ def bearing_lerp(cur: float, target: float, a: float) -> float:
   """Ease a heading the SHORT way round. 359 -> 1 is two degrees, not 358."""
   d = (target - cur + 180.0) % 360.0 - 180.0
   return (cur + d * a) % 360.0
+
+
+def screen_opacity(py: float, rect: rl.Rectangle) -> float:
+  """Vertical opacity profile of the strip. See OPACITY_BP."""
+  if rect.height <= 0:
+    return 0.0
+  t = (py - rect.y) / rect.height
+  if t <= OPACITY_BP[0]:
+    return OPACITY_V[0]
+  for i in range(1, len(OPACITY_BP)):
+    if t <= OPACITY_BP[i]:
+      t0, t1 = OPACITY_BP[i - 1], OPACITY_BP[i]
+      v0, v1 = OPACITY_V[i - 1], OPACITY_V[i]
+      k = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+      return v0 + (v1 - v0) * k
+  return OPACITY_V[-1]
+
+
+def side_fade(px: float, rect: rl.Rectangle) -> float:
+  """Horizontal clip only. The vertical direction is owned by screen_opacity,
+  so a point high in the strip is NOT dimmed for being near the top."""
+  d = min(px - rect.x, rect.x + rect.width - px)
+  return T.clamp(d / FADE_PX, 0.0, 1.0)
 
 
 def edge_fade(px: float, py: float, rect: rl.Rectangle) -> float:
@@ -545,28 +585,37 @@ class RouteMap:
     # expected_speed_at() and ramp_color() all ran twice per segment for a
     # result that cannot differ between passes. Identical output, half the work.
     segs = []
-    x0, y_top = rect.x, rect.y
-    x1, y_bot = rect.x + rect.width, rect.y + rect.height
     for i in range(1, len(pts)):
       f0, r0, _v0, _l0 = pts[i - 1]
       f1, r1, v1, lim1 = pts[i]
       a, b = px(f0, r0), px(f1, r1)
-      # edge_fade inlined: two calls per segment at 60 Hz is one of the few
-      # places where the function-call overhead is a measurable fraction.
-      da = min(a[0] - x0, x1 - a[0], a[1] - y_top, y_bot - a[1])
-      db = min(b[0] - x0, x1 - b[0], b[1] - y_top, y_bot - b[1])
-      edge = min(da, db) / FADE_PX
-      if edge <= 0.0:
-        continue
-      if edge > 1.0:
-        edge = 1.0
-      depth = T.clamp(1.0 - (max(f1, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
-      w = max(3.0, rect.width * 0.075 * (1.0 - T.clamp(f1 / RANGE_M, 0.0, 1.0) * 0.45))
+
       expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
       delta = (expected - v1) * MPS_TO_MPH if expected > 0 else 0.0
       c = ramp_color(delta)
-      segs.append((a, b, w, int(HALO_ALPHA * edge * 255),
-                   c[0], c[1], c[2], int(depth * edge * 255)))
+
+      # SUBDIVIDE. A highway segment can span the whole strip; drawing it as one
+      # line meant one opacity for all of it and, worse, dropping the whole
+      # thing the moment either end left the box.
+      n = int(math.hypot(b[0] - a[0], b[1] - a[1]) / MAX_SEG_PX) + 1
+      if n > MAX_SUBDIV:
+        n = MAX_SUBDIV
+      dx, dy, df = (b[0] - a[0]) / n, (b[1] - a[1]) / n, (f1 - f0) / n
+      for k in range(n):
+        pa = (a[0] + dx * k, a[1] + dy * k)
+        pb = (a[0] + dx * (k + 1), a[1] + dy * (k + 1))
+        # evaluated at the MIDPOINT: taking min() of the two ends would step
+        # wherever a sub-segment straddles a breakpoint.
+        my = (pa[1] + pb[1]) * 0.5
+        mx = (pa[0] + pb[0]) * 0.5
+        op = screen_opacity(my, rect) * side_fade(mx, rect)
+        if op <= 0.0:
+          continue
+        fwd = f0 + df * (k + 0.5)
+        depth = T.clamp(1.0 - (max(fwd, 0.0) / RANGE_M) * 0.72, 0.15, 1.0)
+        w = max(3.0, rect.width * 0.075 * (1.0 - T.clamp(fwd / RANGE_M, 0.0, 1.0) * 0.45))
+        segs.append((pa, pb, w, int(HALO_ALPHA * op * 255),
+                     c[0], c[1], c[2], int(depth * op * 255)))
 
     halo_w = HALO_PX * 2
     for a, b, w, ha, _cr, _cg, _cb, _ca in segs:
@@ -617,7 +666,14 @@ class RouteMap:
       T.text_centered_shadowed(T.font_med(), "NO FIX", cx, rect.y + rect.height / 2 - 14,
                                T.SZ_MICRO, T.FAINT, 2.0)
 
-    self._draw_ego(cx, y0, rect.width)
+    # v3.5.9: the marker marks a position ON A ROAD. With no route parsed --
+    # no fix yet, or mapd still loading after a reboot -- a lone triangle
+    # floating in an empty strip says nothing and reads as a broken widget.
+    if pts:
+      self._draw_ego(cx, y0, rect.width)
+    else:
+      T.text_centered_shadowed(T.font_med(), "NO ROUTE", cx,
+                               rect.y + rect.height * 0.5, T.SZ_MICRO, T.FAINT, 2.0)
 
   @staticmethod
   def _draw_ego(cx: float, y0: float, width: float) -> None:

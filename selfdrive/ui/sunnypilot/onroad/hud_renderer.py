@@ -81,7 +81,9 @@ MAP_W = 240
 MAP_RIGHT_INSET = dev_ui.RIGHT_COL_WIDTH + dev_ui.RIGHT_COL_MARGIN + 24
 SPEED_Y = 44
 ROADNAME_Y = 6
-STRIP_Y = 290
+# v3.5.9: the stack sits just under the set-speed plate, in the column that
+# was previously empty. SET_H plus a gap, so the two read as one group.
+STACK_Y = Y_TOP + stations.SET_H + 22
 SPINE_X = 14
 DOT_MARGIN = 20   # v3.5.1: the long-state dot's clearance from both edges
 
@@ -152,7 +154,6 @@ class HudRendererSP(HudRenderer):
     self._accel: float = 0.0
     # v3.5.2 minimap colour reference — see hud/route_map.expected_speed_at
     self._map_ref_mps: float = 0.0
-    self._set_speed_mps: float = 0.0
     self._sla_ratio: float = 0.0
     self._sla_on: bool = False
     self._glow_phase: float = 0.0
@@ -219,61 +220,62 @@ class HudRendererSP(HudRenderer):
     """
     try:
       cs = ui_state.sm['carState']
-      # v3.5.6: the cluster set speed in m/s, kept separately from the map
-      # reference because the chevron needs the SET SPEED specifically -- the
-      # map falls back to vEgo when cruise is unset, which would point the
-      # arrow at whatever we happen to be doing.
-      self._set_speed_mps = float(cs.vCruiseCluster) * CV.KPH_TO_MS if self.is_cruise_set else 0.0
-      self._map_ref_mps = (self._set_speed_mps if self.is_cruise_set else float(cs.vEgo))
+      self._map_ref_mps = (float(cs.vCruiseCluster) * CV.KPH_TO_MS
+                           if self.is_cruise_set else float(cs.vEgo))
       slr = self.speed_limit_renderer
       states = _sla_states()
       self._sla_on = slr.speed_limit_assist_state in (states.active, states.adapting)
       self._sla_ratio = float(slr.sla_dynamic_offset)
     except Exception:
       self._map_ref_mps, self._sla_ratio, self._sla_on = 0.0, 0.0, False
-      self._set_speed_mps = 0.0
 
   def _build_pills(self, scc_gate: bool, sla_gate: bool) -> list:
-    """The status strip. A source that is not saying anything is simply absent —
-    the strip is centred and its height is reserved, so this cannot reflow the
-    rest of the screen."""
+    """EVERY pill, EVERY frame, in a FIXED order. v3.5.9.
+
+    This used to append CONDITIONALLY, so a source with nothing to say was
+    absent and the centred row re-flowed around it -- the one thing the station
+    model forbids (see the module docstring in stations.py). The stack is
+    positional now: a quiet source is drawn muted in its own row and nothing
+    ever moves. `lit` carries all of the information.
+    """
     sm = ui_state.sm
-    pills: list = []
     conv = self.speed_conv
+    pills: list = []
 
-    try:
-      scc = sm['longitudinalPlanSP'].smartCruiseControl
-      for label, side in (("SCC", scc.vision), ("MAP", scc.map)):
-        if not side.enabled:
-          continue
-        if side.active and side.vTarget < 888.0:
-          pills.append(stations.Pill(f"{label} {round(side.vTarget * conv)}", T.LAT_ONLY, True))
-        else:
-          pills.append(stations.Pill(label, T.MUTED, False))
-    except Exception:
-      pass
+    for label, attr in (("SCC", "vision"), ("MAP", "map")):
+      text, color, lit = label, T.MUTED, False
+      try:
+        side = getattr(sm['longitudinalPlanSP'].smartCruiseControl, attr)
+        if side.enabled and side.active and side.vTarget < 888.0:
+          text, color, lit = f"{label} {round(side.vTarget * conv)}", T.LAT_ONLY, True
+      except Exception:
+        pass
+      pills.append(stations.Pill(text, color, lit))
 
-    # v3.5.0 SCC-Learn. Lit with the cap it is taking, unlit with how many
-    # corners it knows — so an empty store reads as "LRN 0" rather than as a
-    # missing feature, which is the difference between "nothing learned yet"
-    # and "this is broken".
+    # SCC-Learn: lit with the cap it is taking, otherwise the number of corners
+    # it knows -- an empty store reads as "LRN 0" rather than as a missing
+    # feature, which is the difference between "nothing learned yet" and
+    # "this is broken".
+    text, color, lit = "LRN", T.MUTED, False
     try:
       n, learn_active, _conf = read_learn_shm()
       if learn_active:
-        pills.append(stations.Pill("LRN", T.LAT_ONLY, True))
-      elif n:
-        pills.append(stations.Pill(f"LRN {n}", T.MUTED, False))
+        color, lit = T.LAT_ONLY, True
+      else:
+        text = f"LRN {n}"
     except Exception:
       pass
+    pills.append(stations.Pill(text, color, lit))
 
-    if scc_gate or sla_gate:
-      pills.append(stations.Pill(tr("GAS GATE"), T.ATTENTION, True))
+    gate = bool(scc_gate or sla_gate)
+    pills.append(stations.Pill(tr("GAS GATE"), T.ATTENTION if gate else T.MUTED, gate))
 
+    e2e = False
     try:
-      if sm['selfdriveState'].experimentalMode:
-        pills.append(stations.Pill("E2E", T.LONG_ONLY, True))
+      e2e = bool(sm['selfdriveState'].experimentalMode)
     except Exception:
       pass
+    pills.append(stations.Pill("E2E", T.LONG_ONLY if e2e else T.MUTED, e2e))
 
     return pills
 
@@ -328,8 +330,8 @@ class HudRendererSP(HudRenderer):
     T.safe_draw("set_speed", self._draw_set_speed, rect)
     T.safe_draw("sign", self._draw_sign, rect)
     T.safe_draw("route_map", self._draw_route_map, rect)
-    T.safe_draw("strip", stations.draw_status_strip,
-                rect.x + rect.width / 2, rect.y + STRIP_Y, self._pills)
+    T.safe_draw("strip", stations.draw_status_stack,
+                rect.x + SET_X, rect.y + STACK_Y, self._pills)
     T.safe_draw("vitals", self._draw_vitals, rect)
 
     # ── pre-existing widgets, untouched ───────────────────────────────────
@@ -376,7 +378,13 @@ class HudRendererSP(HudRenderer):
                       sla_active=active, pre_active=pre,
                       offset_ratio=slr.sla_dynamic_offset, metric=ui_state.is_metric,
                       overspeed=overspeed, dt=1.0 / max(gui_app.target_fps, 1),
-                      set_speed=self._set_speed_mps)
+                      # v3.5.9 UNIT FIX: `limit` is speed_limit_final_last,
+                      # which SpeedLimitRenderer has ALREADY multiplied by
+                      # speed_conv -- it is what gets drawn on the sign face,
+                      # so it is mph. v3.5.6 passed a m/s value against it, so
+                      # the chevron compared 20.1 to 45 and pointed UP for
+                      # every limit above ~20. Both sides are display units.
+                      set_speed=self.set_speed if self.is_cruise_set else 0.0)
 
   def _draw_route_map(self, rect: rl.Rectangle) -> None:
     """Drawn whenever SCC-M is enabled — the feature it visualises. The slot is
