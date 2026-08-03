@@ -1,3 +1,52 @@
+FunnyPilot v3.6.0 (2026-08-02)
+========================
+Onroad cleanup. Four reported items, no control changes.
+
+1. PILL LABELS FIT THEIR SLOT
+------------------------------------------------------------------------
+"GAS GATE" painted straight through the right edge of its pill. The stack is a
+FIXED-WIDTH column by design -- that is what stops it reflowing -- so the text
+has to be what yields.
+
+It could not be sized by hand: pyray is stubbed off-device, so nothing about
+real font metrics can be checked without the car. `_fit_label` MEASURES and
+degrades in the order that costs the least readability -- drop the letter
+tracking, then the type size, then ellipsize. That also covers "SCC 45" and
+"LRN 12", which by estimate were over the slot as well, and any future label.
+
+2. THE MINIMAP SAYS WHY IT IS EMPTY, IN THE LOG
+------------------------------------------------------------------------
+* The NO ROUTE text is gone. It was noise the 99% of the time the map was fine.
+* NEW `_why()`. An empty strip is otherwise indistinguishable from a broken
+  widget, so the reason is now logged: once when it changes, and at most every
+  WHY_REPEAT_S while it persists, so a dead mapd cannot fill the log. Five
+  distinct reasons are reported:
+
+    no /dev/shm/params handle          offroad, or params not up yet
+    no LastGPSPosition                 waiting on a GPS fix
+    LastGPSPosition unreadable: <T>    it exists but did not parse
+    MapTargetVelocities empty          mapd has not matched a route
+    all N route points out of range    stale route, or a re-match moved us
+
+  `grep route_map: /data/log/*` gives the whole history. cloudlog is imported
+  LAZILY and inside a try: this module is imported by the process that also
+  draws the offroad screen, and nothing in hud/ may fail at import.
+
+3. NO SIGN WHEN THERE IS NOTHING TO PUT ON IT
+------------------------------------------------------------------------
+The speed-limit face drew "--" whenever mapd had no limit -- after a reboot,
+before a fix, or off the mapped network -- a permanent placeholder for a
+feature that is simply not applicable. It is hidden unless there is a current
+limit, an upcoming one, or SLA is active/prompting. Nothing is positioned
+relative to this station since the pills moved to the left column in v3.5.9,
+so hiding it cannot reflow anything.
+
+TESTS
+------------------------------------------------------------------------
+* 656 green, 0 failed. No new tests; `_fit_label` cannot be exercised
+  meaningfully against a stubbed font, which is the same reason it had to be
+  written as a measure-and-degrade loop rather than as tuned constants.
+
 FunnyPilot v3.5.9 (2026-08-02)
 ========================
 Four reported items. The SLA arrow one is a unit error I introduced in v3.5.6.

@@ -371,6 +371,16 @@ class HudRendererSP(HudRenderer):
 
     ahead = slr.speed_limit_ahead if slr.speed_limit_ahead_valid else 0.0
     limit = slr.speed_limit_final_last
+
+    # v3.6.0: NO SIGN WHEN THERE IS NOTHING TO PUT ON IT. The face used to draw
+    # "--" whenever mapd had no limit -- after a reboot, before a GPS fix, or
+    # off the mapped network -- which is a permanent placeholder for a feature
+    # that is simply not applicable right now. Nothing else is positioned
+    # relative to this station (the pills moved to the left column in v3.5.9),
+    # so hiding it cannot reflow anything.
+    if not (limit > 0 or ahead > 0 or active or pre):
+      return
+
     overspeed = bool(limit > 0 and round(limit) < round(slr.speed))
 
     self._sign.render(rect.x + SIGN_X, rect.y + Y_TOP,

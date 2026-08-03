@@ -125,9 +125,39 @@ STACK_H = 44
 STACK_GAP = 10
 
 
+STACK_DOT_X = 20      # dot centre, from the pill's left edge
+STACK_TEXT_X = 36     # text left edge
+STACK_PAD_R = 12
+
+
+def _fit_label(font, s: str, avail: float):
+  """(text, size, spacing) that FITS `avail` px. v3.6.0.
+
+  The pill is a fixed-width slot, so the text has to yield -- and it could not
+  be sized by hand, because the real font metrics only exist on the device
+  (pyray is stubbed off-device, so nothing here can be checked by rendering).
+  So it MEASURES and degrades in the order that costs the least: drop the
+  letter tracking, then the type size, then ellipsize. "GAS GATE" was ~50%
+  over the slot and painted straight through the pill's right edge.
+  """
+  size, spacing = T.SZ_LABEL, T.TRACK_LABEL
+  if measure_text_cached(font, s, size, spacing).x <= avail:
+    return s, size, spacing
+  spacing = 0.0
+  if measure_text_cached(font, s, size, spacing).x <= avail:
+    return s, size, spacing
+  size = T.SZ_MICRO
+  if measure_text_cached(font, s, size, spacing).x <= avail:
+    return s, size, spacing
+  while len(s) > 1 and measure_text_cached(font, s + "…", size, spacing).x > avail:
+    s = s[:-1]
+  return (s + "…"), size, spacing
+
+
 def draw_status_stack(x: float, y: float, pills: list) -> None:
   """One pill per row, always the same rows in the same order."""
   f = T.font_bold()
+  avail = STACK_W - STACK_TEXT_X - STACK_PAD_R
   for i, p in enumerate(pills):
     top = y + i * (STACK_H + STACK_GAP)
     rect = rl.Rectangle(x, top, STACK_W, STACK_H)
@@ -141,8 +171,9 @@ def draw_status_stack(x: float, y: float, pills: list) -> None:
       rl.draw_rectangle_rounded(rect, T.R_PILL, 10, T.SCRIM)
       rl.draw_rectangle_rounded_lines_ex(rect, T.R_PILL, 10, 2, T.HAIRLINE)
       ink = T.MUTED
-    rl.draw_circle(int(x + 20), int(top + STACK_H / 2), 5.0, ink)
-    T.text_at(f, p.text, x + 36, top + 9, T.SZ_LABEL, ink, T.TRACK_LABEL)
+    rl.draw_circle(int(x + STACK_DOT_X), int(top + STACK_H / 2), 5.0, ink)
+    txt, size, spacing = _fit_label(f, p.text, avail)
+    T.text_at(f, txt, x + STACK_TEXT_X, top + (STACK_H - size) / 2 - 2, size, ink, spacing)
 
 
 def stack_height(n: int) -> int:

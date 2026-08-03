@@ -119,6 +119,33 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.0 Changes (based on funnypilot-3.5.9)
+
+Onroad cleanup. No control changes.
+
+- `selfdrive/ui/sunnypilot/onroad/hud/stations.py` — NEW `_fit_label`. "GAS
+  GATE" painted through the right edge of its pill. The stack is FIXED-WIDTH by
+  design (that is what stops it reflowing), so the TEXT must yield — and it
+  could not be sized by hand, because pyray is stubbed off-device and real font
+  metrics only exist on the car. So it MEASURES and degrades in the order that
+  costs least: tracking, then type size, then ellipsis. Covers "SCC 45" and
+  "LRN 12", which were also over, and any label added later.
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — NO ROUTE text removed;
+  NEW `_why()` logs the reason instead, once per change and at most every
+  `WHY_REPEAT_S` while it persists. Five reasons: no params handle, no
+  LastGPSPosition, LastGPSPosition unparseable, MapTargetVelocities empty, all
+  points out of range. `grep route_map: /data/log/*`. cloudlog imported LAZILY
+  inside a try — this module is imported by the process that draws the OFFROAD
+  screen and nothing in `hud/` may fail at import.
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — the sign station returns
+  early unless there is a current limit, an upcoming one, or SLA is
+  active/prompting. It used to draw "--" forever wherever mapd had no data.
+  Safe to hide because nothing is positioned relative to it since the pills
+  moved to the left column in v3.5.9.
+- TESTS: 656 green, none added — `_fit_label` cannot be exercised against a
+  stubbed font, which is the same reason it is a measure-and-degrade loop
+  rather than tuned constants.
+
 ### v3.5.9 Changes (based on funnypilot-3.5.8)
 
 - `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — **THE SLA CHEVRON WAS A

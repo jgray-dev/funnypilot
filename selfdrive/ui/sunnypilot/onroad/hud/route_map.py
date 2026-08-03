@@ -71,6 +71,7 @@ RANGE_M = 400.0        # how far up the strip the route runs
 # twenty of them.
 BEHIND_M = 170.0       # keep this much of the road already driven, to fade out
 POLL_S = 1.0           # source data is 1 Hz; parsing faster buys nothing
+WHY_REPEAT_S = 30.0    # how often an unchanged 'no route' reason repeats in the log
 MAX_POINTS = 400       # hard bound on how much JSON we will walk
 RING_M = (100.0, 200.0, 300.0)
 
@@ -353,6 +354,8 @@ class RouteMap:
     self._gov_ll = None         # (lat, lon, authority) or None
     self._advisory = False
     self._have_fix = False
+    self._why_last = ""
+    self._why_at = 0.0
 
   # ── data ────────────────────────────────────────────────────────────────
 
@@ -380,6 +383,29 @@ class RouteMap:
       except Exception:
         return 0.0
 
+  def _why(self, reason: str) -> None:
+    """FunnyPilot v3.6.0 — say WHY the minimap is empty, in the log.
+
+    An empty strip is indistinguishable from a broken widget, and the on-screen
+    text that used to say so was noise the other 99% of the time. The reason is
+    logged instead: once when it changes, and at most every WHY_REPEAT_S while
+    it persists, so a genuinely dead mapd does not fill the log.
+
+    grep the swaglog for "route_map:" to see the whole history of why the map
+    had nothing to draw. cloudlog is imported lazily and inside a try — this
+    module is imported by the process that also draws the OFFROAD screen, and
+    nothing here may fail at import (see test_hud_imports).
+    """
+    now = time.monotonic()
+    if reason == self._why_last and (now - self._why_at) < WHY_REPEAT_S:
+      return
+    self._why_last, self._why_at = reason, now
+    try:
+      from openpilot.common.swaglog import cloudlog
+      cloudlog.warning(f"route_map: no route - {reason}")
+    except Exception:
+      pass
+
   def _poll(self, now: float) -> None:
     if now - self._last_poll < POLL_S:
       return
@@ -388,16 +414,21 @@ class RouteMap:
     mem = self._mem()
     if mem is None:
       self._raw, self._gov_ll, self._have_fix = [], None, False
+      self._why("no /dev/shm/params handle (offroad, or params not yet up)")
       return
 
     try:
+      pos_raw = None
       pos_raw = mem.get("LastGPSPosition")
       pos = json.loads(pos_raw) if pos_raw else None
       lat0 = float(pos["latitude"])
       lon0 = float(pos["longitude"])
       bearing = float(pos.get("bearing", 0.0))
-    except Exception:
+    except Exception as e:
       self._raw, self._gov_ll, self._have_fix = [], None, False
+      why = "no LastGPSPosition - waiting on a GPS fix" if not pos_raw else \
+            f"LastGPSPosition unreadable: {type(e).__name__}"
+      self._why(why)
       return
     self._have_fix = True
     self._fix = (lat0, lon0, bearing)
@@ -405,8 +436,13 @@ class RouteMap:
     try:
       raw = mem.get("MapTargetVelocities")
       points = json.loads(raw) if raw else []
-    except Exception:
+      if not raw:
+        self._why("MapTargetVelocities empty - mapd has not matched a route")
+      elif not points:
+        self._why("MapTargetVelocities parsed to nothing")
+    except Exception as e:
       points = []
+      self._why(f"MapTargetVelocities unreadable: {type(e).__name__}")
 
     try:
       limit_now = self._num(mem.get("MapSpeedLimit"))
@@ -426,6 +462,7 @@ class RouteMap:
       nxt_limit, nxt_fwd = 0.0, None
 
     pts = []
+    seen = 0
     kept_at, kept_v, kept_lim = None, 0.0, 0.0
     # v3.5.6: the same trig hoist _project already does. to_ego_frame recomputes
     # cos(radians(lat0)) and the two bearing terms PER POINT, and all three are
@@ -453,6 +490,7 @@ class RouteMap:
       # which zone is in force at this point. Stored RAW, not folded into a
       # delta: since v3.5.2 the comparison depends on the live set speed and
       # SLA offset, which change every frame while this poll is 1 Hz.
+      seen += 1
       lim = nxt_limit if (nxt_fwd is not None and nxt_limit > 0 and fwd > nxt_fwd) else limit_now
 
       # v3.5.6 DECIMATION -- the single biggest cost on this screen. mapd
@@ -469,6 +507,12 @@ class RouteMap:
           continue
       kept_at, kept_v, kept_lim = (fwd, right), v, lim
       pts.append((plat, plon, v, lim))
+
+    if points and not pts:
+      # the array had points but none survived the range filter -- the usual
+      # cause is a stale route from before a re-match, i.e. the whole thing is
+      # behind us or somewhere else entirely.
+      self._why(f"all {len(points)} route points out of range, kept 0 of {seen}")
     self._raw = pts
 
     # the controller's own choice, not ours
@@ -671,9 +715,6 @@ class RouteMap:
     # floating in an empty strip says nothing and reads as a broken widget.
     if pts:
       self._draw_ego(cx, y0, rect.width)
-    else:
-      T.text_centered_shadowed(T.font_med(), "NO ROUTE", cx,
-                               rect.y + rect.height * 0.5, T.SZ_MICRO, T.FAINT, 2.0)
 
   @staticmethod
   def _draw_ego(cx: float, y0: float, width: float) -> None:
