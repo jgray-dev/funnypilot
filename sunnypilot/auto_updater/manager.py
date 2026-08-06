@@ -22,6 +22,12 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 OFFROAD_WIFI_MIN_S = 15 * 60
 
 
+# v3.6.1: an OSM refresh DELETES the local database before re-downloading it,
+# so it is a whole-database replacement and must be rare. Seven days keeps the
+# data current without ever leaving the car mapless for the sake of it.
+OSM_MIN_REFRESH_S = 7 * 24 * 3600
+
+
 class AutoUpdater:
   def __init__(self):
     self.params = Params()
@@ -49,14 +55,59 @@ class AutoUpdater:
       cloudlog.exception("auto_updater: failed to refresh active model")
 
   def _refresh_map_data(self) -> None:
+    """FunnyPilot v3.6.1 — RATE-LIMITED, AND THAT IS A BUG FIX, NOT A TUNING.
+
+    THE DEFECT: this set `OsmDbUpdatesCheck` on the plain 15-minute cycle, and
+    the first thing `mapd_manager.update_osm_db()` does with that flag is
+
+        cleanup_old_osm_data(get_files_for_cleanup())
+
+    which DELETES `{mapd_root}/db` and `{mapd_root}/v*` -- the entire offline
+    OSM database -- before queueing the replacement download. So every 15
+    minutes parked on wifi the device threw its map data away and started
+    fetching several gigabytes again. Anything that interrupted that (going
+    onroad, the wifi dropping, a slow download) left NO MAP DATA AT ALL: mapd
+    cannot match a route, MapTargetVelocities is empty, the minimap is blank
+    and SCC-M has nothing to act on. Reported as exactly that.
+
+    A refresh is a WHOLE-DATABASE REPLACEMENT, so it must be rare. mapd already
+    stamps `OsmDownloadedDate` on every request; that is the right clock to
+    gate on, and it is WALL CLOCK (`datetime.now().timestamp()`), so it must be
+    compared against `time.time()` and not against monotonic (v3.4.5 rule).
+    """
     try:
       if not self.params.get_bool("OsmLocal"):
         return  # no region configured, nothing to refresh
 
-      cloudlog.info("auto_updater: refreshing OSM map data")
+      if self.params.get_bool("OsmDbUpdatesCheck"):
+        return  # a refresh is already pending; re-arming it re-deletes the db
+
+      age = self._map_data_age_s()
+      if age < OSM_MIN_REFRESH_S:
+        cloudlog.debug(f"auto_updater: map data is {age / 3600.0:.1f} h old, not refreshing")
+        return
+
+      cloudlog.warning(f"auto_updater: OSM data {age / 86400.0:.1f} days old, refreshing (DELETES local db)")
       self.params.put_bool("OsmDbUpdatesCheck", True)
     except Exception:
       cloudlog.exception("auto_updater: failed to refresh map data")
+
+  def _map_data_age_s(self) -> float:
+    """Seconds since the last OSM download request. `inf` if never, which lets
+    a device that has no map data yet fetch one immediately."""
+    try:
+      raw = self.params.get("OsmDownloadedDate")
+      if not raw:
+        return float('inf')
+      # WALL CLOCK ON PURPOSE, and the repo-wide ban on time.time() is right
+      # to make this argue for itself: `OsmDownloadedDate` is written by mapd
+      # as `datetime.now().timestamp()`, so it lives in the wall-clock domain
+      # and monotonic cannot be compared against it. This is the corollary the
+      # v3.4.5 clock rule calls out -- recv_time/monotonic is the safe default
+      # only when BOTH sides are monotonic.
+      return max(0.0, time.time() - float(raw))  # noqa: TID251
+    except Exception:
+      return float('inf')
 
   def _maybe_trigger(self) -> None:
     now = time.monotonic()

@@ -72,6 +72,16 @@ _MAX_LOOKAHEAD_M = 400.0
 _PARAM_CHECK_FRAMES = 100  # 5 s at 20 Hz, matching SCC-M
 
 # ── observer ──────────────────────────────────────────────────────────────
+def _log(msg: str) -> None:
+  """Best-effort cloudlog. Lazy import: this module is import-light on purpose
+  and must stay constructible without the full openpilot environment."""
+  try:
+    from openpilot.common.swaglog import cloudlog
+    cloudlog.warning(msg)
+  except Exception:
+    pass
+
+
 MIN_CORNER_V = 8.0         # m/s (~18 mph). Below this it is a junction or a stop.
 MIN_DROP_MS = 2.5          # m/s the speed must fall for a dip to count
 MIN_DROP_FRAC = 0.10       # ...or this fraction of the entry speed, whichever is smaller
@@ -222,6 +232,35 @@ class CornerObserver:
           and (self._lat or self._lon))
     if ok:
       out = (self._lat, self._lon, self._bearing, self._v_min * LEARN_MARGIN, self._flags)
+
+    # FunnyPilot v3.6.1 — SAY WHY A DIP WAS THROWN AWAY.
+    #
+    # The exclusions here are deliberately strict, and every one of them is a
+    # real non-corner: a lead means traffic, SLA busy means a speed-limit zone,
+    # a low v_min means a junction or a stop. But strict is indistinguishable
+    # from BROKEN from the driver's seat -- "I drive this road twice a day and
+    # it has learned nothing" is the same observation either way. Which
+    # exclusion is firing is the whole diagnosis and it was invisible.
+    #
+    # Logged per closed dip, which is a handful per drive, not per frame.
+    # grep for "scc_learn:" -- an empty log means no dip ever CLOSED, which
+    # points at the observer's entry condition rather than at the exclusions.
+    try:
+      if ok:
+        _log(f"scc_learn: COMMIT v_min={self._v_min:.1f} dur={dur:.1f}s flags={self._flags}")
+      else:
+        why = []
+        if self._poisoned:
+          why.append("poisoned (lead / SLA busy / standstill during the dip)")
+        if self._v_min < MIN_CORNER_V:
+          why.append(f"v_min {self._v_min:.1f} < MIN_CORNER_V {MIN_CORNER_V}")
+        if dur < MIN_DIP_S:
+          why.append(f"dur {dur:.1f}s < MIN_DIP_S {MIN_DIP_S}")
+        if not (self._lat or self._lon):
+          why.append(f"no position (gps_acc never under {MAX_GPS_ACC_M} m)")
+        _log(f"scc_learn: REJECT v_min={self._v_min:.1f} dur={dur:.1f}s - " + "; ".join(why))
+    except Exception:
+      pass
 
     # `reset()` deliberately clears `_v_ref` as well, which is what stops the
     # observer re-arming on its own exit. A dip closes at v_min + RECOVER_MS,

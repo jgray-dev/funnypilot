@@ -105,7 +105,20 @@ _J_BP = [0.0, 60.0, 150.0, 400.0]   # m of distance-to-go (after the arrival lea
 _J_V = [0.0, 72.0, 144.0, 269.0]    # integral of the budget, m^2/s^2
                                     # -> 1.20 m/s^2 inside 60 m, 0.80 to 150, 0.50 beyond
 
-_ARRIVAL_LEAD_T = 2.0     # s — reach curve speed this early
+# FunnyPilot v3.6.1 — 2.0 s was reaching the corner speed too late. The lead is
+# measured in seconds of travel AT THE CURVE SPEED, so `d_eff = d - v_curve*T`
+# and we hit v_curve `v_curve * T` metres before the governing point. At 2 s and
+# an 11 m/s bend that is 22 m — which for a real corner is somewhere around the
+# apex, not the entry. Reported as "it targets the exit of the corner for the
+# full slowdown".
+#
+# 4.0 s puts it 45 m ahead of the governing point at that speed, and 80 m at
+# 20 m/s, which is corner ENTRY rather than apex. The exit then takes care of
+# itself: once the apex point falls behind `min_idx` it leaves the forward
+# slice, the constraint hands over to the higher-speed exit points, and
+# CurveSpeedCap rate-limits the cap back up — so speed rises gradually through
+# the exit instead of stepping.
+_ARRIVAL_LEAD_T = 4.0     # s — reach curve speed this early
 _MAX_LOOKAHEAD_M = 400.0  # beyond this a curve cannot meaningfully constrain us
 _FRIC_NOMINAL = 0.8
 _FRIC_SCALE_MIN = 0.7

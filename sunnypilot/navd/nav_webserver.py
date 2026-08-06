@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.0"
+EXPECTED_VERSION = "3.6.1"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -191,6 +191,9 @@ _CODE_MARKERS = [
   # v3.6.0
   ("def _fit_label", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/stations.py", "pill label fits its slot"),
   ("def _why", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap logs why it is empty"),
+  # v3.6.1
+  ("OSM_MIN_REFRESH_S", "/data/openpilot/sunnypilot/auto_updater/manager.py", "OSM refresh rate-limited"),
+  ("scc_learn: REJECT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py", "learn logs rejected dips"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

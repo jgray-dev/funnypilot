@@ -1,3 +1,76 @@
+FunnyPilot v3.6.1 (2026-08-02)
+========================
+The map-data outage is diagnosed and fixed, and it was mine. SCC-M reaches
+corner speed at the ENTRY. SCC-Learn now says why it rejects a corner.
+
+1. THE MAP DATA WAS BEING DELETED EVERY 15 MINUTES
+------------------------------------------------------------------------
+Reported: no map data after downloading map updates while online. Found:
+
+  auto_updater._refresh_map_data()  ->  params.put_bool("OsmDbUpdatesCheck", 1)
+  mapd_manager.update_osm_db()      ->  cleanup_old_osm_data(...)  # DELETES IT
+
+`get_files_for_cleanup()` returns `{mapd_root}/db` and `{mapd_root}/v*` -- the
+ENTIRE offline OSM database -- and `update_osm_db` deletes all of it BEFORE
+queueing the replacement download. The AutoUpdater added in v3.3.3st was
+setting that flag on its plain 15-minute cycle, so every 15 minutes parked on
+wifi the device threw its maps away and started fetching gigabytes again.
+Anything that interrupted the download -- going onroad, wifi dropping, the
+download simply being slow -- left NO MAP DATA AT ALL: mapd cannot match a
+route, `MapTargetVelocities` is empty, the minimap is blank and SCC-M has
+nothing to act on. Then it re-triggered 15 minutes later.
+
+* fix: `OSM_MIN_REFRESH_S` = 7 days, gated on `OsmDownloadedDate`, which mapd
+  already stamps on every request. A pending refresh is never re-armed (that
+  would re-delete). Never-downloaded returns `inf`, so a device with no maps
+  still fetches immediately.
+* THE CLOCK IS WALL, NOT MONOTONIC, and the repo-wide ruff ban on `time.time`
+  is right to make that argue for itself: `OsmDownloadedDate` is written as
+  `datetime.now().timestamp()`, so monotonic cannot be compared against it.
+  This is the corollary the v3.4.5 clock rule names -- `recv_time`/monotonic is
+  the safe default only when BOTH sides are monotonic. Explicit `# noqa`.
+
+2. SCC-M REACHES CORNER SPEED AT THE ENTRY
+------------------------------------------------------------------------
+Reported: it targets the exit of the corner for the full slowdown.
+
+`_ARRIVAL_LEAD_T` is measured in seconds of travel AT THE CURVE SPEED, so the
+cap reaches `v_curve` exactly `v_curve * T` metres before the governing point.
+At 2 s that is 22 m for a 25 mph bend -- around the apex, not the entry.
+
+* fix: 2.0 -> 4.0 s. That is 45 m before the point at 25 mph, 63 m at 35 and
+  80 m at 45 -- corner ENTRY rather than apex.
+* THE EXIT NEEDS NO CHANGE, and it is worth saying why: once the apex point
+  falls behind `min_idx` it leaves the forward slice, the constraint hands over
+  to the higher-speed exit points, and CurveSpeedCap rate-limits the cap back
+  up. Speed rises gradually through the exit by construction.
+
+3. SCC-LEARN SAYS WHY IT REJECTED A CORNER
+------------------------------------------------------------------------
+Reported: same road twice a day for three days, still bent out of shape.
+
+I combed the commit path and found NO BUG -- the local-minimum-plus-recovery
+rule, the reset-on-commit and the exclusions all do what they are documented to
+do. Which means an exclusion is firing on that road, and STRICT IS
+INDISTINGUISHABLE FROM BROKEN from the driver's seat.
+
+* feat: every closed dip now logs COMMIT or REJECT with the reason -- poisoned
+  (lead / SLA busy / standstill), `v_min` under MIN_CORNER_V, duration under
+  MIN_DIP_S, or no position because GPS accuracy never came under
+  MAX_GPS_ACC_M. A handful of lines per drive, not per frame.
+* `grep scc_learn: /data/log/*`. An EMPTY log is itself the answer: it means no
+  dip ever CLOSED, which points at the observer's entry condition rather than
+  at the exclusions -- a different fix entirely. The LRN pill's count is the
+  other half of the readout.
+* NO TUNING CHANGED. Loosening a threshold before knowing which one is firing
+  is how this project has previously spent a release fixing the wrong thing.
+
+TESTS
+------------------------------------------------------------------------
+* 648 green, 0 failed. No new tests -- nothing here changed a pure function's
+  contract; the arrival lead is a constant the existing envelope tests already
+  cover, and the two logging paths are best-effort by construction.
+
 FunnyPilot v3.6.0 (2026-08-02)
 ========================
 Onroad cleanup. Four reported items, no control changes.

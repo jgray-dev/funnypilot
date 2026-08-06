@@ -119,6 +119,41 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.1 Changes (based on funnypilot-3.6.0)
+
+- `sunnypilot/auto_updater/manager.py` — **THE AUTOUPDATER WAS DELETING THE MAP
+  DATABASE EVERY 15 MINUTES.** `_refresh_map_data` set `OsmDbUpdatesCheck`, and
+  the FIRST thing `mapd_manager.update_osm_db()` does with that flag is
+  `cleanup_old_osm_data(get_files_for_cleanup())`, which removes
+  `{mapd_root}/db` and `{mapd_root}/v*` — the whole offline OSM database —
+  before queueing the replacement download. Every 15 minutes parked on wifi the
+  device threw its maps away and re-fetched gigabytes; any interruption (going
+  onroad, wifi dropping, a slow download) left NO MAP DATA, so mapd could not
+  match a route, `MapTargetVelocities` was empty, the minimap was blank and
+  SCC-M had nothing. Now gated on `OsmDownloadedDate` with
+  `OSM_MIN_REFRESH_S` = 7 days, and never re-armed while pending.
+  **WALL CLOCK, NOT MONOTONIC** — `OsmDownloadedDate` is
+  `datetime.now().timestamp()`, so this is the v3.4.5 corollary and needs an
+  explicit `# noqa: TID251`.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` —
+  `_ARRIVAL_LEAD_T` 2.0 -> 4.0 s. The lead is seconds of travel AT THE CURVE
+  SPEED, so the cap reaches `v_curve` exactly `v_curve * T` metres before the
+  governing point: 22 m at 25 mph, which is the APEX, not the entry. 4 s gives
+  45 m / 63 m / 80 m at 25 / 35 / 45 mph. THE EXIT NEEDED NO CHANGE — once the
+  apex leaves the forward slice the constraint hands to the exit points and
+  `CurveSpeedCap` rate-limits the cap back up, so speed rises gradually by
+  construction.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py` — combed the commit
+  path and found NO BUG: local-minimum-plus-recovery, reset-on-commit and the
+  exclusions all behave as documented. So an exclusion is firing on that road,
+  and STRICT IS INDISTINGUISHABLE FROM BROKEN from the seat. Every closed dip
+  now logs COMMIT or REJECT with the reason (poisoned / v_min / duration / no
+  position). `grep scc_learn: /data/log/*`; an EMPTY log means no dip ever
+  CLOSED, which indicts the entry condition rather than the exclusions.
+  **NO THRESHOLD WAS TOUCHED** — loosening one before knowing which is firing
+  is how this repo has previously spent a release fixing the wrong thing.
+- TESTS: 648 green, none added.
+
 ### v3.6.0 Changes (based on funnypilot-3.5.9)
 
 Onroad cleanup. No control changes.
