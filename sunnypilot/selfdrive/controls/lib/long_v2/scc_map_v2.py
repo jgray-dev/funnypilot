@@ -172,14 +172,6 @@ def _default_route_reader():
     return []
 
 
-def _log(msg: str) -> None:
-  try:
-    from openpilot.common.swaglog import cloudlog
-    cloudlog.warning(msg)
-  except Exception:
-    pass
-
-
 class TrackedCorner:
   """A corner from the geometry, with whatever the store knows about it."""
   __slots__ = ("lat", "lon", "bearing", "radius", "half_len", "distance",
@@ -362,7 +354,8 @@ class SCCMapV2:
   def observe_frame(self, now: float, v_ego: float, curvature: float,
                     steering_angle_deg: float, steer_torque: float,
                     lat_active: bool, saturated: bool, eps_limited: bool,
-                    blinker: bool, standstill: bool, gps_acc: float) -> None:
+                    blinker: bool, standstill: bool, gps_acc: float,
+                    pitch_rate_deg_s: float = 0.0) -> None:
     """Watch the car drive. Called at the carState rate; never raises.
 
     A pass opens when the car enters the extent of the nearest corner ahead and
@@ -389,7 +382,8 @@ class SCCMapV2:
         return
 
       self._effort.update(dt, v_ego, curvature, steering_angle_deg,
-                          steer_torque, lat_active, saturated, eps_limited)
+                          steer_torque, lat_active, saturated, eps_limited,
+                          pitch_rate_deg_s)
 
       inside = None
       for c in self.corners:
@@ -437,10 +431,14 @@ class SCCMapV2:
       s.observe(key[0], key[1], key[2], key[3], a_peak, severity, flags,
                 allow_raise=not self.is_active)
       self.learned_count = s.count
+      # v3.6.2 — NO LOG LINE HERE. The pass used to be written to the swaglog
+      # so the thresholds could be calibrated from a drive. They are pinned by
+      # deterministic tests instead, and the dev UI already carries `last_pass`
+      # and `pass_count` live, which is the readout that actually gets looked
+      # at. A cloudlog call on the commit path is one more thing that can
+      # block inside a 100 Hz observer for nothing.
       self.last_pass = (a_peak, severity, key[3])
       self.pass_count += 1
-      _log(f"scc_map_v2: pass R={key[3]:.0f}m a_peak={a_peak:.2f} sev={severity:.2f}"
-           + f" rev={self._pass.reversals} lim={self._pass.limit_time:.2f}s flags={flags}")
     except Exception:
       pass
     finally:

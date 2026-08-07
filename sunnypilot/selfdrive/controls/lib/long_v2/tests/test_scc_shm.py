@@ -238,3 +238,51 @@ class TestTheDevUiChannel:
     scc_shm.write_scc_debug_shm(None)
     scc_shm.write_scc_debug_shm(["x"])
     scc_shm.write_scc_debug_shm([float('nan')] * 14)
+
+
+class TestThePitchRateReader:
+  """v3.6.2. corner_effort needs to know when the ROAD is hitting the car, so
+  a bump-induced correction is not mistaken for a corner taken too fast. The
+  signal already existed as field 2 of controlsd's lat_interp heartbeat and
+  was read by nothing but the dev UI.
+
+  THE FAILURE DIRECTION IS THE WHOLE CONTRACT: 0.0 means NOT disturbed, so an
+  unreadable file leaves every pass measured exactly as it was before this
+  existed. Failing toward 'disturbed' would silently suppress the measurements
+  the entire learning path depends on -- a far quieter and worse failure than
+  the confound it guards against.
+  """
+
+  def test_it_reads_field_two(self, paths):
+    (paths / "lat_interp").write_text("5,1.00,7.3,0.00,0.012")
+    assert scc_shm.read_pitch_rate() == pytest.approx(7.3)
+
+  def test_it_is_a_magnitude(self, paths):
+    """Pitching nose-down and nose-up are the same disturbance."""
+    (paths / "lat_interp").write_text("5,1.00,-7.3,0.00,0.012")
+    assert scc_shm.read_pitch_rate() == pytest.approx(7.3)
+
+  def test_a_missing_file_is_not_disturbed(self, paths):
+    """MUTATION: return a non-zero default. Every corner would then read as
+    permanently bumpy and nothing would ever be learned."""
+    assert scc_shm.read_pitch_rate() == 0.0
+
+  def test_garbage_is_not_disturbed(self, paths):
+    for junk in ("", "nonsense", "5", "5,1.00", "5,1.00,banana,0,0"):
+      (paths / "lat_interp").write_text(junk)
+      assert scc_shm.read_pitch_rate() == 0.0
+
+  def test_nan_and_inf_are_not_disturbed(self, paths):
+    for junk in ("5,1.00,nan,0.00,0.0", "5,1.00,inf,0.00,0.0"):
+      (paths / "lat_interp").write_text(junk)
+      assert scc_shm.read_pitch_rate() == 0.0
+
+  def test_it_does_not_disturb_the_eps_limited_reader(self, paths):
+    """Both read the same line. Field 3 is `limited`, field 2 is pitch, and
+    an off-by-one between them would make each report the other's quantity."""
+    (paths / "lat_interp").write_text("5,1.00,7.3,0.90,0.012")
+    assert scc_shm.read_pitch_rate() == pytest.approx(7.3)
+    assert scc_shm.read_eps_limited() is True
+    (paths / "lat_interp").write_text("5,1.00,0.4,0.00,0.012")
+    assert scc_shm.read_pitch_rate() == pytest.approx(0.4)
+    assert scc_shm.read_eps_limited() is False

@@ -30,6 +30,22 @@ THE THREE SIGNALS, AND WHERE EACH ONE COMES FROM
                   and both are ignored there.
 
 ────────────────────────────────────────────────────────────────────────────
+AND ONE THING THAT MUST BE SUBTRACTED (v3.6.2)
+
+All three signals above assume that if the car is working hard, the SPEED is
+why. On this car that is demonstrably not always true: v3.3.8 recorded sawing
+at a railroad crossing with the EPS governor at full authority and nothing
+wrong with the speed. A bump unloads the front axle, the self-aligning torque
+changes, and the controller corrects for the road rather than for the corner.
+Without a guard, one crossing inside a bend teaches the store that a perfectly
+good corner is slow, permanently and invisibly.
+
+So the pass carries `clean_duration` alongside `duration`, and the severity
+rates are taken over the clean part only. The disturbed samples leave BOTH the
+numerator and the denominator — see CornerPass.add for why removing them from
+only one side is worse than not guarding at all.
+
+────────────────────────────────────────────────────────────────────────────
 SEVERITY IS CONTINUOUS, AND THAT IS WHAT ANSWERS "HOW FAR PAST"
 
 A pass does not report "stressed" or "not stressed"; it reports how many times
@@ -89,6 +105,37 @@ MAX_SEVERITY = 3.0
 MIN_PASS_S = 1.0       # shorter than this and the rate statistics mean nothing
 MIN_PASS_V = 5.0       # m/s; below this the lateral signals are not informative
 
+# ── road disturbance ───────────────────────────────────────────────────────
+#
+# v3.6.2 — THE CONFOUND THIS CAR IS KNOWN TO HAVE. The whole severity measure
+# assumes that oscillation means "too fast for this bend". On this car it does
+# not always: the v3.3.8 investigation recorded sawing at a railroad crossing
+# with the EPS governor pinned at 100% authority and nothing wrong with the
+# speed — the front axle unloads, the self-aligning torque changes, and the
+# controller corrects for a disturbance rather than for the corner. Left
+# unguarded, one bumpy crossing mid-bend teaches the store that a perfectly
+# good corner must be taken slowly, permanently.
+#
+# `pitch_rate_deg_s` is the peak |car-frame Y angular rate| controlsd already
+# publishes as field 2 of /dev/shm/lat_interp. It costs no new signal and no
+# new channel; it was simply never read here.
+#
+# 5.0 deg/s is bump_damper.TRIGGER_DEG_S, deliberately the SAME number: both
+# answer "is the road hitting the car right now", and two thresholds for one
+# question drift. Measured in v3.3.8: baseline under 3, confirmed event peak 7.
+DISTURB_DEG_S = 5.0
+# How long after the last supra-threshold frame the pass stays contaminated.
+# NOT cosmetic and not the same as the bump itself: the v3.3.8 data showed the
+# oscillation STARTING AFTER the pitch rate had decayed, because the lateral
+# delay buffer replays the corrupted measurement as a corrupted SETPOINT one
+# lat_delay later (~0.5 s), and the car then rings for a beat. 1.2 s covers
+# the replay and the settle; bump_damper's own HOLD_S + RECOVER_S is 1.5 s.
+DISTURB_HOLD_S = 1.2
+# A pass has to retain this much undisturbed time to be measured at all.
+# Below it the rate statistics are being computed over a sliver and mean
+# nothing — which is a reason to discard the pass, not to trust it.
+MIN_CLEAN_FRAC = 0.5
+
 
 def _finite(x) -> bool:
   try:
@@ -113,14 +160,28 @@ class LateralEffort:
     self._ema = None
     self._sign = 0
     self._peak = 0.0
+    self._disturb_hold = 0.0
     self.reversal = False      # a qualified steering reversal happened this frame
     self.a_lat = 0.0           # measured lateral acceleration, m/s^2
     self.limited = False       # a hard lateral limit is being hit this frame
+    self.disturbed = False     # the road is hitting the car; see DISTURB_DEG_S
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
-             eps_limited: bool = False) -> None:
+             eps_limited: bool = False, pitch_rate_deg_s: float = 0.0) -> None:
     self.reversal = False
+
+    # Road disturbance. Held past the event because the correction it provokes
+    # ARRIVES LATE — see DISTURB_HOLD_S. Failure defaults to NOT disturbed, so
+    # an unreadable pitch signal degrades to exactly the pre-v3.6.2 behaviour
+    # rather than silently suppressing every measurement the store lives on.
+    pr = abs(float(pitch_rate_deg_s)) if _finite(pitch_rate_deg_s) else 0.0
+    step = float(dt) if _finite(dt) and dt > 0.0 else 0.0
+    if pr >= DISTURB_DEG_S:
+      self._disturb_hold = DISTURB_HOLD_S
+    else:
+      self._disturb_hold = max(0.0, self._disturb_hold - step)
+    self.disturbed = self._disturb_hold > 0.0
 
     # MEASURED lateral acceleration. `curvature` is controlsState.curvature —
     # the vehicle model's reading of the STEERING ANGLE, which exists whether or
@@ -178,6 +239,7 @@ class CornerPass:
   def reset(self) -> None:
     self.open = False
     self.duration = 0.0
+    self.clean_duration = 0.0  # duration minus time the road was hitting us
     self.a_peak = 0.0
     self.reversals = 0
     self.limit_time = 0.0
@@ -195,13 +257,40 @@ class CornerPass:
     self.duration += dt
     self.a_peak = max(self.a_peak, effort.a_lat)
     self.v_min = min(self.v_min, float(v_ego) if _finite(v_ego) else 0.0)
+    self.blocked = self.blocked or bool(blocked)
+
+    # v3.6.2 — DISTURBED TIME IS EXCISED FROM BOTH SIDES OF THE RATE, and
+    # doing only one is the trap. Dropping the reversals but keeping the time
+    # makes a bumpy pass look CLEANER than it was, which can raise the floor
+    # and buy speed off a measurement that was never taken — the dangerous
+    # direction. Dropping the time but keeping the reversals makes it look
+    # WORSE, which is the original bug. Removing the contaminated samples from
+    # numerator AND denominator leaves an honest rate over the part of the
+    # bend where nothing was hitting the car, and biases neither way.
+    #
+    # `a_peak` and `v_min` DELIBERATELY still accumulate: how fast we actually
+    # went round the bend is a fact the road surface does not change.
+    if effort.disturbed:
+      return
+    self.clean_duration += dt
     self.reversals += int(effort.reversal)
     if effort.limited:
       self.limit_time += dt
-    self.blocked = self.blocked or bool(blocked)
+
+  def clean_fraction(self) -> float:
+    """How much of the pass was measurable. 1.0 = nothing hit the car."""
+    if self.duration <= 0.0:
+      return 0.0
+    return self.clean_duration / self.duration
 
   def usable(self) -> bool:
+    """The clean part has to be long enough on its own. A four-second bend of
+    which three seconds were a level crossing is not a four-second
+    measurement — the rate statistics would be computed over the remaining
+    sliver and would mean nothing."""
     return (self.open and not self.blocked and self.duration >= MIN_PASS_S
+            and self.clean_duration >= MIN_PASS_S
+            and self.clean_fraction() >= MIN_CLEAN_FRAC
             and self.v_min >= MIN_PASS_V and self.a_peak > 0.0)
 
   def verdict(self) -> tuple[float, float]:
@@ -210,10 +299,12 @@ class CornerPass:
     The two components are compared, not summed: either one being over is
     enough to condemn the pass, and adding them would let two half-breaches
     manufacture a full one.
+
+    Rates are over `clean_duration`, not `duration` — see add().
     """
-    if self.duration <= 0.0:
+    if self.clean_duration <= 0.0:
       return 0.0, 0.0
-    osc_rate = self.reversals / self.duration
-    limit_frac = self.limit_time / self.duration
+    osc_rate = self.reversals / self.clean_duration
+    limit_frac = self.limit_time / self.clean_duration
     sev = max(osc_rate / OSC_RATE_LIMIT, limit_frac / LIMIT_FRAC_LIMIT)
     return self.a_peak, min(sev, MAX_SEVERITY)

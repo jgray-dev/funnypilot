@@ -119,6 +119,85 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.2, third pass — the bump confound and lateral smoothing
+
+TWO SPECULATIVE FIXES, verified by ARITHMETIC rather than by a drive, at the
+owner's explicit request ("if we know the inputs, we should know the outputs").
+Both subsystems are closed-form, so every constant below was chosen by
+computing the response and every test asserts an exact value rather than a
+range. The `scc_map_v2: pass` cloudlog line is GONE with them — the dev UI
+already carries `last_pass` and `pass_count` live, and a log call on a commit
+path inside a 100 Hz observer buys nothing once the thresholds are pinned.
+
+- `long_v2/corner_effort.py` — **THE SEVERITY MEASURE ASSUMED THAT IF THE CAR
+  IS WORKING HARD, THE SPEED IS WHY. On this car that is demonstrably false**:
+  v3.3.8 recorded sawing at a railroad crossing with the EPS governor pinned
+  at 100% authority and nothing wrong with the speed. In the steering trace
+  that is indistinguishable from a corner taken too fast, so one bumpy
+  crossing inside a bend taught the store that a good corner is slow —
+  permanently, and invisibly, because a too-slow corner produces no symptom.
+  NEW `DISTURB_DEG_S` (= `bump_damper.TRIGGER_DEG_S`, deliberately the SAME
+  number — two thresholds for one question drift), `DISTURB_HOLD_S` 1.2 s,
+  `MIN_CLEAN_FRAC` 0.5, and `CornerPass.clean_duration`.
+  **THE DISTURBED SAMPLES LEAVE NUMERATOR AND DENOMINATOR TOGETHER, AND DOING
+  ONLY ONE IS WORSE THAN NOT GUARDING AT ALL**: dropping the reversals but
+  keeping the time makes a bumpy pass look CLEANER than it was, which raises
+  the floor and buys speed off a measurement never taken — the dangerous
+  direction. Dropping the time but keeping the reversals is the original bug.
+  `a_peak`/`v_min` still accumulate throughout: how fast we went is a fact the
+  road surface does not change. THE HOLD IS NOT COSMETIC — v3.3.8 measured the
+  oscillation STARTING AFTER the pitch rate decayed, because the lateral delay
+  buffer replays the corrupted measurement as a corrupted SETPOINT one
+  lat_delay (~0.5 s) later.
+- `long_v2/scc_shm.py` — NEW `read_pitch_rate()`. Field 2 of controlsd's
+  lat_interp heartbeat, published since v3.3.8 and read by nothing but the dev
+  UI. No new signal, no new channel. **0.0 ON ANY DOUBT MEANS 'NOT
+  DISTURBED'**, so an unreadable file leaves every pass measured exactly as it
+  was before this existed; failing the other way would silently suppress the
+  measurements the whole learning path depends on.
+- `selfdrive/controls/lib/knot_filter.py` — RETUNE for the reported jitter
+  ("corners that should be a breeze"). `BETA_MIN` .30 -> .22,
+  `N_FULL_LAT_ACCEL` .6 -> .9, `CARRY` .6 -> .70, `DEV_MAX_LAT_ACCEL`
+  .15 -> .22. This is the lever the v3.4.9e notes name for exactly this
+  symptom, and NOT a filter on past outputs — the v3.3.2 post-mortem still
+  stands. **WHY THIS HELPS AT ALL**: on a corner the plan can see coming the
+  innovation is ~0 and the filter does NOTHING, so a jittery EASY corner means
+  the innovations are large, i.e. the plan is revising itself frame to frame.
+  That is precisely what this damps. MEASURED: residual jitter 17% -> 12% of
+  the raw frame-to-frame swing; worst-case lag 41 -> 63 ms and ONLY on motion
+  the plan did not predict.
+  **`DEV_MAX_LAT_ACCEL` HAD TO MOVE WITH THE OTHERS AND THAT IS THE SUBTLE
+  PART**: the deviation actually reached on a sustained maneuver at the
+  model's own rate rail goes 0.104 -> 0.1585, so leaving the cap at 0.15 would
+  have put the operating point ON the cap and turned the damper into a hard
+  clip — jerky, and the "somewhere between the two places the model wanted"
+  failure. 0.22 restores the pre-retune 72% headroom ratio. Four properties
+  pinned as exact values: passthrough is BIT-IDENTICAL on predicted motion,
+  an innovation >= `N_FULL_LAT_ACCEL` gets beta exactly 1.0 (decisive onsets,
+  the binding v3.3.2 requirement), `(1-BETA_MIN)*CARRY` = 0.546 < 1 so the
+  offset cannot latch, and the cap stays a backstop.
+- TESTS: **717 green**, ruff clean. NEW `TestTheDisturbanceGate` (13),
+  `TestThePitchRateReader` (6), `TestTheV362Retune` (11). NINE guards
+  MUTATION-TESTED, each verified to APPLY first.
+  **ONE SURVIVED AND IT WAS A VACUOUS TEST OF MINE** — the `MIN_CLEAN_FRAC`
+  case used a 0.5 s clean window, so `usable()` was rejecting the pass on the
+  `MIN_PASS_S` duration floor and never reaching the fraction check. Exactly
+  the shape v3.4.5 named. Rewritten with a 2 s clean window so only the
+  fraction can reject it; the mutation then fails.
+- UNITS TRAP WORTH RECORDING: KnotFilter takes CURVATURE and converts with
+  v^2 internally, and `V_REF_MIN` floors the speed at 3.0. A first draft of
+  the retune tests fed lateral-accel values straight in at v=1.0 and asserted
+  numbers that were wrong by 9x. The tests now pin speed at `V_REF_MIN` and
+  convert explicitly.
+- STILL UNVERIFIED ON ROAD, and honestly: `OSC_RATE_LIMIT` 1.6,
+  `OSC_AMP_DEG` 1.5 and `LIMIT_FRAC_LIMIT` 0.15 were never measured on this
+  car. The arithmetic they imply is that a 4 s bend needs ~6.4 reversals to
+  read as "at the limit" and 19 to read as 3x. If real too-fast driving
+  produces one or two corrections instead, severity lands in the 0.5-1.0 dead
+  band where a pass moves NOTHING, and the symptom is indistinguishable from
+  the feature working (visits accumulate, the ring goes solid, the speed never
+  leaves the 1.8 default). `OSC_RATE_LIMIT` is the first knob if so.
+
 ### v3.6.2, second pass — confidence (same branch, NOT a version bump)
 
 VERSION DELIBERATELY NOT BUMPED, and the reason is a constraint rather than

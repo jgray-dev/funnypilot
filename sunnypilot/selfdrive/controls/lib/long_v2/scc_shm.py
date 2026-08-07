@@ -250,6 +250,35 @@ LAT_INTERP_PATH = '/dev/shm/lat_interp'
 EPS_LIMITED_TH = 0.05
 
 
+def read_pitch_rate() -> float:
+  """Peak |car-frame Y angular rate| since the last model frame, deg/s. v3.6.2.
+
+  Field 2 of controlsd's existing lat_interp heartbeat ("n,authority,pitch,
+  limited,dev"), computed from `calibrated_pose.angular_velocity` which is
+  already produced every frame for carControl. It has been published since
+  v3.3.8 and read by nothing but the dev UI.
+
+  corner_effort uses it to tell "this corner is too fast" from "the road just
+  hit us" — the two look identical in the steering signal, and this car has a
+  documented history of the second being mistaken for the first.
+
+  0.0 ON ANY DOUBT, and the direction matters: 0.0 means NOT disturbed, so an
+  unreadable file leaves every pass measured exactly as it was before this
+  existed. Failing the other way would silently suppress the measurements the
+  whole learning path depends on, which is a far quieter and worse failure
+  than the confound it guards.
+  """
+  try:
+    with open(LAT_INTERP_PATH) as f:
+      parts = f.read().strip().split(',')
+    if len(parts) < 3:
+      return 0.0
+    v = abs(float(parts[2]))
+    return v if v == v and v != float('inf') else 0.0
+  except Exception:
+    return 0.0
+
+
 def read_eps_limited() -> bool:
   """Did the driver-torque clamp bite recently? v3.6.2.
 

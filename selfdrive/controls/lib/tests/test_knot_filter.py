@@ -11,6 +11,9 @@ Each test names the mutation it guards.
 """
 import math
 
+import pytest
+
+from openpilot.selfdrive.controls.lib import knot_filter as KF
 from openpilot.selfdrive.controls.lib.knot_filter import (
   KnotFilter, BETA_MIN, CARRY, DEV_MAX_LAT_ACCEL, N_FULL_LAT_ACCEL, V_REF_MIN,
 )
@@ -207,3 +210,145 @@ class TestPathErrorIsNegligible:
     t = frames * DT_MDL
     displacement = 0.5 * DEV_MAX_LAT_ACCEL * t * t
     assert displacement < 0.02, f"{displacement * 1000:.1f} mm"
+
+
+class TestTheV362Retune:
+  """FunnyPilot v3.6.2 — more of the lagd window spent on smoothness.
+
+  Reported: corners that should be easy feel jittery. These are EXACT-VALUE
+  tests, not inequalities: the filter is a closed-form recurrence, so given the
+  inputs the outputs are fully determined and there is no reason to assert
+  anything vaguer. If a future retune changes a number here, it should have to
+  change the number deliberately rather than watch a range quietly widen.
+
+  UNITS. The filter takes CURVATURE and converts internally with v^2, so every
+  lateral-acceleration figure below is divided by VSQ before it goes in.
+  Speed is pinned at V_REF_MIN so the filter's own speed floor cannot move the
+  arithmetic out from under the assertions.
+  """
+  RAIL_A = 0.125                 # drive_helpers.MAX_TARGET_LAT_JERK * DT_MDL
+  V = V_REF_MIN                  # 3.0 m/s; at or above the floor, so no clamp
+  VSQ = V_REF_MIN * V_REF_MIN
+
+  def _c(self, lat_accel):
+    """lateral acceleration (m/s^2) -> curvature at the test speed."""
+    return lat_accel / self.VSQ
+
+  def _f(self):
+    f = KnotFilter()
+    f.set_prediction(0.0)
+    return f
+
+  def test_the_constants_are_what_the_analysis_assumed(self):
+    """The response numbers quoted in the module docstring are only true for
+    these values. Pinned so the prose and the code cannot drift apart."""
+    assert KF.BETA_MIN == 0.22
+    assert KF.N_FULL_LAT_ACCEL == 0.9
+    assert KF.CARRY == 0.70
+    assert KF.DEV_MAX_LAT_ACCEL == 0.22
+
+  def test_it_is_a_contraction(self):
+    """(1 - BETA_MIN) * CARRY < 1 is what stops the offset latching. This is
+    the one relationship a retune must never break, whatever the values."""
+    g = (1.0 - KF.BETA_MIN) * KF.CARRY
+    assert g == pytest.approx(0.546)
+    assert g < 1.0
+
+  def test_a_perfectly_predicted_knot_is_bit_identical(self):
+    """MUTATION: any change that makes the filter act on predicted motion
+    turns it back into the v3.2.12 EMA, which had to be reverted."""
+    f = self._f()
+    for _ in range(20):
+      assert f.update(0.0, self.V) == 0.0
+      f.set_prediction(0.0)
+    assert f.deviation == 0.0
+
+  def test_an_innovation_at_or_above_n_full_is_untouched(self):
+    """DECISIVE ONSETS STAY DECISIVE — the binding v3.3.2 requirement.
+    beta reaches exactly 1.0, so the output is exactly the raw action."""
+    for a in (KF.N_FULL_LAT_ACCEL, 1.2, 2.0, 5.0):
+      f = self._f()
+      n = self._c(a)
+      assert f.update(n, self.V) == pytest.approx(n)
+      assert f.beta == 1.0
+
+  def test_the_rate_rail_keeps_exactly_a_third(self):
+    """A change at the model's own per-frame ceiling is the sharpest ordinary
+    adjustment, and is the one that is felt. beta = 0.22 + 0.78*(0.125/0.9)."""
+    f = self._f()
+    n = self._c(self.RAIL_A)
+    out = f.update(n, self.V)
+    assert f.beta == pytest.approx(0.22 + 0.78 * (self.RAIL_A / 0.9))
+    assert f.beta == pytest.approx(0.32833, abs=1e-5)
+    assert out == pytest.approx(n * f.beta)
+
+  def test_it_damps_the_rail_harder_than_before_the_retune(self):
+    """The point of the change, stated as a number. The old constants passed
+    0.4458 of a rail-rate change on the frame it arrived; these pass 0.3283."""
+    f = self._f()
+    f.update(self._c(self.RAIL_A), self.V)
+    old_beta = 0.30 + 0.70 * (self.RAIL_A / 0.6)
+    assert old_beta == pytest.approx(0.44583, abs=1e-5)
+    assert f.beta < old_beta
+
+  def _sustained(self, frames=60):
+    """A steady maneuver at the rail whose prediction is always one frame
+    stale — the worst case, where every frame reads as a full surprise."""
+    f = KnotFilter()
+    raw = 0.0
+    step = self._c(self.RAIL_A)
+    for _ in range(frames):
+      f.set_prediction(raw)
+      raw += step
+      f.update(raw, self.V)
+    return f
+
+  def test_sustained_unpredicted_motion_settles_at_a_known_lag(self):
+    """63 ms is the price of the retune, and it is paid ONLY on motion the
+    plan did not predict. Predicted motion still has exactly zero lag."""
+    f = self._sustained()
+    assert f.deviation == pytest.approx(0.1585, abs=3e-3)
+    assert f.deviation / self.RAIL_A == pytest.approx(1.27, abs=0.03)
+
+  def test_the_cap_stays_a_backstop_not_the_operating_point(self):
+    """THE PROPERTY A RETUNE IS MOST LIKELY TO BREAK. If the deviation the
+    filter actually reaches climbs onto DEV_MAX_LAT_ACCEL, the filter stops
+    being a damper and becomes a hard clip -- which is both jerky and exactly
+    the 'somewhere between the two places the model wanted' failure.
+
+    MUTATION: raise BETA_MIN or CARRY without raising the cap."""
+    f = self._sustained()
+    assert f.deviation < KF.DEV_MAX_LAT_ACCEL * 0.85
+    assert f.deviation / KF.DEV_MAX_LAT_ACCEL == pytest.approx(0.72, abs=0.03)
+
+  def test_the_offset_decays_to_nothing_once_surprises_stop(self):
+    """Exact geometric decay at the contraction factor. Six frames (300 ms)
+    takes a charged offset to under 3% of the cap."""
+    f = self._f()
+    big = self._c(1.0)
+    f.update(big, self.V)            # a big surprise to charge the offset
+    f.set_prediction(big)
+    devs = []
+    for _ in range(6):
+      f.update(big, self.V)          # perfectly predicted from here on
+      f.set_prediction(big)
+      devs.append(f.deviation)
+    assert devs == sorted(devs, reverse=True)
+    assert devs[-1] < 0.03 * KF.DEV_MAX_LAT_ACCEL
+
+  def test_alternating_jitter_is_cut_to_a_known_fraction(self):
+    """The reported symptom: a plan that revises itself every frame. The peak
+    frame-to-frame command change is what the wheel actually does, and it
+    drops to ~12% of the raw swing (17% before the retune)."""
+    f = KnotFilter()
+    swing = self._c(0.10)
+    raw_vals, out_vals, raw = [], [], 0.0
+    for i in range(24):
+      f.set_prediction(raw)
+      raw += swing if i % 2 == 0 else -swing
+      out_vals.append(f.update(raw, self.V))
+      raw_vals.append(raw)
+    peak_raw = max(abs(raw_vals[i] - raw_vals[i - 1]) for i in range(1, len(raw_vals)))
+    peak_out = max(abs(out_vals[i] - out_vals[i - 1]) for i in range(1, len(out_vals)))
+    assert peak_out / peak_raw < 0.15
+    assert peak_out / peak_raw == pytest.approx(0.12, abs=0.03)

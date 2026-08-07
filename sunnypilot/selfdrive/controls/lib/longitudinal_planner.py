@@ -27,7 +27,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMa
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
   write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm,
-  read_eps_limited as _read_eps_limited)
+  read_eps_limited as _read_eps_limited, read_pitch_rate as _read_pitch_rate)
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -89,6 +89,12 @@ class LongitudinalPlannerSP:
     trap). `carState.yawRate` would be the obvious third option and is a silent
     zero here: only PSA and Ford populate it in opendbc.
 
+    v3.6.2 also feeds the PITCH RATE from the same lat_interp heartbeat the
+    EPS-limited flag comes from. It is what lets corner_effort tell "this
+    corner is too fast" from "the road just hit us" — signals that are
+    identical in the steering trace, and which this car has a documented
+    history of confusing (the v3.3.8 railroad-crossing investigation).
+
     Total — any failure degrades to "this frame was not observed".
     """
     try:
@@ -111,7 +117,7 @@ class LongitudinalPlannerSP:
         now, float(CS.vEgo), float(cst.curvature), float(CS.steeringAngleDeg),
         float(CS.steeringTorque), bool(sm['carControl'].latActive), saturated,
         _read_eps_limited(), bool(CS.leftBlinker or CS.rightBlinker),
-        bool(CS.standstill), acc)
+        bool(CS.standstill), acc, _read_pitch_rate())
     except Exception:
       pass
 

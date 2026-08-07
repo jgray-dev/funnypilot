@@ -65,34 +65,63 @@ Import-light (stdlib only).
 """
 import math
 
+# ── v3.6.2 RETUNE: more of the lagd window spent on smoothness ─────────────
+#
+# Reported: corners that should be easy feel jittery, with the wheel making
+# small corrections that the road does not call for. On a corner the plan can
+# see coming, the innovation is ~0 and this filter does NOTHING — so a jittery
+# easy corner means the innovations are NOT small, i.e. the plan is revising
+# itself frame to frame. That is exactly what this filter is for, and the
+# v3.4.9 note names these constants as the honest lever for it.
+#
+# EVERY NUMBER BELOW WAS CHOSEN BY COMPUTING THE RESPONSE, NOT BY FEEL. The
+# four properties that constrain them, all pinned in test_knot_filter.py:
+#
+#   passthrough   a perfectly predicted knot is BIT-IDENTICAL (offset == 0.0)
+#   decisive      an innovation >= N_FULL_LAT_ACCEL gets beta == 1.0 exactly,
+#                 i.e. passes through untouched — the v3.3.2 requirement that
+#                 onsets stay decisive is preserved by construction
+#   contraction   (1 - BETA_MIN) * CARRY = 0.546 < 1, so once innovations stop
+#                 the offset decays to zero (tau ~83 ms). It cannot latch.
+#   backstop      the deviation actually REACHED on a sustained maneuver at
+#                 the model's own rate rail is 0.1585, i.e. 72% of the cap --
+#                 the same ratio the pre-retune constants had (0.104/0.15).
+#                 The cap must stay a backstop; if a retune ever pushes the
+#                 operating point onto it, the filter becomes a hard clip.
+#
+# Measured against the old constants: residual jitter 17% -> 12% of the raw
+# frame-to-frame swing, at the cost of worst-case lag 41 ms -> 63 ms on
+# UNPREDICTED sustained motion only. Predicted motion is unchanged at zero lag,
+# which is the whole reason this is not the v3.2.12 EMA.
+
 # Damping floor: fraction of a fully-unpredicted change passed through on the
-# frame it arrives. 0.30 leaves 70% to be spread over the following frames.
-BETA_MIN = 0.30
+# frame it arrives. 0.22 leaves 78% to be spread over the following frames.
+BETA_MIN = 0.22
 
 # Innovation magnitude (as lateral acceleration, m/s^2) at which damping is
 # fully released. Sized ABOVE the model's own per-frame action-rate ceiling
 # (drive_helpers.MAX_TARGET_LAT_JERK * DT_MDL = 0.125 m/s^2), deliberately: a
 # change AT that rail is the sharpest adjustment the model can normally ask for
 # and is exactly the one that is felt in the car, so it gets damped (beta ~=
-# 0.45, i.e. a little over half of it spread across the following frames).
+# 0.33, i.e. two thirds of it spread across the following frames).
 # Full release is reserved for innovations several times larger than the model
 # can produce through its own limiter — a replan the plan genuinely did not
 # see coming, where lag is the wrong trade.
-N_FULL_LAT_ACCEL = 0.6
+N_FULL_LAT_ACCEL = 0.9
 
 # Fraction of the outstanding deviation carried into the next frame. This is
 # what turns "delay a step by one frame" into "spread it over several", and it
 # is bounded well below 1/(1-BETA_MIN) so [1] is always a contraction.
-CARRY = 0.6
+CARRY = 0.70
 
 # Hard bound on |command - model desire|, in lateral acceleration. See docstring.
 # NOTE it is a BACKSTOP, not the operating point: because beta rises with the
 # innovation, the deviation this filter can actually reach is self-limiting and
-# peaks around 0.13 m/s^2 (a sustained maneuver at the model's own rate rail
-# settles at ~0.10, i.e. ~40 ms behind — under one model frame). The cap exists
-# for the case the prediction itself is wrong, e.g. a stale plan across a large
-# v_ego change.
-DEV_MAX_LAT_ACCEL = 0.15
+# settles at 0.1585 m/s^2 on a sustained maneuver at the model's own rate rail
+# (~63 ms behind, under 1.3 model frames). The cap exists for the case the
+# prediction itself is wrong, e.g. a stale plan across a large v_ego change.
+# Holding the full cap for a 200 ms convergence displaces the path 4.4 mm.
+DEV_MAX_LAT_ACCEL = 0.22
 
 # Speed floor for the curvature <-> lateral-accel conversions, so the bounds
 # stay finite at standstill (they become permissive in curvature terms exactly
