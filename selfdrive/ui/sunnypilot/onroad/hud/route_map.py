@@ -31,11 +31,17 @@ a filesystem; beyond that, two copies of the geometry-and-learning blend would
 drift the moment either was tuned, and a debug readout that disagrees with the
 controller is worse than none.
 
-THE MARKER is the corner SCC-M v2 is braking for, published over
-/dev/shm/fp_scc. Solid means the fusion passed the cut through at full
-authority; hollow means corroboration is scaling it back because the model has
-not seen the corner yet. "LRN" means the governing corner is one we have driven
-before, so its speed comes from experience rather than from geometry alone.
+THE CIRCLE marks a corner we have DRIVEN, not the one currently governing —
+v3.6.3 replaced the "which point is braking us now" crosshair with "which
+points on this ribbon has the car actually learned". It sits over the apex,
+one per learned corner from /dev/shm/fp_corners, and its opacity is exactly
+`confidence_for(visits)` from corner_speed.py — the SAME weight
+`effective_a_lat` gives the learned value when it sets the corner's speed.
+One visit reads faint (0.45), three or more reads solid (1.0). An unvisited
+corner has confidence 0.0 and is filtered out before this module ever sees
+it — the map draws nothing for a corner priced by geometry alone, because
+that corner has no "how sure are we" to show. "LRN" still means the corner
+currently governing is one of these.
 
 COST. `MapTargetVelocities` is a JSON array of a few hundred points and the
 source data is 1 Hz, so it is parsed at POLL_S and projected into ego-relative
@@ -183,6 +189,33 @@ def corner_speed_at(lat: float, lon: float, corners) -> float:
     if d <= max(half, 1.0):
       best = v if best <= 0.0 else min(best, v)
   return best
+
+
+def learned_corners_from(corners) -> list[tuple[float, float, float]]:
+  """(lat, lon, conf) for every corner we've actually driven, out of what
+  read_corners_shm() returned -- i.e. conf > 0.0.
+
+  Pulled out of _poll() so the filter DIRECTION is testable off-device.
+  _poll() itself needs a live /dev/shm handle and nothing off-device can
+  reach it, and this repo has shipped exactly this class of bug before
+  (LearnStore.nearby's ahead_only flip, v3.6.2) with every other test still
+  green. `conf` is index 4 of each (lat, lon, half_len, v, conf) tuple.
+  """
+  return [(c[0], c[1], c[4]) for c in corners if c[4] > 0.0]
+
+
+def confidence_alpha(conf: float) -> int:
+  """A learned corner's ring opacity, 0..255, straight from confidence_for().
+
+  Pulled out of render() so it is testable off-device — the same treatment
+  tint_delta_mph got in v3.5.9, for the same reason: nothing inside render()
+  is reachable without a GL context, so a mutation here would be invisible to
+  the whole suite. Non-finite input reads as "not sure at all", never as
+  "fully confident" — a garbage confidence must not paint a solid ring.
+  """
+  if not T.finite(conf):
+    return 0
+  return int(T.clamp(conf, 0.0, 1.0) * 255)
 
 
 def tint_delta_mph(expected_mps: float, corner_mps: float) -> float:
@@ -396,7 +429,7 @@ class RouteMap:
     self._raw: list[tuple[float, float, float]] = []
     self._fix = None            # (lat, lon, bearing) as last polled
     self._pose = None           # (lat, lon, bearing) as displayed, eased
-    self._gov_ll = None         # (lat, lon, authority) or None
+    self._raw_corners: list[tuple[float, float, float]] = []  # (lat, lon, conf), conf > 0 only
     self._learned = False
     self._have_fix = False
     self._why_last = ""
@@ -458,7 +491,7 @@ class RouteMap:
 
     mem = self._mem()
     if mem is None:
-      self._raw, self._gov_ll, self._have_fix = [], None, False
+      self._raw, self._raw_corners, self._have_fix = [], [], False
       self._why("no /dev/shm/params handle (offroad, or params not yet up)")
       return
 
@@ -470,7 +503,7 @@ class RouteMap:
       lon0 = float(pos["longitude"])
       bearing = float(pos.get("bearing", 0.0))
     except Exception as e:
-      self._raw, self._gov_ll, self._have_fix = [], None, False
+      self._raw, self._raw_corners, self._have_fix = [], [], False
       why = "no LastGPSPosition - waiting on a GPS fix" if not pos_raw else \
             f"LastGPSPosition unreadable: {type(e).__name__}"
       self._why(why)
@@ -513,11 +546,16 @@ class RouteMap:
       from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
         read_corners_shm, read_scc_shm)
       corners = read_corners_shm()
-      g_lat, g_lon, _gv, auth, learned = read_scc_shm()
+      *_, learned = read_scc_shm()
       self._learned = bool(learned)
-      self._gov_ll = (g_lat, g_lon, auth) if (g_lat or g_lon) else None
     except Exception:
-      self._gov_ll, self._learned = None, False
+      self._learned = False
+
+    # v3.6.3: which of these corners have we actually DRIVEN. Filtered here,
+    # once per poll, rather than in render(): a corner's learned state does
+    # not change frame to frame, and render() should not spend a
+    # comprehension on every draw.
+    self._raw_corners = learned_corners_from(corners)
 
     pts = []
     seen = 0
@@ -610,7 +648,7 @@ class RouteMap:
     thousand flops a frame and no transcendental calls at all.
     """
     if self._pose is None:
-      return [], None
+      return [], []
     lat0, lon0, brg = self._pose
     b = math.radians(brg)
     cb, sb = math.cos(b), math.sin(b)
@@ -632,11 +670,10 @@ class RouteMap:
     if shift:
       pts = [(f, r - shift, v, lim) for f, r, v, lim in pts]
 
-    gov = None
-    if self._gov_ll is not None:
-      gf, gr = to_ego(self._gov_ll[0], self._gov_ll[1])
-      gov = (gf, gr - shift, self._gov_ll[2])
-    return stitch_to_ego(pts), gov
+    corners = [(*to_ego(plat, plon), conf) for plat, plon, conf in self._raw_corners]
+    if shift:
+      corners = [(f, r - shift, conf) for f, r, conf in corners]
+    return stitch_to_ego(pts), corners
 
   def render(self, rect: rl.Rectangle, ref_mps: float = 0.0,
              sla_ratio: float = 0.0, sla_active: bool = False,
@@ -644,7 +681,7 @@ class RouteMap:
     now = time.monotonic()
     self._poll(now)
     self._ease_pose(now)
-    pts, gov = self._project()
+    pts, corners = self._project()
 
     # v3.5.2: NO PLATE. See HALO_PX — contrast is applied at the ribbon.
     cx = rect.x + rect.width / 2
@@ -734,19 +771,19 @@ class RouteMap:
         T.text_centered_shadowed(T.font_bold(), str(round(new_lim * conv)),
                                  g[0], g[1] - 30, T.SZ_MICRO, col, 2.0)
 
-    if gov is not None:
-      gf, gr, auth = gov
-      g = px(gf, gr)
-      rad = rect.width * 0.075
+    # v3.6.3 — one ring per corner we have actually DRIVEN, centred on that
+    # corner's own apex, not on whichever point currently governs. Opacity is
+    # `confidence_for(visits)` exactly as read off /dev/shm/fp_corners — the
+    # same weight the controller itself gives the learned value. A corner with
+    # no visits has confidence 0.0 and was already filtered out in _poll(), so
+    # nothing is drawn for a corner priced by geometry alone: there is no
+    # "how sure are we" to show for it.
+    rad = rect.width * 0.075
+    for cf, cr, conf in corners:
+      g = px(cf, cr)
       if edge_fade(g[0], g[1], rect) >= 1.0:
-        if auth >= 0.99:
-          rl.draw_ring(rl.Vector2(g[0], g[1]), rad - 3.0, rad, 0, 360, 24, T.WHITE)
-          rl.draw_circle(int(g[0]), int(g[1]), rect.width * 0.021, T.WHITE)
-        else:
-          # hollow + dashed: the controller sees it, the fusion is scaling it back
-          for a0 in (0, 90, 180, 270):
-            rl.draw_ring(rl.Vector2(g[0], g[1]), rad - 3.0, rad, a0 + 12, a0 + 78, 10,
-                         rl.Color(255, 255, 255, 210))
+        rl.draw_ring(rl.Vector2(g[0], g[1]), rad - 3.0, rad, 0, 360, 24,
+                     rl.Color(255, 255, 255, confidence_alpha(conf)))
 
     # Text now carries its own shadow: with the plate gone there is nothing
     # behind it but the road.

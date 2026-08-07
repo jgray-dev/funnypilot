@@ -743,6 +743,112 @@ class TestTintDelta:
       assert _rm.tint_delta_mph(e, c) == 0.0
 
 
+class TestLearnedCornersFrom:
+  """v3.6.3. The filter direction is the whole safety property: this repo has
+  shipped the flipped version of exactly this kind of test before
+  (LearnStore.nearby's ahead_only bug, v3.6.2) with every other test in the
+  suite still green, because the bug lived one layer past what could be
+  reached off-device. Pulling it out of _poll() is what makes it reachable.
+  """
+
+  def _c(self, lat=1.0, lon=2.0, half=50.0, v=12.0, conf=0.0):
+    return (lat, lon, half, v, conf)
+
+  def test_a_driven_corner_survives(self):
+    out = _rm.learned_corners_from([self._c(conf=0.45)])
+    assert out == [(1.0, 2.0, 0.45)]
+
+  def test_an_unvisited_corner_is_dropped(self):
+    """MUTATION: flip `> 0.0` to `<= 0.0` and this is the only thing that
+    catches it -- every other test in the suite passes either way."""
+    assert _rm.learned_corners_from([self._c(conf=0.0)]) == []
+
+  def test_mixed_list_keeps_only_the_driven_ones(self):
+    driven = self._c(lat=3.0, lon=4.0, conf=1.0)
+    unvisited = self._c(lat=5.0, lon=6.0, conf=0.0)
+    assert _rm.learned_corners_from([unvisited, driven]) == [(3.0, 4.0, 1.0)]
+
+  def test_an_empty_list_is_empty(self):
+    assert _rm.learned_corners_from([]) == []
+
+
+class TestConfidenceAlpha:
+  """v3.6.3. The 'have we driven this corner' ring replaced the old governing-
+  point crosshair. Its opacity IS confidence_for(visits) — not a re-derived
+  measure of how many times we've seen it — so this pins the arithmetic and
+  the fail-safe direction of every edge case a mutation could hide behind."""
+
+  def test_matches_confidence_for_at_the_documented_steps(self):
+    """One visit -> faint, three-plus -> solid. These are the exact numbers
+    corner_speed.confidence_for() produces, not independently chosen ones."""
+    assert _rm.confidence_alpha(0.0) == 0
+    assert _rm.confidence_alpha(0.45) == 114     # confidence_for(1)
+    assert _rm.confidence_alpha(0.725) == 184    # confidence_for(2)
+    assert _rm.confidence_alpha(1.0) == 255      # confidence_for(3+)
+
+  def test_zero_confidence_is_fully_transparent(self):
+    """MUTATION: a floor above zero would draw a faint ring for a corner
+    nobody has ever driven -- exactly the case _poll() already filters out,
+    so this is the second line of defence."""
+    assert _rm.confidence_alpha(0.0) == 0
+
+  def test_clamped_to_the_valid_range(self):
+    """A store bug that let confidence drift outside [0, 1] must not paint a
+    ring darker than solid or invert to negative alpha."""
+    assert _rm.confidence_alpha(1.4) == 255
+    assert _rm.confidence_alpha(-0.3) == 0
+
+  def test_non_finite_reads_as_not_confident_at_all(self):
+    """MUTATION: NaN/inf falling through to int() would either crash the
+    onroad draw loop or paint a solid ring for a value that means nothing."""
+    for bad in (float('nan'), float('inf'), float('-inf')):
+      assert _rm.confidence_alpha(bad) == 0
+
+
+class TestLearnedCornerProjection:
+  """v3.6.3 — RouteMap._project() now carries the learned-corner list through
+  the same ego-frame projection and lateral shift as the ribbon itself, so a
+  learned ring lands exactly on the road it belongs to rather than drifting
+  off it the way the pre-shift marker would have.
+  """
+
+  def _map_at_origin(self, raw_corners, bearing=0.0):
+    m = _rm.RouteMap()
+    m._pose = (37.5, -122.0, bearing)
+    m._raw = []
+    m._raw_corners = raw_corners
+    return m
+
+  def test_a_corner_ahead_projects_to_positive_forward(self):
+    """~100 m due north of a 0-degree-heading ego is ~100 m forward, 0 right."""
+    m = self._map_at_origin([(37.5 + 100.0 / _rm._M_PER_DEG, -122.0, 0.6)])
+    pts, corners = m._project()
+    assert len(corners) == 1
+    fwd, right, conf = corners[0]
+    assert fwd == pytest.approx(100.0, abs=0.5)
+    assert right == pytest.approx(0.0, abs=0.5)
+    assert conf == pytest.approx(0.6)
+
+  def test_confidence_passes_through_untouched(self):
+    """The projection must not touch the third element -- it is the
+    controller's confidence, not a screen coordinate."""
+    m = self._map_at_origin([(37.5, -122.0 + 50.0 / _rm._M_PER_DEG, 1.0)])
+    _, corners = m._project()
+    assert corners[0][2] == pytest.approx(1.0)
+
+  def test_no_pose_yet_is_no_corners(self):
+    """Before the first GPS fix there is nothing to project onto."""
+    m = _rm.RouteMap()
+    m._raw_corners = [(37.5, -122.0, 0.5)]
+    pts, corners = m._project()
+    assert pts == [] and corners == []
+
+  def test_no_learned_corners_is_an_empty_list_not_a_crash(self):
+    m = self._map_at_origin([])
+    _, corners = m._project()
+    assert corners == []
+
+
 _sig = _load('side_signals')
 
 
