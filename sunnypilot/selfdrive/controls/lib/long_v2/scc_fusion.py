@@ -1,107 +1,113 @@
-"""FunnyPilot v3.4.9 — ONE Smart Cruise Control: map and vision are two views of one corner.
+"""FunnyPilot v3.6.2 — how much of SCC-M v2's cut is allowed through.
 
-WHAT WAS THERE (v3.3.8). SCC-M's cap only reached the governor when SCC-V was
-independently ACTIVE — a hard binary veto. The reasoning was sound: OSM curve
-speeds are mistagged, rounded and stale often enough that letting the map brake
-the car on its own produces slowdowns with no corner in front of them.
+ONE FUSION, NOT TWO. Until v3.6.1 there were two: `fuse_map_target` gated OSM's
+curve speeds behind the model, and `fuse_learned_target` gated a separately
+learned speed behind visit count. SCC-M v2 produces a single cap whose corner
+speed is already a blend of measured geometry and learned experience
+(corner_speed.effective_a_lat), so there is one thing to gate and one place
+that decides how far it is trusted.
 
-WHY IT UNDER-DELIVERED. The veto did not ask "does the model see a corner?", it
-asked "has the model's own corner controller crossed its ACTIVATION threshold?"
-— a much higher bar, and one the map can rarely clear at the moment it matters:
+────────────────────────────────────────────────────────────────────────────
+WHY A CORROBORATION GATE STILL EXISTS AT ALL
 
-  * SCC-V's threshold is a comfort limit (a_lat_target). A corner that would
-    pull 1.5 m/s^2 at our current speed is a real corner worth trimming for and
-    is nowhere near activating vision.
-  * The two look different distances ahead. SCC-M reasons out to 400 m; SCC-V
-    reasons over the model's ~8 s plan, which at 30 m/s is ~240 m. The map's
-    whole value is the early, gentle reduction, and for the entire early part
-    of the approach vision has literally not seen the corner yet — so the veto
-    was hardest exactly where the map was most useful.
+The corner speed is ours now, but the ROAD SHAPE is still OSM's, and the
+failure mode v3.5.9 documented has not gone away: where two lanes merge or one
+splits, the way jogs sideways over a short distance, and any curvature
+estimator run on that geometry sees a corner on a straight road.
+road_geometry's turn-angle gate removes most of it — a junction jog turns
+through a few degrees, not eighteen — but "most" is not "all", and the cost of
+the residue is the car braking for nothing.
 
-Net effect on the road: corners that could have used a slowdown got none, which
-is the reported symptom.
+So an UNVISITED corner still has to be corroborated: by the model seeing
+lateral action ahead, or, beyond the model's horizon where it has no opinion,
+by proximity. That machinery is unchanged from v3.5.9 and its reasoning is in
+the constants below.
 
-THE MERGE. Corroboration becomes CONTINUOUS instead of binary, and it scales
-the map's AUTHORITY rather than switching it:
+────────────────────────────────────────────────────────────────────────────
+WHY A VISITED CORNER BYPASSES IT
 
-    vision ACTIVE            -> map passes through untouched (unchanged)
-    vision sees a corner     -> map may take a FRACTION of the reduction it
-                                asked for, proportional to how much lateral
-                                action the model predicts at our current speed
-    vision sees a straight   -> map is vetoed entirely (the v3.3.8 protection,
-                                fully intact — this is the buggy-map-data case)
+A learned corner is not a claim derived from OSM's geometry. It is a record
+that THIS CAR went round THIS bend and either did or did not run out of
+steering doing it. That evidence does not become weaker because the model has
+not seen the bend yet, and it does not become weaker on a crest or in fog —
+which is exactly when the model's silence is least informative and the
+corroboration gate bites hardest.
 
-plus MAP_SOLO_MAX_CUT, so the worst a partially-corroborated map error can ever
-cost is a bounded trim, never an arbitrary slowdown. A wrong map point on a
-straight road still does nothing at all; a real corner now gets acted on well
-before vision's own comfort threshold is crossed.
+`learned_conf` therefore does two things: it floors the corroboration (the same
+shape v3.5.0's advisory floor had), and above LEARNED_TRUST_TH it also
+suppresses the vision-disagreement veto outright. A corner we have measured
+three times outranks the model's opinion that the road is straight.
 
-The corroboration signal itself is produced by SCC-V (see scc_vision_v2.py:
-peak predicted lateral acceleration over the plan horizon evaluated at OUR
-speed, normalised by a fraction of the comfort target, asymmetrically filtered
-so it rises quickly and does not blink out mid-corner).
+Note what it does NOT do: it never widens MAP_SOLO_MAX_CUT. Trust buys
+authority, not an unbounded slowdown.
 
 Speed-domain only; the governor takes the min and the MPC + shaper own the
 actual deceleration. Import-light (stdlib only).
 """
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
-# Fraction of a full cut the map may take per unit of corroboration is 1:1;
-# these two bound the result.
-MAP_SOLO_MAX_CUT = 6.7   # m/s (~15 mph) — ceiling on a partially-corroborated cut
+# Bounds on what a partially-corroborated cut may cost.
+MAP_SOLO_MAX_CUT = 6.7   # m/s (~15 mph) — ceiling on a partially trusted cut
 MAP_SOLO_MIN_CUT = 0.5   # m/s — below this the map is not saying anything useful
 
-# FunnyPilot v3.5.0 — a POSTED ADVISORY SPEED is corroboration in its own right.
-# The whole reason vision gets a veto is that OSM curve speeds are computed and
-# therefore wrong sometimes; an advisory limit is not computed, it is surveyed
-# and signed. The model not having seen the bend yet does not make the sign
-# fake, so an advisory floors the map's authority rather than replacing it —
-# MAP_SOLO_MAX_CUT still bounds the result exactly as before.
-ADVISORY_CORROB_FLOOR = 0.6
-
 # FunnyPilot v3.5.6 — PROXIMITY IS AUTHORITY TOO, AND AUTHORITY BOUNDS THE CUT
-# RATHER THAN SCALING IT. Two changes, and the second is the one that was
-# actually holding the car back.
+# RATHER THAN SCALING IT.
 #
-# 1. `allowed = cut * c` CONFLATES TWO DIFFERENT QUESTIONS. `c` answers "is this
-#    corner real"; the envelope answers "how much should we be off cruise right
-#    now". Multiplying them means a SMALL early trim gets multiplied down to
-#    nothing — and a small early trim is precisely what an early, progressive
-#    approach consists of. With `c` at 0.3 a 1.2 m/s trim became 0.36, under
-#    MAP_SOLO_MIN_CUT, so it was dropped entirely and the car did nothing.
-#    It is now `min(cut, MAP_SOLO_MAX_CUT * c)`: authority is a CEILING on how
-#    much the map may take, and anything under that ceiling passes through at
-#    full strength. Note this is also STRICTER than before for large cuts at
-#    middling corroboration, which is the right way round.
+# `allowed = cut * c` CONFLATES TWO QUESTIONS. `c` answers "is this corner
+# real"; the envelope answers "how far under cruise should we be right now".
+# Multiplying them means a SMALL early trim is multiplied down to nothing — and
+# a small early trim is precisely what an early, progressive approach consists
+# of. At c 0.3 a 1.2 m/s trim became 0.36, under MAP_SOLO_MIN_CUT, so it was
+# dropped and the car did nothing. `min(cut, MAP_SOLO_MAX_CUT * c)` makes
+# authority a CEILING; anything under it passes at full strength, and large
+# cuts at middling corroboration get STRICTER, which is the right way round.
 #
-# 2. Corroboration came only from the model, and the model's plan reaches about
-#    240 m at 30 m/s while SCC-M reasons to 400 m. So for the whole early part
-#    of an approach `c` was ~0 and the map was vetoed outright — exactly where
-#    the map is the only thing that knows. v3.4.9's own docstring predicted
-#    this; making corroboration continuous did not fix it, because 0 times
-#    anything is still 0.
-#
-#    A corner that is still in the map at 120 m is far more likely to be real
-#    than one at 400 m, so distance is evidence in its own right. It is WEAKER
-#    evidence than the model agreeing, and it is capped below 1.0 to say so:
-#    full authority still requires vision or a posted advisory. The honest cost
-#    is that a mistagged map point near the car can now produce a bounded trim
-#    where it previously produced none — bounded by MAP_SOLO_MAX_CUT *
-#    MAP_PROX_MAX_AUTHORITY, about 11 mph, and only ever a speed cap.
+# A corner still on the map at 120 m is likelier real than one at 400 m, so
+# distance is evidence. It is WEAKER evidence than the model agreeing, and the
+# cap below 1.0 says so: full authority still needs vision or a learned record.
 MAP_PROX_NONE_M = 400.0        # beyond this, distance grants nothing
 MAP_PROX_FULL_M = 120.0        # at or inside this, the distance term saturates
 MAP_PROX_MAX_AUTHORITY = 0.75  # distance alone may never grant FULL authority
 
-# v3.5.9. The model's plan horizon, in seconds — scc_vision_v2 reasons over
-# ~8 s. Inside `v_ego * MODEL_HORIZON_T` the model has actually looked at the
-# road, so its silence is informative and the map must earn corroboration.
-# Beyond it the model has no opinion and proximity may stand in.
+# v3.5.9. The model's plan horizon in seconds — scc_vision_v2 reasons over ~8 s.
+# Inside `v_ego * MODEL_HORIZON_T` the model has actually looked at the road, so
+# its silence is informative and an unvisited corner must earn corroboration.
+# Beyond it the model has no opinion and proximity may stand in. Multiplying by
+# v_ego is what makes this the distance the model actually covers rather than a
+# fixed number that is wrong at every speed but one.
 MODEL_HORIZON_T = 8.0
 VISION_DISAGREE_TH = 0.05   # below this the model is actively reporting "straight"
 
+# FunnyPilot v3.6.2 — TWO PIECES OF ARITHMETIC, BOTH FOUND BY MUTATION TESTING,
+# AND BOTH WORTH RECORDING BECAUSE THEY MAKE CODE BELOW LOOK LOAD-BEARING WHEN
+# IT IS NOT.
+#
+# 1. THE v3.5.9 VETO CANNOT CHANGE ANY OUTPUT AT THESE CONSTANTS. A cut that
+#    only just survives the veto's own threshold is `MAP_SOLO_MAX_CUT *
+#    VISION_DISAGREE_TH` = 6.7 * 0.05 = 0.335 m/s, which is already under
+#    MAP_SOLO_MIN_CUT (0.5) and therefore already dropped a few lines further
+#    down. Deleting the veto entirely leaves the whole suite green, and it
+#    leaves the CAR's behaviour unchanged too.
+#
+#    It is KEPT anyway, because it is the explicit statement of an intent that
+#    the MIN_CUT check happens to satisfy by coincidence: a model that has
+#    looked at the road and reports it straight should veto, not merely fail to
+#    reach a threshold. `test_the_veto_is_currently_subsumed_by_min_cut` pins
+#    the relationship, so lowering MIN_CUT or raising VISION_DISAGREE_TH makes
+#    the veto start doing real work rather than silently removing a protection.
+#
+# 2. A LEARNED CORNER BYPASSES THE VETO VIA `max(c, learned)` BELOW, AND NEEDS
+#    NOTHING ELSE. An earlier draft added `and learned < LEARNED_TRUST_TH` to
+#    the veto condition, which reads like the bypass and is dead: `c` has
+#    already been floored by `learned` when the veto is evaluated, and
+#    `confidence_for(1)` is 0.45 — nine times VISION_DISAGREE_TH — so a single
+#    completed pass clears the threshold by construction. The extra term could
+#    never fire, and a constant that never fires is exactly the kind of dead
+#    code that reads as a live knob.
+
 
 def proximity_authority(dist_m: float) -> float:
-  """[0, MAP_PROX_MAX_AUTHORITY] from distance to the governing point."""
+  """[0, MAP_PROX_MAX_AUTHORITY] from distance to the governing corner."""
   try:
     d = float(dist_m)
   except (TypeError, ValueError):
@@ -114,16 +120,16 @@ def proximity_authority(dist_m: float) -> float:
 
 
 def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool,
-                    vision_corroboration: float, advisory_active: bool = False,
+                    vision_corroboration: float, learned_conf: float = 0.0,
                     dist_m: float = 0.0, v_ego: float = 0.0) -> float:
-  """Return the map's cap as the governor should see it.
+  """Return SCC-M v2's cap as the governor should see it.
 
-  map_v_target: SCC-M's smoothed cap (CAP_INACTIVE when it has nothing to say)
+  map_v_target: the smoothed cap (CAP_INACTIVE when it has nothing to say)
   v_cruise: the cruise speed the cut is measured against
   vision_is_active: SCC-V has independently latched a cap
   vision_corroboration: [0, 1], how much lateral action the model predicts
-  advisory_active: a posted advisory speed agrees there is something here
-  dist_m: distance to the governing point (0 = unknown, grants nothing)
+  learned_conf: [0, 1] confidence of the governing corner's learned record
+  dist_m: distance to the governing corner (0 = unknown, grants nothing)
   v_ego: current speed, used to size the model's horizon (0 = unknown)
   """
   if not (map_v_target < CAP_INACTIVE):
@@ -133,34 +139,23 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
     return map_v_target
 
   c = min(max(float(vision_corroboration), 0.0), 1.0)
-  if advisory_active:
-    c = max(c, ADVISORY_CORROB_FLOOR)
+  learned = min(max(float(learned_conf), 0.0), 1.0)
+  # A learned record FLOORS corroboration; `max`, never assignment, so where
+  # the model already agrees fully a learned corner changes nothing. Assigning
+  # would look identical in review and would silently DOWNGRADE a corner the
+  # model can see — a test pins the distinction.
+  c = max(c, learned)
 
-  # FunnyPilot v3.5.9 — ABSENCE OF EVIDENCE IS EVIDENCE, BUT ONLY WHERE THE
-  # MODEL WAS LOOKING.
-  #
-  # v3.5.6 let proximity substitute for corroboration so the early part of an
-  # approach could act at all. That was right beyond the model's horizon, where
-  # the model genuinely has no opinion — and WRONG inside it, where the model
-  # looking straight at something and reporting a straight road is real
-  # evidence that there is no corner there.
-  #
-  # The reported failure is exactly that case: where two lanes merge, or one
-  # splits into two, the OSM way jogs sideways over a short distance. mapd
-  # computes curvature from that geometry and publishes a low target velocity,
-  # so the map claims a hard corner on what is a straight road. Those junctions
-  # are close — well inside the plan — so before v3.5.6 the vision veto killed
-  # them, and proximity authority is what let them through.
-  #
-  # So a map point INSIDE the model's horizon must still earn vision's
-  # agreement; only points beyond it may lean on proximity. `MODEL_HORIZON_T`
-  # is the plan length scc_vision_v2 reasons over, and multiplying by v_ego is
-  # what makes this the same distance the model actually covers rather than a
-  # fixed number that is wrong at every speed but one.
   d = float(dist_m) if dist_m and dist_m == dist_m else 0.0
   horizon = max(0.0, float(v_ego)) * MODEL_HORIZON_T if v_ego else 0.0
   model_could_see_it = 0.0 < d <= horizon
   if model_could_see_it and c < VISION_DISAGREE_TH:
+    # Absence of evidence is evidence, but only where the model was looking. A
+    # bend we have DRIVEN does not stop existing because the model reports a
+    # straight road — and it does not need a clause here, because `c` was
+    # floored by `learned` above and one visit is 0.45 against a 0.05
+    # threshold. See the block above the constants; this branch is currently
+    # subsumed by MAP_SOLO_MIN_CUT and is kept as a statement of intent.
     return CAP_INACTIVE
   if not model_could_see_it:
     c = max(c, proximity_authority(d))
@@ -170,50 +165,5 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   cut = max(0.0, float(v_cruise) - float(map_v_target))
   allowed = min(cut, MAP_SOLO_MAX_CUT * c)
   if allowed < MAP_SOLO_MIN_CUT:
-    return CAP_INACTIVE
-  return float(v_cruise) - allowed
-
-
-# FunnyPilot v3.5.0 — the LEARNED corner map (see scc_learn.py).
-#
-# WHY THIS IS NOT JUST ANOTHER CALL TO fuse_map_target. The vision veto exists
-# because OSM's curve speeds are COMPUTED FROM GEOMETRY BY SOMEONE ELSE. A
-# learned point is not computed at all — it is a speed THIS CAR ACTUALLY WENT
-# THROUGH THIS BEND, recorded only after a dip that recovered with no lead, no
-# stop and no zone change (scc_learn.CornerObserver does that filtering). It is
-# self-corroborating in the exact sense the map is not, so demanding the model
-# also see the corner would throw away the one piece of evidence that is better
-# than the model's.
-#
-# WHAT REPLACES THE VETO IS VISIT COUNT. A corner seen once is real evidence and
-# gets a real but partial cut; three visits earn the full one. Vision agreeing
-# can only ever raise that authority, never lower it.
-LEARN_SOLO_MAX_CUT = 8.9   # m/s (~20 mph) — ceiling on a partly-trusted learned cut
-LEARN_MIN_CUT = 0.5        # m/s — below this it is not worth a slowdown
-
-
-def fuse_learned_target(learn_v_target: float, v_cruise: float, confidence: float,
-                        vision_is_active: bool = False,
-                        vision_corroboration: float = 0.0) -> float:
-  """Return the learned cap as the governor should see it.
-
-  learn_v_target: SCC-Learn's smoothed cap (CAP_INACTIVE when it has nothing)
-  confidence: [0, 1] from visit count (scc_learn.confidence_for)
-  vision_is_active / vision_corroboration: may only RAISE authority
-  """
-  if not (learn_v_target < CAP_INACTIVE):
-    return CAP_INACTIVE
-
-  if vision_is_active:
-    return learn_v_target
-
-  a = min(max(float(confidence), 0.0), 1.0)
-  a = max(a, min(max(float(vision_corroboration), 0.0), 1.0))
-  if a <= 0.0:
-    return CAP_INACTIVE
-
-  cut = max(0.0, float(v_cruise) - float(learn_v_target))
-  allowed = min(cut * a, LEARN_SOLO_MAX_CUT)
-  if allowed < LEARN_MIN_CUT:
     return CAP_INACTIVE
   return float(v_cruise) - allowed

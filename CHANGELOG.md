@@ -1,3 +1,233 @@
+FunnyPilot v3.6.2 (2026-08-07)
+========================
+SCC-M is rewritten. It no longer asks anyone how fast a bend can be taken --
+it measures the bend from the road we already draw, picks a speed from
+physics, and learns the real answer from every pass, engaged or not.
+
+WHAT THIS REPLACES
+------------------------------------------------------------------------
+Every version up to v3.6.1 took its corner speeds from
+`MapTargetVelocities[].velocity` -- a number mapd computes from OSM geometry
+with someone else's assumptions about grip, comfort and margin. That single
+input is the reason SCC-M accumulated a vision veto, an advisory-limit floor,
+a proximity authority and a speed trim: four mechanisms, all of them
+compensating for a speed we did not choose and could not check.
+
+Map data now does exactly two jobs on this fork: it draws the minimap, and it
+carries speed limits for SLA. Its `velocity` field is read by nothing, and a
+test pins that on the AST.
+
+1. THE SPEED IS ONE EQUATION
+------------------------------------------------------------------------
+
+    v = sqrt(a_lat * R)
+
+`R` is measured from the polyline the minimap draws (`road_geometry.py`).
+`a_lat` is the lateral acceleration this car is willing to pull through THIS
+bend, and `a_lat` is the thing that gets learned. That split is the answer to
+"the chosen speed must be apparent, not emergent": the file on disk holds a
+number with units and a meaning, the speed is one multiplication away, and if
+the radius estimate ever improves, every corner already recorded gets better
+without being re-driven.
+
+Unvisited corners use `A_LAT_DEFAULT` = 1.8 m/s^2, deliberately BELOW SCC-V's
+own 2.1 comfort target: an unvisited radius comes from OSM node geometry, and
+the cost of that being wrong should be paid in a slow corner rather than a
+fast one. Learning earns it back, up to `A_LAT_MAX` 3.0.
+
+2. MEASURING A RADIUS FROM A POLYLINE, AND TWO THINGS THAT WERE MEASURED
+------------------------------------------------------------------------
+mapd publishes points about a metre apart, but they are an interpolation of an
+OSM way whose NODES are tens of metres apart. The polyline is piecewise
+LINEAR: dead straight between nodes, turning all at once at each one. Local
+finite-difference curvature on that is a train of spikes at the nodes and zero
+between them. `kappa = total turn angle / arc length` is the definition of
+average curvature and does not care -- exact on a circle at any spacing.
+
+* SMOOTHING THE POLYLINE IS NOT COSMETIC. Differencing the raw staircase
+  ALIASES the window against the node spacing: whether a window contains one
+  node or two changes the answer by a factor of two, and since the radius is
+  taken at the TIGHTEST point the aliasing always resolves pessimistically.
+  Measured on a synthetic 100 m bend with 20 m nodes: 71 m raw (29% tight, a
+  corner permanently 16% slower than it is), 96 m smoothed.
+* A NOISY STRAIGHT ROAD IS A CORNER, UNLESS YOU ASK HOW FAR IT TURNS. With 2 m
+  of node error -- ordinary for a way traced from imagery -- a dead straight
+  road produces an apparent 400 m radius, which at the default budget asks the
+  car to slow to 60 mph for nothing. THIS IS THE FAILURE MODE THIS FORK HAS
+  SPENT RELEASES ON, and no amount of smoothing removes it because noise and
+  signal live at the same scale. TOTAL TURN ANGLE separates them completely:
+
+      noisy straight, 30 m nodes     R 397 m    turn  6 deg
+      noisy straight, 60 m nodes     R 468 m    turn  7 deg
+      R=40  hairpin                  R 53-60    turn 90-94 deg
+      R=100 bend                     R 79-90    turn 91-94 deg
+      R=400 sweeper                  R 236-291  turn 44-45 deg
+
+  A factor of six. `MIN_CORNER_TURN_DEG` = 18 sits in that gap, and it is the
+  most important guard in the module. 96 runs of synthetic straight road at up
+  to 2 m of noise now produce NO corners at all.
+
+RESIDUAL ERROR, STATED: over 40 synthetic cases (R 40-800 m, nodes 15-100 m,
+0-2 m noise), worst LOOSE +19%, median -7%, worst TIGHT -54%. The asymmetry is
+the design -- the loose tail takes a bend too fast and nothing downstream
+recovers, the tight tail costs speed and the learned budget buys it back.
+`R_TRIM_LO` 0.65 was chosen against that tail specifically: it costs two
+percent of median pessimism to bring the worst loose case from +28% to +19%.
+
+3. LEARNING THE IDEAL SPEED, WITH NOTHING ENGAGED
+------------------------------------------------------------------------
+"Ideal" is the definition that was asked for: AS FAST AS POSSIBLE WITHOUT
+lateral oscillation, WITHOUT the driver-torque clamp cutting our steering
+request, and WITHOUT the steering controller hitting its limits. Those three
+are measured, not inferred (`corner_effort.py`):
+
+  oscillation    `steeringAngleDeg` high-passed; amplitude-qualified sign
+                 changes give reversals per second. AVAILABLE IN BOTH REGIMES,
+                 which is what makes learning-while-disengaged work -- a
+                 driver sawing at the wheel and a controller fighting a bend
+                 look the same.
+  torque clamp   `|steeringTorque|` past 50, the reading at which the K5's
+                 driver-torque clamp starts cutting our authority. ONLY while
+                 lateral is active: with the driver steering, a high reading is
+                 the driver driving.
+  steering limit `controlsState...torqueState.saturated` and the EPS governor's
+                 own `limited` fraction from /dev/shm/lat_interp.
+
+Each pass reports a peak lateral acceleration and a continuous SEVERITY, where
+1.0 means exactly at the limit. A pass under CLEAN_TH raises the corner's
+FLOOR (this bend supports at least that); a pass over 1.0 lowers its CEILING by
+`a_peak / severity` -- THE DIVISION IS WHAT ANSWERS "HOW FAR PAST". Drive a
+bend far too fast with nothing engaged, oscillate at three times the threshold
+while pulling 4.0 m/s^2, and the pass concludes the corner supports about 1.33.
+A fixed margin would have said "a bit under 4.0" however badly it went.
+
+WHAT IS NO LONGER EXCLUDED, and this is an improvement rather than a
+relaxation: v3.5.0's observer inferred a corner from a SPEED DIP, so it had to
+exclude leads, stops, zone changes, SLA activity and standstills, because all
+of those produce dips. This one is TOLD where the corners are by the geometry
+and measures lateral acceleration, which traffic does not produce. Following a
+slow car round a bend at 0.8 m/s^2 is simply a pass with a low peak: it fails
+to raise the floor and changes nothing. The interval cannot be poisoned by
+something that did not happen laterally.
+
+Measured curvature comes from `controlsState.curvature` -- the vehicle model's
+reading of the STEERING ANGLE, which exists whether or not openpilot is
+steering. NOT `modelV2.orientationRate`, which is the model's PLAN and reports
+intent rather than fact (the v3.4.9 / v3.5.4 trap). NOT `carState.yawRate`,
+which would be the obvious source and is A SILENT ZERO on this platform: only
+PSA and Ford populate it in opendbc, Hyundai never assigns it.
+
+4. ONE CANDIDATE, ONE GATE
+------------------------------------------------------------------------
+`scc_learn.py` is DELETED and SCC-Learn is no longer a separate governor
+candidate. v3.5.0 needed two because the learned speed and OSM's speed were
+different KINDS of claim that had to be able to disagree; SCC-M v2 measures the
+geometry and learns the budget for the same corner, so there is one claim, and
+a second `min()` entry would only have hidden which was speaking.
+
+The corroboration gate stays, because the SHAPE is still OSM's even though the
+SPEED is ours -- a junction jog still looks like a corner to any curvature
+estimator, and the turn-angle gate removes most of that but not all. So an
+UNVISITED corner still has to be agreed with by the model, or vouched for by
+proximity beyond the model's horizon. A corner we have DRIVEN bypasses it
+entirely: `learned_conf` floors corroboration and, above one completed pass,
+suppresses the vision-disagreement veto. A bend does not stop existing because
+the model has not seen it over a crest.
+
+Advisory speed limits are gone with the rest of the map's speed data. They
+were exactly what the requirement rules out: downloaded speed data deciding
+how fast to take a corner.
+
+5. THE SET SPEED IS A HARD CEILING
+------------------------------------------------------------------------
+`output_v_target` is clamped to `v_cruise` inside SCC-M v2. The governor's
+min() already guaranteed it, but a cap that can be read as "SCC-M wants 30"
+when the driver asked for 20 is a value waiting to be misused, and
+CurveSpeedCap's release ceiling deliberately sits a little ABOVE cruise. The
+property now holds locally, where it is tested, rather than as a consequence of
+what a caller happens to do with the value.
+
+6. THE MINIMAP DRAWS WHAT THE CAR DECIDED
+------------------------------------------------------------------------
+The ribbon is tinted by the speed SCC-M v2 chose for each corner, published
+over a new `/dev/shm/fp_corners`. THE UI CANNOT COMPUTE THOSE: half of each one
+is a learned budget in a store on /data, and nothing in `hud/` may touch a
+filesystem -- quite apart from two copies of the blend drifting the moment
+either is tuned. Road with no corner on it gets no colour at all now: on a
+straight, SCC-M v2 has nothing to say and the map says nothing rather than
+tinting the road a shade of grey. "LRN" replaces "ADV" and means the governing
+corner is one we have driven before.
+
+7. A BUG THE END-TO-END TEST CAUGHT AND NOTHING ELSE WOULD HAVE
+------------------------------------------------------------------------
+`LearnStore.nearby()` filters to corners AHEAD by the dot product of the
+heading with the offset -- correct when the query point is EGO. SCC-M v2 looks
+a corner up at the CORNER'S OWN position, where that offset is zero, the dot
+product is exactly zero, and the ahead test rejected the record it was looking
+for. Nothing learned would ever have been used, and every unit test in the
+store's own file still passed. `ahead_only=False` is not an optimisation, it is
+a different question: asking a point whether it is in front of itself.
+
+8. WHAT MUTATION TESTING FOUND, INCLUDING IN CODE THAT WAS NOT MINE
+------------------------------------------------------------------------
+Eighteen guards were mutated one at a time against the full suite. Fifteen were
+caught immediately. The three that survived were all real:
+
+* THE SET-SPEED CLAMP was unreachable through the normal path -- CurveSpeedCap
+  resets itself once its release reaches `v_cruise - RELEASE_DONE_MARGIN`, so
+  it never emits a value over cruise. The clamp is a BACKSTOP against
+  `curve_cap.py` changing (it is shared with SCC-V and its release ceiling is
+  written as `v_cruise + 1.0`), so it is now tested by handing SCC-M v2 the
+  state the backstop exists for, rather than by pretending the normal path
+  reaches it.
+* THE MINIMAP'S NO-CORNER SENTINEL lived inside `render()`, which nothing
+  off-device can reach. It is `tint_delta_mph()` now, pure and tested. Dropping
+  the sentinel paints every straight road full red, and the suite did not
+  notice.
+* v3.5.9's VISION-DISAGREEMENT VETO CANNOT CHANGE ANY OUTPUT AT THE CURRENT
+  CONSTANTS, and has not been able to since it was written. A cut that only
+  just survives its threshold is `MAP_SOLO_MAX_CUT * VISION_DISAGREE_TH` =
+  6.7 * 0.05 = 0.335 m/s, which is already below `MAP_SOLO_MIN_CUT` (0.5) and
+  dropped a few lines later. Deleting the branch leaves the suite green AND
+  the car's behaviour unchanged. It is kept as the explicit statement of an
+  intent that MIN_CUT satisfies by coincidence, and the ARITHMETIC RELATIONSHIP
+  is now pinned by a test, so lowering MIN_CUT makes the veto start doing real
+  work rather than silently removing a protection nobody knew was absent.
+
+The same finding killed a line of my own: an earlier draft added `and learned <
+LEARNED_TRUST_TH` to that veto, which reads exactly like the learned-corner
+bypass and could never fire -- `c` has already been floored by `learned` when
+the veto is evaluated, and `confidence_for(1)` is 0.45 against a 0.05
+threshold. The bypass is `max(c, learned)` and needs nothing else. A constant
+that can never fire is the expensive kind of dead code, so it is gone.
+
+FILES
+------------------------------------------------------------------------
+NEW    long_v2/road_geometry.py, long_v2/corner_speed.py,
+       long_v2/corner_effort.py  (all stdlib-only)
+REWRITTEN  long_v2/scc_map_v2.py, long_v2/scc_fusion.py,
+       long_v2/scc_learn_store.py (new schema, new journal `corners_v2.jsonl`
+       -- the old records held a SPEED and would be wrong by a factor of eight
+       if reinterpreted, so they are skipped rather than migrated),
+       hud/route_map.py
+DELETED  long_v2/scc_learn.py (AST-verified unreferenced first)
+ALSO   long_v2/scc_shm.py (+fp_corners, +read_eps_limited), speed_governor.py,
+       sunnypilot longitudinal_planner.py, selfdrive/controls/plannerd.py
+
+TESTS: 759 green, 0 failed (was 656). NEW test_road_geometry.py (60),
+test_corner_speed.py (24), test_corner_effort.py (21), test_scc_map_v2.py (25),
+test_scc_shm.py (22); test_scc_learn.py -> test_corner_store.py (38);
+test_scc_advisory.py deleted with the feature. ruff clean.
+
+ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE. The radius estimator is validated
+against synthetic OSM-shaped data, not against this road. If SCC-M v2 slows for
+something that is not a corner, `MIN_CORNER_TURN_DEG` is the first knob, NOT
+the budget in corner_speed.py -- raising it makes the detector stricter, while
+lowering the budget just makes every real corner slower too. If corners feel
+too slow on first acquaintance and do not improve after three passes, check
+`grep scc_map_v2: /data/log/*` for committed passes: an empty log means no pass
+ever closed and indicts the observer, not the budget.
+
 FunnyPilot v3.6.1 (2026-08-02)
 ========================
 The map-data outage is diagnosed and fixed, and it was mine. SCC-M reaches

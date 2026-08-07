@@ -663,3 +663,81 @@ class TestTheTrailOutlivesTheScreen:
     assert _rm.edge_fade(120.0, self.H + 50.0, rect) == 0.0    # past it
     assert _rm.edge_fade(120.0, self.H - 1.0, rect) < 0.1      # essentially gone
     assert _rm.edge_fade(120.0, self.H / 2.0, rect) == 1.0     # well inside
+
+
+class TestCornerSpeedAt:
+  """FunnyPilot v3.6.2 — the ribbon's tint now comes from the speed SCC-M v2
+  CHOSE for each corner, published over /dev/shm/fp_corners, not from mapd's
+  own `velocity` field. The UI cannot compute those speeds: half of each one
+  is a learned lateral budget in a store on /data, and nothing in hud/ may
+  touch a filesystem.
+
+  `0.0` means NO CORNER HERE, which is a real answer — most of any route is
+  straight — and the renderer draws it as untinted road.
+  """
+
+  def _corner(self, lat=37.5, lon=-122.0, half=50.0, v=12.0, conf=0.5):
+    return (lat, lon, half, v, conf)
+
+  def test_a_point_inside_a_corner_gets_its_speed(self):
+    c = self._corner()
+    assert _rm.corner_speed_at(37.5, -122.0, [c]) == pytest.approx(12.0)
+
+  def test_a_point_outside_every_corner_gets_nothing(self):
+    """MUTATION: return the nearest corner's speed regardless of distance. Every
+    straight road would then be tinted for a bend somewhere else on the route."""
+    c = self._corner(half=50.0)
+    far = 37.5 + 500.0 / 111320.0
+    assert _rm.corner_speed_at(far, -122.0, [c]) == 0.0
+
+  def test_the_slower_of_two_overlapping_corners_wins(self):
+    """The same min() the controller takes, over the same list, so the ribbon
+    cannot show a corner the cap is not honouring."""
+    a = self._corner(v=18.0, half=80.0)
+    b = self._corner(v=11.0, half=80.0)
+    assert _rm.corner_speed_at(37.5, -122.0, [a, b]) == pytest.approx(11.0)
+
+  def test_an_empty_list_is_no_corner_anywhere(self):
+    assert _rm.corner_speed_at(37.5, -122.0, []) == 0.0
+
+  def test_a_zero_speed_corner_is_ignored(self):
+    """A published zero is 'no speed', not 'stop here'. Treating it as a target
+    would paint the road full red for a corner nothing asked for."""
+    assert _rm.corner_speed_at(37.5, -122.0, [self._corner(v=0.0)]) == 0.0
+
+  def test_the_extent_is_used_not_a_fixed_radius(self):
+    """A long sweeper must tint along its whole length, and a short bend must
+    not bleed into the straight after it."""
+    long_bend = self._corner(half=200.0, v=20.0)
+    short = self._corner(half=20.0, v=20.0)
+    p = 37.5 + 120.0 / 111320.0
+    assert _rm.corner_speed_at(p, -122.0, [long_bend]) == pytest.approx(20.0)
+    assert _rm.corner_speed_at(p, -122.0, [short]) == 0.0
+
+
+class TestTintDelta:
+  """v3.6.2. A mutation that dropped the no-corner sentinel survived the whole
+  suite, because the expression lived inside `render()` and nothing off-device
+  can reach a draw path. It is a pure function now, and this is why."""
+
+  def test_a_slower_corner_reads_as_a_positive_delta(self):
+    assert _rm.tint_delta_mph(25.0, 15.0) == pytest.approx(10.0 * 2.23694)
+
+  def test_no_corner_here_is_no_tint(self):
+    """MUTATION: drop the `corner_mps > 0` guard. Every straight road on the
+    route would then be painted full red for a corner that is not there."""
+    assert _rm.tint_delta_mph(25.0, 0.0) == 0.0
+    assert _rm.tint_delta_mph(25.0, -1.0) == 0.0
+    assert _rm.ramp_color(_rm.tint_delta_mph(25.0, 0.0)) == _rm._RAMP[0][1]
+
+  def test_no_reference_is_no_tint(self):
+    assert _rm.tint_delta_mph(0.0, 15.0) == 0.0
+
+  def test_a_corner_faster_than_expected_is_not_tinted_red(self):
+    assert _rm.tint_delta_mph(15.0, 25.0) < 0.0
+    assert _rm.ramp_color(_rm.tint_delta_mph(15.0, 25.0)) == _rm._RAMP[0][1]
+
+  def test_garbage_is_neutral_rather_than_wild(self):
+    for e, c in ((float('nan'), 15.0), (25.0, float('nan')),
+                 (float('inf'), 15.0), (25.0, float('inf'))):
+      assert _rm.tint_delta_mph(e, c) == 0.0

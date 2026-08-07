@@ -8,10 +8,13 @@ comfort threshold before the map may act on it.
 
 Each test names the mutation it guards.
 """
+import pytest
+
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import gate_map_target
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_fusion import (
-  fuse_map_target, MAP_SOLO_MAX_CUT, MAP_SOLO_MIN_CUT,
+  fuse_map_target, MAP_SOLO_MAX_CUT, MAP_SOLO_MIN_CUT, VISION_DISAGREE_TH,
 )
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import confidence_for
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
 
@@ -85,3 +88,68 @@ class TestGradedAuthority:
     """MUTATION: forget the max(0, ...) on the cut. A map point ABOVE cruise
     must not come back as a target above cruise."""
     assert fuse_map_target(40.0, 30.0, False, 1.0) == CAP_INACTIVE
+
+
+class TestTheVisionDisagreementVeto:
+  """v3.5.9's junction-jog protection, and what mutation testing said about it.
+
+  THE BRANCH CANNOT CHANGE ANY OUTPUT AT THE CURRENT CONSTANTS. Replacing the
+  whole veto condition with `if False:` leaves the suite green and leaves the
+  car's behaviour unchanged, because a cut that only just survives the veto's
+  own threshold is already under MAP_SOLO_MIN_CUT and dropped a few lines
+  later. That is not a reason to write a contrived test that pretends
+  otherwise — it is a reason to pin the arithmetic, so that changing either
+  constant makes the veto start doing real work instead of quietly removing a
+  protection nobody realised was already absent.
+  """
+
+  def test_the_veto_is_currently_subsumed_by_min_cut(self):
+    """The relationship, not the values. If someone lowers MAP_SOLO_MIN_CUT or
+    raises VISION_DISAGREE_TH, this fails and the veto becomes load-bearing —
+    at which point it needs behavioural tests, which is exactly what the
+    failure message should prompt."""
+    assert MAP_SOLO_MAX_CUT * VISION_DISAGREE_TH < MAP_SOLO_MIN_CUT, (
+      "the vision-disagreement veto now changes outcomes on its own"
+      + " - give it behavioural tests")
+
+  def test_an_unvisited_corner_the_model_says_is_straight_gets_nothing(self):
+    """The behaviour the veto expresses, whichever check actually delivers it:
+    where two lanes merge the OSM way jogs sideways, any curvature estimator
+    sees a corner, and the model looking straight at it is the only thing that
+    says otherwise."""
+    for c in (0.0, 0.01, 0.04):
+      v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=c,
+                          learned_conf=0.0, dist_m=80.0, v_ego=25.0)
+      assert v == CAP_INACTIVE, f"a corner the model denies got through at c={c}"
+
+  def test_a_corner_we_have_driven_is_not_vetoed(self):
+    """THE BYPASS, and it is `max(c, learned)` — nothing else. A bend does not
+    stop existing because the model has not seen it over a crest. MUTATION:
+    assign learned_conf instead of max()-ing it, or drop the floor entirely."""
+    v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=0.0,
+                        learned_conf=0.45, dist_m=80.0, v_ego=25.0)
+    assert v < CAP_INACTIVE
+    assert v < 30.0
+
+  def test_one_visit_clears_the_veto_threshold_by_construction(self):
+    """Why the bypass needs no clause of its own: confidence_for(1) is 0.45
+    against a 0.05 threshold. An earlier draft added `and learned <
+    LEARNED_TRUST_TH` to the veto, which reads like the bypass and could never
+    fire — dead code that looks like a live knob."""
+    assert confidence_for(1) > VISION_DISAGREE_TH * 5
+
+  def test_beyond_the_model_horizon_proximity_still_stands_in(self):
+    """The model's plan reaches ~v_ego * MODEL_HORIZON_T. Past that its silence
+    is not evidence, and SCC-M v2 is the only thing that knows."""
+    v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=0.0,
+                        learned_conf=0.0, dist_m=250.0, v_ego=25.0)
+    assert v < CAP_INACTIVE
+
+  def test_a_learned_record_only_floors_and_never_lowers_authority(self):
+    """MUTATION: assign learned_conf instead of max()-ing it. A corner the
+    model can plainly see would be DOWNGRADED to its visit count."""
+    seen = fuse_map_target(20.0, 30.0, False, 1.0, learned_conf=0.45,
+                           dist_m=80.0, v_ego=25.0)
+    unseen = fuse_map_target(20.0, 30.0, False, 1.0, learned_conf=0.0,
+                             dist_m=80.0, v_ego=25.0)
+    assert seen == pytest.approx(unseen)

@@ -119,6 +119,155 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.2 Changes (based on funnypilot-3.6.1)
+
+SCC-M REWRITTEN. It no longer reads a speed from the map: it measures the bend
+from the polyline the minimap draws, picks a speed from physics, and learns the
+real answer from every pass, engaged or not. Map data now does exactly two jobs
+on this fork — draw the minimap, and carry speed limits for SLA.
+
+- `sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py` — NEW,
+  stdlib-only. Polyline -> corner radii. **THE ESTIMATOR IS `total turn angle /
+  arc length`, NOT A DERIVATIVE, BECAUSE mapd's POLYLINE IS A STAIRCASE**: it
+  publishes points ~1 m apart interpolating an OSM way whose NODES are tens of
+  metres apart, so the line is dead straight between nodes and turns all at once
+  at each one. Local finite differences give a train of spikes at nodes and zero
+  between. Turn-over-arc is the DEFINITION of average curvature and is exact on
+  a circle at any spacing. TWO THINGS WERE MEASURED AND BOTH CHANGED THE DESIGN.
+  (1) **SMOOTHING THE POLYLINE IS WHAT MAKES THE ESTIMATE UNBIASED** — the raw
+  staircase ALIASES the window against the node spacing (one node in the window
+  or two changes the answer by 2x), and because the radius is taken at the
+  TIGHTEST point the aliasing always resolves pessimistically: a 100 m bend with
+  20 m nodes read 71 m, i.e. a corner permanently 16% slow. Smoothed: 96 m.
+  (2) **A NOISY STRAIGHT ROAD IS A CORNER UNLESS YOU ASK HOW FAR IT TURNS** —
+  2 m of node error (ordinary for a way traced from imagery) produces an
+  apparent 400 m radius on dead straight road, which asks the car to slow to
+  60 mph for nothing. This is the failure mode this fork has spent releases on
+  and NO amount of smoothing removes it, because noise and signal live at the
+  same scale. TOTAL TURN ANGLE separates them by a factor of six (noise 6-7°,
+  real corners 44-94°); `MIN_CORNER_TURN_DEG` = 18 sits in the gap and is the
+  most important guard in the module. **IF SCC-M v2 SLOWS FOR A NON-CORNER,
+  THAT IS THE FIRST KNOB — not the budget**, which would slow every real corner
+  too. RESIDUAL ERROR, MEASURED over 40 synthetic cases: worst LOOSE +19%,
+  median -7%, worst TIGHT -54%. `R_TRIM_LO` 0.65 was swept against the LOOSE
+  tail specifically (2% more median pessimism to bring +28% down to +19%) —
+  the loose tail takes a bend too fast and nothing downstream recovers, the
+  tight tail costs speed and learning buys it back.
+- `sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py` — NEW,
+  stdlib-only. `v = sqrt(a_lat * R)`, the whole speed choice. **`a_lat` IS WHAT
+  GETS LEARNED, NOT THE SPEED** — the file on disk then holds a number with
+  units and a meaning, the speed is one multiplication away, and a better radius
+  estimate later improves every stored corner without re-driving it. Learned as
+  an INTERVAL: a clean pass proves the corner supports AT LEAST `a_peak` (raises
+  `a_lo`), a stressed one proves it supports LESS (lowers `a_hi`). **THE
+  ASYMMETRY IS THE OPPOSITE WAY ROUND FROM THE OLD STORE'S AND FOR THE SAME
+  REASON**: the quantity is now an acceleration, so raising it makes the car
+  FASTER — floor rises slowly (`ALPHA_FLOOR`), ceiling falls fast
+  (`ALPHA_CEIL`). `effective_a_lat` weights a learned value ABOVE default by
+  visit count but gives one BELOW default `CONF_LOWER_FLOOR` weight
+  immediately: withholding a slowdown until the third visit is not conservative.
+  `seed=True` on a first visit because a fresh record's bounds are NOT
+  measurements — EMA-ing away from A_LAT_MAX treats ignorance as evidence.
+  The v3.5.6 integrated approach envelope (`_J_BP`/`_J_V`, `ARRIVAL_LEAD_T` 4 s)
+  moved here verbatim; 1.20 m/s^2 is still the ceiling because
+  `long_mpc.CRUISE_MIN_ACCEL` is -1.2.
+- `sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py` — NEW,
+  stdlib-only. The three signals that define "ideal", measured not inferred:
+  oscillation (high-passed `steeringAngleDeg`, amplitude-qualified reversals per
+  second — **AVAILABLE IN BOTH REGIMES, which is what makes learning-while-
+  disengaged work**), the torque clamp (`|steeringTorque|` past 50, ONLY while
+  lateral is active — with the driver steering a high reading is the driver
+  driving), and steering limits (`torqueState.saturated` + the EPS governor's
+  `limited` fraction from /dev/shm/lat_interp). **SEVERITY IS CONTINUOUS AND
+  `update_interval` DIVIDES BY IT** — that is what answers "how far past the
+  limits were we": oscillating at 3x the threshold while pulling 4.0 m/s^2 says
+  the corner supports ~1.33. A fixed margin would say "a bit under 4.0" however
+  badly it went, so the case where the car most needs to learn would teach it
+  least. `MAX_SEVERITY` bounds one pothole; the interval closes, not collapses.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py` — REWRITTEN.
+  `observe_frame` (carState rate) watches the car traverse the corners the
+  geometry found; `update` (model rate) turns the corners ahead into a cap.
+  Learning is for corners BEHIND, capping for corners AHEAD, so a corner can
+  never be capped from the pass recording it. **LEARNING IS NOT GATED ON THE
+  TOGGLE OR ON ENGAGEMENT** — turning SCC-M off should stop the car slowing
+  down, not stop it noticing things. **THE SET SPEED IS CLAMPED LOCALLY**
+  (`min(cap, v_cruise)`): the governor's min() already enforced it, but
+  CurveSpeedCap's release ceiling deliberately sits above cruise, so the
+  property is pinned where it can be tested. Corners are kept `BEHIND_KEEP_M`
+  past their exit — dropping them at the apex would release the cap exactly
+  where the car must not accelerate and would cut the observer's pass in half.
+  A GAP IN THE SAMPLE STREAM ABANDONS THE PASS: a traversal not watched
+  continuously is not a measurement of one, and without that the pass stays open
+  across an ignition cycle and commits to a corner the car is nowhere near.
+  `fric` is gone from the signature — it trimmed mapd's speeds and there are
+  none, and `liveParameters.frictionCoefficient` was never a grip estimate.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py` — Corner now
+  holds `a_lo`/`a_hi`/`r` instead of `v`; NEW journal `corners_v2.jsonl`.
+  **NOT A MIGRATION** — the old `v` was a speed and would be wrong by a factor
+  of eight if reinterpreted as an acceleration, so `from_obj` raises on a record
+  without `alo` and `load()` skips it. **`nearby(ahead_only=False)` IS THE BUG
+  THIS RELEASE ALMOST SHIPPED**: the ahead-of-us dot product is right when the
+  query point is EGO, and SCC-M v2 queries at the CORNER'S OWN position, where
+  the offset is zero, the dot product is exactly zero, and the record being
+  looked for is rejected. Nothing learned would ever have been used AND EVERY
+  UNIT TEST IN THE STORE'S OWN FILE STILL PASSED — only the end-to-end test
+  caught it. Ahead-ness is already established by the geometry; asking again
+  here is asking a point whether it is in front of itself.
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py` — ONE fusion.
+  `fuse_learned_target` deleted with the second governor candidate. The
+  corroboration gate STAYS because the SHAPE is still OSM's even though the
+  SPEED is ours — a junction jog still looks like a corner (v3.5.9). A corner we
+  have DRIVEN bypasses it: `learned_conf` floors corroboration (`max`, never
+  assignment) and above `LEARNED_TRUST_TH` (one completed pass) suppresses the
+  vision-disagreement veto. Advisory limits are GONE — they were exactly what
+  the requirement rules out, downloaded speed data deciding a corner speed.
+- `selfdrive/ui/sunnypilot/onroad/hud/route_map.py` — the ribbon is tinted by
+  the speed SCC-M v2 CHOSE for each corner, read from /dev/shm/fp_corners.
+  **THE UI CANNOT COMPUTE THOSE**: half of each is a learned budget in a store
+  on /data and nothing in `hud/` may touch a filesystem. `v <= 0` means NO
+  CORNER HERE, not a corner at zero speed — without that guard every straight
+  road paints full red. "LRN" replaces "ADV".
+- `sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py` — NEW
+  `/dev/shm/fp_corners` (bounded at `MAX_CORNERS`) and `read_eps_limited()`,
+  which reads controlsd's EXISTING lat_interp heartbeat rather than adding a
+  channel. That file carries no timestamp, so the failure default is False: an
+  unreadable file contributes NO stress and can only make a corner look cleaner
+  than it was, never worse.
+- `selfdrive/controls/plannerd.py` — one added call,
+  `longitudinal_planner.update_car_state_sp(sm)`, in the 100 Hz poll loop.
+  THE RATE IS THE POINT: the reversals being counted are a few Hz and would
+  alias at the planner's 20.
+- DELETED: `long_v2/scc_learn.py` (AST-verified unreferenced first).
+- TESTS: **759 green, 0 failed** (was 656). NEW `test_road_geometry.py` (60),
+  `test_corner_speed.py` (24), `test_corner_effort.py` (21),
+  `test_scc_map_v2.py` (25), `test_scc_shm.py` (22); `test_scc_learn.py` ->
+  `test_corner_store.py` (38); `test_scc_advisory.py` deleted with the feature.
+  ruff clean.
+- MUTATION TESTING, 18 guards, 15 caught immediately. **THE THREE THAT SURVIVED
+  WERE ALL REAL AND TWO OF THEM WERE NOT MINE.** (1) The set-speed clamp is
+  UNREACHABLE through the normal path — CurveSpeedCap resets once its release
+  reaches `v_cruise - RELEASE_DONE_MARGIN`, so it never emits above cruise; the
+  clamp is a BACKSTOP against curve_cap.py changing (shared with SCC-V, release
+  ceiling written as `v_cruise + 1.0`) and is now tested by handing SCC-M v2
+  that state directly. (2) The minimap's no-corner sentinel lived inside
+  `render()`, which nothing off-device reaches — it is `tint_delta_mph()` now,
+  pure and tested; dropping it paints every straight road full red.
+  (3) **v3.5.9's VISION-DISAGREEMENT VETO CANNOT CHANGE ANY OUTPUT AND NEVER
+  COULD**: `MAP_SOLO_MAX_CUT * VISION_DISAGREE_TH` = 6.7 * 0.05 = 0.335 is
+  already under `MAP_SOLO_MIN_CUT` 0.5, so MIN_CUT drops everything the veto
+  would have. Deleting it leaves the suite green AND the car unchanged. KEPT as
+  the statement of intent, with the arithmetic relationship pinned by
+  `test_the_veto_is_currently_subsumed_by_min_cut` — lower MIN_CUT and the veto
+  becomes load-bearing, which is exactly when it needs behavioural tests.
+  The same finding killed a line of mine: `and learned < LEARNED_TRUST_TH` in
+  that veto reads exactly like the learned bypass and could never fire, because
+  `c` is floored by `learned` first and `confidence_for(1)` is 0.45 against a
+  0.05 threshold. **THE BYPASS IS `max(c, learned)` AND NEEDS NOTHING ELSE.**
+- ON-ROAD VERIFICATION REQUIRED: the radius estimator is validated against
+  synthetic OSM-shaped data, not against this road. `grep scc_map_v2:
+  /data/log/*` for committed passes — an EMPTY log means no pass ever closed,
+  which indicts the observer rather than the budget.
+
 ### v3.6.1 Changes (based on funnypilot-3.6.0)
 
 - `sunnypilot/auto_updater/manager.py` — **THE AUTOUPDATER WAS DELETING THE MAP

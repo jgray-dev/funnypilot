@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.1"
+EXPECTED_VERSION = "3.6.2"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -138,8 +138,6 @@ _CODE_MARKERS = [
   ("def fuse_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "merged SCC arbitration"),
   ("corroboration", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_vision_v2.py", "SCC-V corroboration signal"),
   # v3.5.0
-  ("ADVISORY_MARGIN", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "advisory limits into SCC-M"),
-  ("ADVISORY_CORROB_FLOOR", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "advisory as corroboration"),
   ("def write_scc_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "SCC governing-point channel"),
   ("def safe_draw", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py", "onroad HUD blast shield"),
   ("def draw_state_glow", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "state edge glow"),
@@ -148,9 +146,6 @@ _CODE_MARKERS = [
   ("HORIZON BANDS", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "horizon-band HUD layout"),
   # v3.5.0 SCC-Learn
   ("class LearnStore", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "learned-corner store"),
-  ("class CornerObserver", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py", "corner-dip observer"),
-  ("def fuse_learned_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "learned cap authority"),
-  ("scc_learn", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "SCC-Learn wired into plannerd"),
   # v3.5.1
   ("def _spawn_write", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "store writes off the planner thread"),
   ("def edge_fade", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap edge fade"),
@@ -174,7 +169,6 @@ _CODE_MARKERS = [
   ("def stitch_to_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ribbon reaches the car"),
   ("INACTIVE WAS A TRAP", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA re-arm on a cruise press"),
   # v3.5.6
-  ("_J_BP", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "SCC-M integrated approach budget"),
   ("def proximity_authority", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "SCC-M proximity authority"),
   ("DECIMATE_M", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap route decimation"),
   ("def _rings", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "chrome ring cache"),
@@ -193,7 +187,19 @@ _CODE_MARKERS = [
   ("def _why", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap logs why it is empty"),
   # v3.6.1
   ("OSM_MIN_REFRESH_S", "/data/openpilot/sunnypilot/auto_updater/manager.py", "OSM refresh rate-limited"),
-  ("scc_learn: REJECT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn.py", "learn logs rejected dips"),
+  # v3.6.2 — SCC-M v2: corner radius measured from the drawn route, lateral
+  # budget learned from how this car actually drives each bend.
+  ("MIN_CORNER_TURN_DEG", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py", "corner detector rejects noisy straights"),
+  ("def curvature_profile", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py", "radius from turn angle over arc length"),
+  ("def smooth_polyline", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py", "polyline smoothing removes node aliasing"),
+  ("def effective_a_lat", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "learned budget blended by confidence"),
+  ("def update_interval", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "the learned lateral-accel interval"),
+  ("_J_BP", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "integrated approach budget"),
+  ("class LateralEffort", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "oscillation / clamp / saturation"),
+  ("def observe_frame", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "SCC-M v2 learns every pass"),
+  ("def write_corners_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "corner list published to the minimap"),
+  ("def corner_speed_at", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tints by our own corner speeds"),
+  ("def update_car_state_sp", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "SCC-M v2 wired at the carState rate"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

@@ -1,17 +1,33 @@
-"""FunnyPilot v3.5.0 — the learned-corner store: our own map, built by driving.
+"""FunnyPilot v3.6.2 — the learned-corner store: our own map, built by driving.
 
-THE IDEA. SCC-M asks OSM how fast a bend can be taken and is wrong often
-enough that it needs a vision veto. But the car already knows the answer for
-any road it has driven: the speed it actually went through the bend. Record
-that, keyed by position and heading, and after one pass a road has a corner
-map that owes nothing to OSM's geometry — and unlike OSM it is derived from
-this car, this driver and this tyre set. On a commute it is strictly better
-information than the map.
+THE IDEA. SCC-M v2 measures a bend's radius from the road (road_geometry.py)
+and picks a speed with `v = sqrt(a_lat * R)`. What it cannot measure from a
+polyline is `a_lat`: how hard THIS car, on THIS surface, with THIS camber, can
+actually corner without oscillating or running the steering out of authority.
+That is what this file remembers, keyed by position and heading.
+
+WHAT CHANGED IN v3.6.2, AND WHY THE FILE NAME CHANGED WITH IT. Until v3.6.1
+each record held a SPEED: the minimum of a speed dip the driver or SCC-V had
+produced. That is a different quantity from the one stored now — it describes
+what happened rather than what the corner supports, and it is only valid at the
+radius it was measured at. Merging the two would have quietly poisoned every
+estimate, so the store starts a new journal (`corners_v2.jsonl`) and the old
+one is simply left on disk, harmless and unread.
+
+Each record now carries an INTERVAL, `a_lo` and `a_hi`:
+
+    a_lo  the largest lateral acceleration a clean pass has demonstrated here
+    a_hi  the smallest that a stressed pass has shown to be too much
+
+A pass closes the interval from one side or neither; see corner_speed.py for
+the update rule and the reason its asymmetry runs the opposite way to the old
+store's. `r` is the radius the corner was measured at when last seen, kept for
+diagnostics and so a record can be sanity-checked against fresh geometry.
 
 WHAT THIS MODULE IS: only the persistence and the geometry index. The decision
-about WHEN something is worth recording lives in scc_learn.py, and the decision
-about how much authority a learned point gets lives in scc_fusion.py. Keeping
-those apart is what makes the hard parts testable without a car.
+about WHEN something is worth recording lives in scc_map_v2.py, and the
+decision about how much authority a learned point gets lives in scc_fusion.py.
+Keeping those apart is what makes the hard parts testable without a car.
 
 STORAGE SHAPE
   * A cell key is (lat_cell, lon_cell, heading_octant) at CELL_DEG resolution
@@ -42,7 +58,8 @@ read-only filesystem: all of them must degrade to "no learned data" and none of
 them may raise into the planner. Losing the file entirely is an acceptable
 outcome — the feature simply relearns.
 
-Import-light (stdlib only), so it tests without the openpilot environment.
+Import-light: stdlib plus corner_speed, which is itself stdlib-only. Nothing
+here reaches cereal, numpy or params, so it tests without a car.
 """
 import json
 import math
@@ -51,8 +68,14 @@ import tempfile
 import threading
 import time
 
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import (
+  A_LAT_DEFAULT, A_LAT_MAX, update_interval)
+
 STORE_DIR = "/data/funnypilot_scc_learn"
-STORE_NAME = "corners.jsonl"
+# v3.6.2 — a NEW file, not a migration. See the module docstring: the old
+# records held a speed with different semantics, and a converted record would
+# be indistinguishable from a measured one while being wrong.
+STORE_NAME = "corners_v2.jsonl"
 
 # ~22 m at the equator, and 18 m of longitude at 35 deg latitude. Fine enough to
 # place a corner entry, coarse enough that GPS noise lands in the same cell.
@@ -76,13 +99,6 @@ MIN_FREE_BYTES = 512 << 20    # never write when /data is this tight; deleter ow
 # The writer thread below makes this a non-issue either way; the odd period is
 # belt and braces, and free.
 FLUSH_S = 47.0                # batch dirty records; a long drive writes a few tens of KB
-
-# How the estimate moves when a corner is seen again. Asymmetric ON PURPOSE:
-# rising (we took it faster than we thought) is adopted quickly, falling (we
-# took it slower) is adopted slowly. A learned cap can only ever slow the car,
-# so the expensive failure is nuisance braking, and this biases away from it.
-ALPHA_UP = 0.5
-ALPHA_DOWN = 0.2
 
 # A grid has edges, and a corner is as likely to sit on one as anywhere else.
 # Without a merge step, two visits to the SAME bend that land either side of a
@@ -114,22 +130,31 @@ def bearing_delta(a: float, b: float) -> float:
 
 
 class Corner:
-  __slots__ = ("lat", "lon", "bearing", "v", "n", "t", "flags")
+  """One learned bend: where it is, which way it is taken, and the lateral
+  acceleration interval this car has demonstrated through it."""
+  __slots__ = ("lat", "lon", "bearing", "a_lo", "a_hi", "r", "n", "t", "flags")
 
-  def __init__(self, lat, lon, bearing, v, n=1, t=0.0, flags=0):
+  def __init__(self, lat, lon, bearing, a_lo, a_hi, r=0.0, n=1, t=0.0, flags=0):
     self.lat, self.lon, self.bearing = lat, lon, bearing
-    self.v, self.n, self.t, self.flags = v, n, t, flags
+    self.a_lo, self.a_hi, self.r = a_lo, a_hi, r
+    self.n, self.t, self.flags = n, t, flags
 
   def to_json(self, key: str) -> str:
     return json.dumps({"k": key, "la": round(self.lat, 6), "lo": round(self.lon, 6),
-                       "br": round(self.bearing, 1), "v": round(self.v, 2),
+                       "br": round(self.bearing, 1),
+                       "alo": round(self.a_lo, 3), "ahi": round(self.a_hi, 3),
+                       "r": round(self.r, 1),
                        "n": self.n, "t": round(self.t, 0), "f": self.flags},
                       separators=(",", ":"))
 
   @staticmethod
   def from_obj(d):
+    # A record missing `alo`/`ahi` is not one of ours. Raising here is correct:
+    # `load()` skips lines it cannot parse, so a stray old-format journal costs
+    # nothing rather than being silently reinterpreted as an acceleration.
     return d["k"], Corner(float(d["la"]), float(d["lo"]), float(d["br"]),
-                          float(d["v"]), int(d.get("n", 1)),
+                          float(d["alo"]), float(d["ahi"]),
+                          float(d.get("r", 0.0)), int(d.get("n", 1)),
                           float(d.get("t", 0.0)), int(d.get("f", 0)))
 
 
@@ -320,18 +345,22 @@ class LearnStore:
     except Exception:
       return None
 
-  def observe(self, lat: float, lon: float, bearing: float, v: float,
-              flags: int = 0, now: float | None = None,
-              allow_raise: bool = True) -> str:
-    """Fold one observation in. Returns the key it landed on.
+  def observe(self, lat: float, lon: float, bearing: float, radius: float,
+              a_peak: float, severity: float, flags: int = 0,
+              now: float | None = None, allow_raise: bool = True) -> str:
+    """Fold one traversal in. Returns the key it landed on.
 
-    The estimate rises fast and falls slow (see ALPHA_UP/ALPHA_DOWN): a cap
-    can only slow the car, so learning to brake HARDER is the change that
-    deserves more evidence.
+    The interval maths lives in corner_speed.update_interval — this method owns
+    only where the record goes and how the visit is counted. Keeping the rule
+    out of the persistence layer is what lets it be mutation-tested without
+    touching a filesystem.
 
-    `allow_raise=False` records the visit but refuses to move the estimate UP.
-    The caller passes it when the observed speed was one WE commanded, which is
-    not evidence about the corner at all — see scc_learn.FLAG_SELF.
+    `allow_raise=False` records the visit but refuses to move the FLOOR up. The
+    caller passes it when SCC-M v2 was itself governing the pass: a corner we
+    held the car back through cannot be evidence that the corner is fast. Note
+    it does NOT block the ceiling — a governed pass that still oscillated is
+    real evidence in the safe direction, and refusing it would mean the one
+    situation where we are demonstrably wrong is the one we never learn from.
     """
     now = time.time() if now is None else now  # noqa: TID251 (persisted across boots; monotonic cannot be)
     key = key_for(lat, lon, bearing)
@@ -340,20 +369,21 @@ class LearnStore:
       if merged is not None:
         key = merged
     c = self.corners.get(key)
-    if c is None:
-      c = Corner(lat, lon, bearing, v, n=1, t=now, flags=flags)
+    fresh = c is None
+    if fresh:
+      c = Corner(lat, lon, bearing, A_LAT_DEFAULT, A_LAT_MAX, radius, n=0, t=now, flags=0)
       self.corners[key] = c
       self._index_add(key, c)
-    elif v > c.v and not allow_raise:
-      c.n += 1                 # the visit counts; the estimate does not move
-      c.t = now
-      c.flags |= flags
-    else:
-      alpha = ALPHA_UP if v > c.v else ALPHA_DOWN
-      c.v += (v - c.v) * alpha
-      c.n += 1
-      c.t = now
-      c.flags |= flags
+
+    lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh)
+    if not allow_raise:
+      lo = min(lo, c.a_lo)
+    c.a_lo, c.a_hi = lo, hi
+    if radius > 0.0:
+      c.r = radius
+    c.n += 1
+    c.t = now
+    c.flags |= flags
     self._dirty.add(key)
     # Bounded in MEMORY, not merely on disk. `load()` evicts once at startup,
     # which in practice is enough -- reaching MAX_RECORDS inside a single drive
@@ -398,13 +428,23 @@ class LearnStore:
   # ── read path ───────────────────────────────────────────────────────────
 
   def nearby(self, lat: float, lon: float, bearing: float,
-             max_dist_m: float, bearing_tol_deg: float = 70.0) -> list:
-    """Learned corners AHEAD of us, as (distance_m, Corner).
+             max_dist_m: float, bearing_tol_deg: float = 70.0,
+             ahead_only: bool = True) -> list:
+    """Learned corners near a point, as (distance_m, Corner).
 
-    Probes the 3x3 coarse cells around ego, then filters on distance, heading
-    agreement and ahead-ness. "Ahead" is the dot product of our heading with
-    the offset to the corner, which is what stops a corner we have just
-    exited from capping us on the way out.
+    Probes the 3x3 coarse cells around the query point, then filters on
+    distance and heading agreement. With `ahead_only` (the default) it also
+    requires the corner to be in front, via the dot product of the heading with
+    the offset — that is what stops a bend you have just exited from capping
+    you on the way out, when the query point is EGO.
+
+    `ahead_only=False` IS NOT AN OPTIMISATION, IT IS A DIFFERENT QUESTION.
+    SCC-M v2 asks "what do we know about THIS corner" with the corner's own
+    position, where the offset is zero, the dot product is zero, and an
+    ahead-only probe rejects the exact record it was looking for — so nothing
+    learned would ever be used, while every other test still passed. Ahead-ness
+    is already established by the geometry that produced the corner; asking for
+    it again here is asking a point whether it is in front of itself.
     """
     out = []
     try:
@@ -425,7 +465,7 @@ class LearnStore:
             d = math.hypot(north, east)
             if d > max_dist_m:
               continue
-            if north * hy + east * hx <= 0.0:   # behind us
+            if ahead_only and north * hy + east * hx <= 0.0:   # behind us
               continue
             out.append((d, c))
     except Exception:

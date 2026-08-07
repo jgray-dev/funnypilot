@@ -1,40 +1,41 @@
-"""FunnyPilot v3.5.0 — the route minimap: SCC-M's own input, drawn.
+"""FunnyPilot v3.6.2 — the route minimap: SCC-M v2's own input and output, drawn.
 
-WHAT IT SHOWS, AND WHY THAT IS ALL IT SHOWS. The ribbon is
-`MapTargetVelocities` — the matched route ahead, the identical array
-`scc_map_v2._raw_cap_from_map()` reads. mapd publishes exactly eleven params
-and NONE of them contain side roads: junctions, turnoffs and surrounding
-geometry never leave the binary. Drawing them would have meant querying the
-offline OSM database ourselves on the UI thread, and it would have shown the
-driver geometry the controller cannot see — the opposite of a debug tool. So
-the map is one road, which is also why it stays minimal.
+WHAT IT SHOWS, AND WHY THAT IS ALL IT SHOWS. The ribbon is the geometry of
+`MapTargetVelocities` — the matched route ahead, the identical polyline
+`road_geometry.corners_from_route()` measures corner radii from. mapd publishes
+exactly eleven params and NONE of them contain side roads: junctions, turnoffs
+and surrounding geometry never leave the binary. Drawing them would have meant
+querying the offline OSM database ourselves on the UI thread, and it would have
+shown the driver geometry the controller cannot see — the opposite of a debug
+tool. So the map is one road, which is also why it stays minimal.
 
-THE TINT is the point, and v3.5.2 changed what it is measured against.
+THE TINT is the point, and v3.6.2 changed where the number comes from.
 
-It used to be the POSTED LIMIT: `delta = limit_there - map_target_there`. That
-answers "how much slower than the sign", which is not the question. A 35 mph
-curve in a 55 zone glowed red even when your set speed was 45 — the map was
-shouting about a 20 mph drop you were never going to take.
-
-It is now measured against THE SPEED WE EXPECT TO BE DOING AT THAT POINT:
+Until v3.6.1 it was measured against mapd's own `velocity` field — a corner
+speed computed from OSM geometry with someone else's assumptions. SCC-M v2 does
+not use that field for anything, so drawing it would have shown a speed the
+controller had never heard of. The ribbon is now tinted by the speed THIS CAR
+CHOSE for each corner, published over /dev/shm/fp_corners:
 
     expected = min(set speed, zone limit there x (1 + SLA offset) if SLA on)
-    delta    = expected - map_target_velocity_there
+    delta    = expected - the speed SCC-M v2 will hold through that corner
 
-Two things fall out of that, and both were asked for. Set speed 45 into a 35
-curve is a 10 mph drop and reads amber, not red. And if SLA is going to have
-taken 8 mph off you by the time you reach the bend — because the bend is in a
-slower zone — the comparison already happens at the reduced speed, so the
-colour shows the drop you will ACTUALLY feel, not the one from here.
-See `expected_speed_at()`, which is pure and unit-tested.
+so the colour answers "how much will I slow here, and why does the car think
+so", which is the question a driver actually has. Road with no corner on it
+gets no colour at all: on a straight, SCC-M v2 has nothing to say and the map
+now says nothing rather than tinting the road a shade of grey.
 
-THE MARKER is `argmin(v_allowed)`: the single point SCC-M is braking for. It
-is NOT recomputed here. plannerd publishes it over /dev/shm/fp_scc (see
-long_v2/scc_shm.py) precisely so two copies of a selection rule cannot drift —
-a debug readout that disagrees with the controller is worse than none. Solid
-means the fusion passed the map's cut through at full authority; hollow means
-v3.4.9's corroboration is scaling it because the model has not seen the corner
-yet. That distinction is the entire reason this widget exists.
+THE UI DOES NOT COMPUTE THOSE SPEEDS, AND MUST NOT. Half of each one comes from
+the learned lateral budget in a store on /data, and nothing in `hud/` may touch
+a filesystem; beyond that, two copies of the geometry-and-learning blend would
+drift the moment either was tuned, and a debug readout that disagrees with the
+controller is worse than none.
+
+THE MARKER is the corner SCC-M v2 is braking for, published over
+/dev/shm/fp_scc. Solid means the fusion passed the cut through at full
+authority; hollow means corroboration is scaling it back because the model has
+not seen the corner yet. "LRN" means the governing corner is one we have driven
+before, so its speed comes from experience rather than from geometry alone.
 
 COST. `MapTargetVelocities` is a JSON array of a few hundred points and the
 source data is 1 Hz, so it is parsed at POLL_S and projected into ego-relative
@@ -159,6 +160,50 @@ def ramp_color(delta_mph: float) -> tuple[int, int, int]:
       k = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
       return tuple(int(c0[j] + (c1[j] - c0[j]) * k) for j in range(3))
   return _RAMP[-1][1]
+
+
+def corner_speed_at(lat: float, lon: float, corners) -> float:
+  """The speed SCC-M v2 will hold at this point on the route, or 0.0.
+
+  `corners` is what `read_corners_shm()` returned: (lat, lon, half_len, v,
+  conf) per corner. A point belongs to a corner when it is within that corner's
+  half-length of its apex, and where corners overlap the SLOWER one wins —
+  the same min() the controller takes, applied to the same list, so the ribbon
+  cannot show a corner the cap is not honouring.
+
+  0.0 means "no corner here", which the caller draws as untinted road. That is
+  a real answer, not a failure: most of any route is straight.
+  """
+  best = 0.0
+  clat = math.cos(math.radians(lat)) if -90.0 < lat < 90.0 else 1.0
+  for c_lat, c_lon, half, v, _conf in corners:
+    if v <= 0.0:
+      continue
+    d = math.hypot((c_lat - lat) * _M_PER_DEG, (c_lon - lon) * _M_PER_DEG * clat)
+    if d <= max(half, 1.0):
+      best = v if best <= 0.0 else min(best, v)
+  return best
+
+
+def tint_delta_mph(expected_mps: float, corner_mps: float) -> float:
+  """How much slower than expected this bit of road will be taken, mph.
+
+  `corner_mps <= 0` MEANS NO CORNER HERE, NOT A CORNER AT ZERO SPEED. Since
+  v3.6.2 the tag on a route point is the speed SCC-M v2 chose for the corner
+  covering it, and most of any route is straight, so most points carry nothing.
+  Subtracting the missing one from the expected speed would paint every
+  straight road full red — the loudest possible way to say nothing is
+  happening.
+
+  Pulled out of `render()` so it can be tested: the sentinel is one `and` in a
+  conditional expression, and a mutation that dropped it survived the whole
+  suite because nothing off-device can reach the draw path.
+  """
+  if not (T.finite(expected_mps) and T.finite(corner_mps)):
+    return 0.0
+  if expected_mps <= 0.0 or corner_mps <= 0.0:
+    return 0.0
+  return (expected_mps - corner_mps) * MPS_TO_MPH
 
 
 def expected_speed_at(ref_mps: float, zone_limit_mps: float,
@@ -352,7 +397,7 @@ class RouteMap:
     self._fix = None            # (lat, lon, bearing) as last polled
     self._pose = None           # (lat, lon, bearing) as displayed, eased
     self._gov_ll = None         # (lat, lon, authority) or None
-    self._advisory = False
+    self._learned = False
     self._have_fix = False
     self._why_last = ""
     self._why_at = 0.0
@@ -461,6 +506,19 @@ class RouteMap:
     except Exception:
       nxt_limit, nxt_fwd = 0.0, None
 
+    # The controller's own answers, read BEFORE the point loop because each
+    # kept point is tagged with the corner speed that applies there.
+    corners = []
+    try:
+      from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
+        read_corners_shm, read_scc_shm)
+      corners = read_corners_shm()
+      g_lat, g_lon, _gv, auth, learned = read_scc_shm()
+      self._learned = bool(learned)
+      self._gov_ll = (g_lat, g_lon, auth) if (g_lat or g_lon) else None
+    except Exception:
+      self._gov_ll, self._learned = None, False
+
     pts = []
     seen = 0
     kept_at, kept_v, kept_lim = None, 0.0, 0.0
@@ -483,10 +541,10 @@ class RouteMap:
       # rather than blink out of it.
       if fwd < -BEHIND_M or fwd > RANGE_M + 40.0:
         continue
-      try:
-        v = float(p["velocity"])
-      except Exception:
-        continue
+      # v3.6.2 — THE SPEED TAG IS OURS, NOT mapd's. `p["velocity"]` is
+      # deliberately not read: SCC-M v2 does not use it, so drawing it would
+      # show the driver a corner speed nothing in the car has agreed to.
+      v = corner_speed_at(plat, plon, corners)
       # which zone is in force at this point. Stored RAW, not folded into a
       # delta: since v3.5.2 the comparison depends on the live set speed and
       # SLA offset, which change every frame while this poll is 1 Hz.
@@ -514,15 +572,6 @@ class RouteMap:
       # behind us or somewhere else entirely.
       self._why(f"all {len(points)} route points out of range, kept 0 of {seen}")
     self._raw = pts
-
-    # the controller's own choice, not ours
-    try:
-      from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_scc_shm
-      g_lat, g_lon, _gv, auth, adv = read_scc_shm()
-      self._advisory = bool(adv)
-      self._gov_ll = (g_lat, g_lon, auth) if (g_lat or g_lon) else None
-    except Exception:
-      self._gov_ll, self._advisory = None, False
 
   # ── pose smoothing ──────────────────────────────────────────────────────
 
@@ -635,8 +684,7 @@ class RouteMap:
       a, b = px(f0, r0), px(f1, r1)
 
       expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
-      delta = (expected - v1) * MPS_TO_MPH if expected > 0 else 0.0
-      c = ramp_color(delta)
+      c = ramp_color(tint_delta_mph(expected, v1))
 
       # SUBDIVIDE. A highway segment can span the whole strip; drawing it as one
       # line meant one opacity for all of it and, worse, dropping the whole
@@ -702,9 +750,11 @@ class RouteMap:
 
     # Text now carries its own shadow: with the plate gone there is nothing
     # behind it but the road.
-    if self._advisory:
-      T.text_shadowed(T.font_bold(), "ADV", rect.x + 12, rect.y + 10, T.SZ_MICRO,
-                      rl.Color(0xFF, 0xB4, 0x54, 230), 1.6)
+    # v3.6.2: the governing corner is one we have driven before, so its speed
+    # is experience rather than a guess from the road's shape.
+    if self._learned:
+      T.text_shadowed(T.font_bold(), "LRN", rect.x + 12, rect.y + 10, T.SZ_MICRO,
+                      rl.Color(0x6E, 0xD2, 0xA8, 230), 1.6)
 
     if not self._have_fix:
       T.text_centered_shadowed(T.font_med(), "NO FIX", cx, rect.y + rect.height / 2 - 14,

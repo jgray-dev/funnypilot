@@ -1,5 +1,10 @@
 """
-FunnyPilot v3.2.6e — SCC-V / SCC-M v2 tests.
+FunnyPilot v3.2.6e — SCC-Vision v2 and the shared curve-speed cap.
+
+v3.6.2: the SCC-M half of this file moved to test_scc_map_v2.py when SCC-M
+was rewritten around measured road geometry. What is left is SCC-V, which is
+unchanged, and CurveSpeedCap, which both controllers still share — so a
+change to it has to be seen to be safe for SCC-V too.
 
 Import-light (numpy + long_v2 modules only):
   python3 -m pytest sunnypilot/selfdrive/controls/lib/long_v2/tests/test_scc_v2.py
@@ -7,13 +12,11 @@ Import-light (numpy + long_v2 modules only):
 import math
 from types import SimpleNamespace
 
-import numpy as np
 
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import (
   CurveSpeedCap, CAP_INACTIVE, ACTIVATE_FRAMES, RELEASE_RATE,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2, lat_accel_limit
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, speed_trim, _J_BP, _J_V
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.tuning import get_tuning
 
 # v3.4.9: the comfort lat-accel target is a TUNING value, so the expectations
@@ -221,69 +224,3 @@ class TestCorroboration:
     assert scc.corroboration > 0.5
     run_vision(scc, make_model([(0.0, 3.0, 4.0)]), v_ego=2., v_cruise=30., n=1)
     assert scc.corroboration == 0.0, "an SCC-V below its speed floor corroborates nothing"
-
-
-def route_north(v_by_index, spacing_deg=0.0005):
-  """Route points going north; ~55.6 m spacing per 0.0005 deg."""
-  return [{"latitude": i * spacing_deg, "longitude": 0.0, "velocity": v}
-          for i, v in enumerate(v_by_index)]
-
-
-def make_map_scc(points, pos=(0.0, 0.0)):
-  return SCCMapV2(params=NoParams(),
-                  position_reader=lambda: pos,
-                  velocities_reader=lambda: points)
-
-
-def run_map(scc, v_ego=30., v_cruise=30., fric=0.8, n=1):
-  for _ in range(n):
-    scc.update({}, True, False, v_ego, 0.0, v_cruise, fric)
-
-
-class TestSCCMap:
-  def test_no_data_inactive(self):
-    scc = make_map_scc([])
-    run_map(scc, n=10)
-    assert not scc.is_active
-    assert scc.output_v_target == CAP_INACTIVE
-
-  def test_slow_curve_ahead_braking_envelope(self):
-    # 10 m/s curve point ~222 m ahead. v3.5.6: the decel budget is INTEGRATED
-    # over distance-to-go, so the envelope is sqrt(v_c^2 + 2*J(d_eff)).
-    points = route_north([30, 30, 30, 30, 10, 30])
-    scc = make_map_scc(points)
-    run_map(scc, n=200)
-    assert scc.is_active
-    v_curve = 10 * speed_trim(0.8)
-    d = 4 * 55.66
-    d_eff = d - v_curve * 2.0
-    expected = math.sqrt(v_curve ** 2 + 2.0 * float(np.interp(d_eff, _J_BP, _J_V)))
-    assert abs(scc.raw_v_target - expected) < 1.0
-    assert abs(scc.output_v_target - expected) < 1.5
-
-  def test_cap_tightens_as_curve_approaches(self):
-    points = route_north([30, 30, 30, 30, 10, 30])
-    far = make_map_scc(points, pos=(0.0, 0.0))
-    near = make_map_scc(points, pos=(0.0015, 0.0))  # ~55 m from the slow point
-    run_map(far, n=1)
-    run_map(near, n=1)
-    assert near.raw_v_target < far.raw_v_target
-
-  def test_passed_curve_releases(self):
-    points = route_north([30, 30, 30, 30, 10, 30, 30])
-    scc = make_map_scc(points, pos=(0.0025, 0.0))  # past the slow point
-    run_map(scc, n=10)
-    assert not scc.is_active
-
-  def test_curve_faster_than_cruise_ignored(self):
-    points = route_north([30, 30, 28, 30])
-    scc = make_map_scc(points)
-    run_map(scc, v_cruise=20., n=10)
-    assert not scc.is_active
-
-  def test_radius_estimate_published(self):
-    points = route_north([30, 30, 10, 30])
-    scc = make_map_scc(points, pos=(0.0005, 0.0))
-    run_map(scc, n=50)
-    assert scc.is_active
-    assert scc.corner_radius_m > 0

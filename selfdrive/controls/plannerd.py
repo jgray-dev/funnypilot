@@ -33,6 +33,10 @@ def main():
   while True:
     sm.update()
     longitudinal_planner.sla.update_car_state(sm['carState'])
+    # FunnyPilot v3.6.2 — SCC-M v2 watches the car here rather than on the
+    # model frame below: the steering reversals it measures are a few Hz and
+    # would alias at 20. Total, so it cannot break the planner loop.
+    longitudinal_planner.update_car_state_sp(sm)
     if sm.updated['modelV2']:
       longitudinal_planner.update(sm)
       longitudinal_planner.publish(sm, pm)
