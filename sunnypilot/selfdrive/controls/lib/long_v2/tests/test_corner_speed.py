@@ -201,3 +201,112 @@ class TestTheApproachEnvelope:
     for v, d in ((0.0, 100.0), (-3.0, 100.0), (float('nan'), 100.0),
                  (12.0, float('nan'))):
       assert CS.approach_cap(v, d) == float('inf') or CS.approach_cap(v, d) >= 12.0
+
+
+class TestSettling:
+  """FunnyPilot v3.6.2 — CONFIDENCE IS CONVERGENCE, NOT ATTENDANCE.
+
+  `confidence_for(visits)` saturates at three visits, so a corner whose speed
+  estimate was still moving 15% on its third pass counted as fully known. That
+  is backwards: a pass that changes the answer is the strongest available
+  evidence that the answer was not yet right. `settle_factor` measures whether
+  successive passes agree, and `confidence_of` requires both.
+  """
+
+  def test_no_movement_is_fully_settled(self):
+    assert CS.settle_factor(0.0) == pytest.approx(1.0)
+    assert CS.settle_factor(CS.DRIFT_SETTLED) == pytest.approx(1.0)
+
+  def test_large_movement_is_not_settled_at_all(self):
+    assert CS.settle_factor(CS.DRIFT_LEARNING) == 0.0
+    assert CS.settle_factor(CS.DRIFT_LEARNING * 10) == 0.0
+
+  def test_it_is_monotone_between(self):
+    xs = [i / 50.0 for i in range(int(CS.DRIFT_LEARNING * 50) + 5)]
+    vals = [CS.settle_factor(x) for x in xs]
+    assert vals == sorted(vals, reverse=True)
+
+  def test_non_finite_drift_is_unsettled_not_settled(self):
+    """MUTATION: return 1.0 for garbage. A corner whose convergence cannot be
+    evaluated would then be handed full authority on the strength of a NaN --
+    failing toward confident is the one direction that costs speed safety."""
+    for bad in (float('nan'), float('inf'), None, "x"):
+      assert CS.settle_factor(bad) == 0.0
+
+  def test_the_users_case_a_third_pass_that_still_moves(self):
+    """A third pass shifting the SPEED by 15% shifts `a` by 1.15^2 = 1.32x,
+    i.e. ~0.6 m/s^2 at a typical budget. The old measure called that certain."""
+    d = CS.DRIFT_UNKNOWN
+    for moved in (0.6, 0.2, 0.58):
+      d = CS.update_drift(d, moved)
+    assert CS.confidence_for(3) == 1.0            # what it used to say
+    assert CS.confidence_of(3, d) < 0.2           # what it says now
+
+  def test_repeated_agreement_converges_to_certainty(self):
+    """The other direction, or the measure would just be a way of never
+    trusting anything. Ten identical passes must reach 1.0."""
+    d = CS.DRIFT_UNKNOWN
+    for _ in range(10):
+      d = CS.update_drift(d, 0.0)
+    assert CS.confidence_of(10, d) == pytest.approx(1.0)
+
+  def test_drift_never_goes_negative(self):
+    """It is an absolute movement; a negative one would invert settle_factor."""
+    d = CS.DRIFT_UNKNOWN
+    for moved in (-5.0, 0.0, -0.3):
+      d = CS.update_drift(d, moved)
+      assert d >= 0.0
+
+  def test_movement_sign_does_not_matter(self):
+    """Moving the answer down is exactly as much evidence of unsettledness as
+    moving it up. MUTATION: drop the abs() and a corner that only ever slows
+    would read as perfectly settled."""
+    assert CS.update_drift(0.1, -0.5) == pytest.approx(CS.update_drift(0.1, 0.5))
+
+  def test_visits_alone_are_not_enough(self):
+    """The exact conflation this release exists to undo, stated directly."""
+    assert CS.confidence_for(50) == 1.0
+    assert CS.confidence_of(50, CS.DRIFT_LEARNING) == 0.0
+
+  def test_settling_alone_is_not_enough_either(self):
+    """A single pass has nothing to disagree with, so it trivially looks
+    settled. Requiring both is what stops one lucky pass buying speed."""
+    assert CS.settle_factor(0.0) == 1.0
+    assert CS.confidence_of(1, 0.0) < 1.0
+
+  def test_no_drift_argument_is_the_old_behaviour(self):
+    """A caller with no drift history must get exactly the the first cut of v3.6.2 answer,
+    which is what keeps this change confined to the callers that opted in."""
+    for n in range(6):
+      assert CS.confidence_of(n) == pytest.approx(CS.confidence_for(n))
+
+
+class TestDriftCannotDelayASlowdown:
+  """THE SAFETY PROPERTY OF THE WHOLE RELEASE, and it is structural rather
+  than numerical: `drift` enters `effective_a_lat` only through `c`, and the
+  lowering branch floors `c` at CONF_LOWER_FLOOR. So convergence can make the
+  car earn speed more slowly and can do nothing else.
+  """
+
+  def test_a_slowdown_is_identical_however_unsettled(self):
+    """MUTATION: apply the confidence weight symmetrically (drop the
+    `max(c, CONF_LOWER_FLOOR)` branch) and an unsettled corner would stop
+    being allowed to tell us it is slow."""
+    settled = CS.effective_a_lat(1.2, 1.2, visits=1, drift=0.0)
+    unsettled = CS.effective_a_lat(1.2, 1.2, visits=1, drift=CS.DRIFT_LEARNING)
+    assert settled == pytest.approx(unsettled)
+    assert unsettled < CS.A_LAT_DEFAULT
+
+  def test_garbage_drift_still_cannot_delay_a_slowdown(self):
+    for bad in (float('nan'), float('inf')):
+      assert CS.effective_a_lat(1.2, 1.2, visits=1, drift=bad) < CS.A_LAT_DEFAULT
+
+  def test_an_unsettled_corner_cannot_buy_speed(self):
+    """The other half. MUTATION: pass `visits` where `drift` belongs, or drop
+    the drift argument at the call site in scc_map_v2._lookup."""
+    fast = CS.effective_a_lat(2.6, 3.0, visits=3, drift=CS.DRIFT_LEARNING)
+    assert fast == pytest.approx(CS.A_LAT_DEFAULT)
+
+  def test_a_settled_corner_does_buy_speed(self):
+    fast = CS.effective_a_lat(2.6, 3.0, visits=3, drift=0.0)
+    assert fast > CS.A_LAT_DEFAULT

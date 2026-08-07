@@ -17,10 +17,16 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import scc_shm
 
 
 class Corner:
-  """The five attributes write_corners_shm needs, i.e. TrackedCorner's shape."""
-  def __init__(self, lat, lon, half_len, v_target, confidence):
+  """The attributes write_corners_shm needs, i.e. TrackedCorner's shape.
+
+  v3.6.2 — `settled` replaces `confidence` here, and `visits` is new. Those
+  are two different questions (has the answer converged / have we been here
+  at all) and the minimap needs both; see SCCMapV2._lookup.
+  """
+  def __init__(self, lat, lon, half_len, v_target, settled, visits=0):
     self.lat, self.lon = lat, lon
-    self.half_len, self.v_target, self.confidence = half_len, v_target, confidence
+    self.half_len, self.v_target = half_len, v_target
+    self.settled, self.visits = settled, visits
 
 
 @pytest.fixture
@@ -75,13 +81,44 @@ class TestTheCornerList:
   store on /data, and nothing in the onroad HUD may touch a filesystem."""
 
   def test_round_trip(self, paths):
-    scc_shm.write_corners_shm([Corner(35.1, -78.2, 40.0, 12.5, 0.45),
-                               Corner(35.2, -78.3, 90.0, 18.0, 1.0)])
+    scc_shm.write_corners_shm([Corner(35.1, -78.2, 40.0, 12.5, 0.45, visits=2),
+                               Corner(35.2, -78.3, 90.0, 18.0, 1.0, visits=9)])
     out = scc_shm.read_corners_shm()
     assert len(out) == 2
     assert out[0][0] == pytest.approx(35.1, abs=1e-5)
     assert out[0][3] == pytest.approx(12.5, abs=0.01)
     assert out[1][4] == pytest.approx(1.0, abs=0.01)
+    assert out[0][5] == 2 and out[1][5] == 9
+
+  def test_a_five_field_line_still_tints_but_claims_no_visits(self, paths):
+    """v3.6.2 widened the entry from 5 fields to 6. A 5-field line — an older
+    writer, or a torn upgrade — must still yield its SPEED, which is what the
+    tint needs and is always valid, while reporting 0 visits so no learned
+    ring is drawn for a corner the line cannot vouch for.
+
+    MUTATION: require 6 fields and the ribbon loses its tint entirely on any
+    version skew, which is a far louder failure than a missing ring."""
+    (paths / "fp_corners").write_text(
+      f"{time.monotonic():.3f};35.1,-78.2,40,12.5,0.45")
+    out = scc_shm.read_corners_shm()
+    assert len(out) == 1
+    assert out[0][3] == pytest.approx(12.5, abs=0.01)
+    assert out[0][5] == 0
+
+  def test_a_garbage_visit_count_is_zero_not_fatal(self, paths):
+    """The visit count is the only integer on this line, so it is the only
+    field a bad write can make unparseable without also killing the floats."""
+    (paths / "fp_corners").write_text(
+      f"{time.monotonic():.3f};35.1,-78.2,40,12.5,0.45,banana")
+    out = scc_shm.read_corners_shm()
+    assert len(out) == 1 and out[0][5] == 0
+
+  def test_a_negative_visit_count_reads_as_none(self, paths):
+    """Nothing can be visited -3 times; clamping rather than trusting keeps a
+    corrupt line from producing a ring with a nonsensical opacity."""
+    (paths / "fp_corners").write_text(
+      f"{time.monotonic():.3f};35.1,-78.2,40,12.5,0.45,-3")
+    assert scc_shm.read_corners_shm()[0][5] == 0
 
   def test_an_empty_list_round_trips(self, paths):
     scc_shm.write_corners_shm([])
@@ -110,7 +147,8 @@ class TestTheCornerList:
   def test_the_payload_is_bounded(self, paths):
     """A 20 Hz write whose size depends on how curvy the road is would be a
     cost that only appears where it is hardest to debug."""
-    scc_shm.write_corners_shm([Corner(35.0 + i * 0.001, -78.0, 40.0, 12.0, 0.5)
+    scc_shm.write_corners_shm([Corner(35.0 + i * 0.001, -78.0, 40.0, 12.0, 0.5,
+                                      visits=12345)
                                for i in range(200)])
     assert len(scc_shm.read_corners_shm()) <= scc_shm.MAX_CORNERS
     assert len((paths / "fp_corners").read_text()) < 1200

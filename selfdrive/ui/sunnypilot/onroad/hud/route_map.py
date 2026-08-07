@@ -32,16 +32,27 @@ drift the moment either was tuned, and a debug readout that disagrees with the
 controller is worse than none.
 
 THE CIRCLE marks a corner we have DRIVEN, not the one currently governing —
-v3.6.3 replaced the "which point is braking us now" crosshair with "which
+v3.6.2 replaced the "which point is braking us now" crosshair with "which
 points on this ribbon has the car actually learned". It sits over the apex,
-one per learned corner from /dev/shm/fp_corners, and its opacity is exactly
-`confidence_for(visits)` from corner_speed.py — the SAME weight
-`effective_a_lat` gives the learned value when it sets the corner's speed.
-One visit reads faint (0.45), three or more reads solid (1.0). An unvisited
-corner has confidence 0.0 and is filtered out before this module ever sees
-it — the map draws nothing for a corner priced by geometry alone, because
-that corner has no "how sure are we" to show. "LRN" still means the corner
-currently governing is one of these.
+one per learned corner from /dev/shm/fp_corners.
+
+ITS OPACITY IS CONVERGENCE, NOT ATTENDANCE, and getting that distinction
+wrong was the bug this replaced. The first version used
+`confidence_for(visits)`, which saturates at three visits — so a corner whose
+speed estimate was still moving 15% on its third pass drew a fully solid
+ring, announcing certainty about a number that was still being argued over.
+The opacity is now `confidence_of(visits, drift)`: it requires both enough
+passes to have evidence AND that evidence having stopped changing its mind.
+A corner driven thousands of times whose answer never moves reaches full
+opacity; one driven three times that keeps shifting does not, and no number
+of further disagreeing passes will get it there.
+
+A corner with zero visits is filtered out entirely — it has no "how sure are
+we" to show, because it was priced by geometry alone. A corner with exactly
+one visit is drawn at SEEN_MIN_ALPHA: it has converged on nothing yet (there
+is no second pass to agree with), but "we have been here" is a real fact and
+a different claim from "we know how fast to take it". "LRN" still means the
+corner currently governing is one of these.
 
 COST. `MapTargetVelocities` is a JSON array of a few hundred points and the
 source data is 1 Hz, so it is parsed at POLL_S and projected into ego-relative
@@ -191,31 +202,58 @@ def corner_speed_at(lat: float, lon: float, corners) -> float:
   return best
 
 
+# v3.6.2 — the faintest a ring is ever drawn. A corner driven ONCE has, by
+# construction, converged on nothing yet: there is no second pass for it to
+# agree with, so its settled-confidence is ~0 and the ring would be invisible.
+# But "we have been here" is worth showing on its own, and it is a DIFFERENT
+# claim from "we know how fast to take it". The floor states the first without
+# implying the second.
+SEEN_MIN_ALPHA = 0.20
+
+
 def learned_corners_from(corners) -> list[tuple[float, float, float]]:
-  """(lat, lon, conf) for every corner we've actually driven, out of what
-  read_corners_shm() returned -- i.e. conf > 0.0.
+  """(lat, lon, settled) for every corner we have actually DRIVEN, out of what
+  read_corners_shm() returned — i.e. `visits >= 1`.
+
+  THE FILTER IS ON VISITS, THE OPACITY IS ON `settled`, AND THAT SPLIT IS THE
+  WHOLE POINT (v3.6.2). Whether to draw a ring at all is a question about
+  EXISTENCE — have we been here — which only the visit count answers. How
+  solid to draw it is a question about CONVERGENCE — has the answer stopped
+  moving — which only `settled` answers. Filtering on `settled` instead would
+  hide every corner during its first few passes, which are exactly the ones a
+  driver watching the first drives needs to watch appear.
 
   Pulled out of _poll() so the filter DIRECTION is testable off-device.
   _poll() itself needs a live /dev/shm handle and nothing off-device can
   reach it, and this repo has shipped exactly this class of bug before
   (LearnStore.nearby's ahead_only flip, v3.6.2) with every other test still
-  green. `conf` is index 4 of each (lat, lon, half_len, v, conf) tuple.
+  green.
   """
-  return [(c[0], c[1], c[4]) for c in corners if c[4] > 0.0]
+  return [(c[0], c[1], c[4]) for c in corners if len(c) > 5 and c[5] >= 1]
 
 
 def confidence_alpha(conf: float) -> int:
-  """A learned corner's ring opacity, 0..255, straight from confidence_for().
+  """A learned corner's ring opacity, 0..255, from its SETTLED confidence.
+
+  v3.6.2 — WHAT THIS NUMBER MEANS CHANGED, AND THAT WAS THE FIX. It used to be
+  `confidence_for(visits)`, which saturates at three visits, so a corner still
+  shifting its own answer by 15% on its third pass painted a fully solid ring.
+  It is now `confidence_of(visits, drift)`: successive passes have to AGREE,
+  not merely accumulate. A corner driven thousands of times whose speed never
+  moves reaches 1.0; three passes that keep changing their mind do not.
+
+  Floored at SEEN_MIN_ALPHA because every corner that reaches this function
+  has been driven at least once (see learned_corners_from), and that fact
+  deserves to be visible before anything has converged.
 
   Pulled out of render() so it is testable off-device — the same treatment
   tint_delta_mph got in v3.5.9, for the same reason: nothing inside render()
   is reachable without a GL context, so a mutation here would be invisible to
-  the whole suite. Non-finite input reads as "not sure at all", never as
-  "fully confident" — a garbage confidence must not paint a solid ring.
+  the whole suite. Non-finite input reads as the FLOOR, never as fully
+  confident — a garbage number must not paint a solid ring.
   """
-  if not T.finite(conf):
-    return 0
-  return int(T.clamp(conf, 0.0, 1.0) * 255)
+  c = T.clamp(conf, 0.0, 1.0) if T.finite(conf) else 0.0
+  return int(max(SEEN_MIN_ALPHA, c) * 255)
 
 
 def tint_delta_mph(expected_mps: float, corner_mps: float) -> float:
@@ -551,7 +589,7 @@ class RouteMap:
     except Exception:
       self._learned = False
 
-    # v3.6.3: which of these corners have we actually DRIVEN. Filtered here,
+    # v3.6.2: which of these corners have we actually DRIVEN. Filtered here,
     # once per poll, rather than in render(): a corner's learned state does
     # not change frame to frame, and render() should not spend a
     # comprehension on every draw.
@@ -771,13 +809,13 @@ class RouteMap:
         T.text_centered_shadowed(T.font_bold(), str(round(new_lim * conv)),
                                  g[0], g[1] - 30, T.SZ_MICRO, col, 2.0)
 
-    # v3.6.3 — one ring per corner we have actually DRIVEN, centred on that
+    # v3.6.2 — one ring per corner we have actually DRIVEN, centred on that
     # corner's own apex, not on whichever point currently governs. Opacity is
-    # `confidence_for(visits)` exactly as read off /dev/shm/fp_corners — the
-    # same weight the controller itself gives the learned value. A corner with
-    # no visits has confidence 0.0 and was already filtered out in _poll(), so
-    # nothing is drawn for a corner priced by geometry alone: there is no
-    # "how sure are we" to show for it.
+    # the corner's SETTLED confidence as read off /dev/shm/fp_corners — the
+    # same weight the controller itself gives the learned value in
+    # `effective_a_lat`, so the ring and the car cannot disagree. A corner
+    # with no visits was filtered out in _poll(): nothing is drawn for a
+    # corner priced by geometry alone, because it has no "how sure are we".
     rad = rect.width * 0.075
     for cf, cr, conf in corners:
       g = px(cf, cr)

@@ -744,69 +744,108 @@ class TestTintDelta:
 
 
 class TestLearnedCornersFrom:
-  """v3.6.3. The filter direction is the whole safety property: this repo has
-  shipped the flipped version of exactly this kind of test before
-  (LearnStore.nearby's ahead_only bug, v3.6.2) with every other test in the
-  suite still green, because the bug lived one layer past what could be
-  reached off-device. Pulling it out of _poll() is what makes it reachable.
+  """v3.6.2. Whether to draw a ring is an EXISTENCE question (have we been
+  here), answered by the visit count -- NOT by the settled confidence, which
+  answers the separate question of how solid to draw it. Filtering on the
+  wrong one hides every corner during exactly the first few passes a driver
+  most wants to watch.
+
+  The filter direction is also the whole safety property: this repo has
+  shipped the flipped version of this kind of test before (LearnStore.nearby's
+  ahead_only bug, v3.6.2) with every other test in the suite still green,
+  because the bug lived one layer past what could be reached off-device.
+  Pulling it out of _poll() is what makes it reachable.
   """
 
-  def _c(self, lat=1.0, lon=2.0, half=50.0, v=12.0, conf=0.0):
-    return (lat, lon, half, v, conf)
+  def _c(self, lat=1.0, lon=2.0, half=50.0, v=12.0, settled=0.0, visits=0):
+    return (lat, lon, half, v, settled, visits)
 
   def test_a_driven_corner_survives(self):
-    out = _rm.learned_corners_from([self._c(conf=0.45)])
+    out = _rm.learned_corners_from([self._c(settled=0.45, visits=2)])
     assert out == [(1.0, 2.0, 0.45)]
 
   def test_an_unvisited_corner_is_dropped(self):
-    """MUTATION: flip `> 0.0` to `<= 0.0` and this is the only thing that
-    catches it -- every other test in the suite passes either way."""
-    assert _rm.learned_corners_from([self._c(conf=0.0)]) == []
+    """MUTATION: flip `>= 1` to `< 1` and this is the only thing that catches
+    it -- every other test in the suite passes either way."""
+    assert _rm.learned_corners_from([self._c(visits=0)]) == []
+
+  def test_a_visited_but_unsettled_corner_is_still_drawn(self):
+    """THE REGRESSION THIS CLASS EXISTS FOR. A first-visit corner has settled
+    confidence ~0, because it has no second pass to agree with. Filtering on
+    settled -- the obvious-looking mistake -- would make every corner
+    invisible until its fourth or fifth drive.
+
+    MUTATION: filter on `c[4] > 0.0` instead of the visit count."""
+    assert _rm.learned_corners_from([self._c(settled=0.0, visits=1)]) \
+      == [(1.0, 2.0, 0.0)]
 
   def test_mixed_list_keeps_only_the_driven_ones(self):
-    driven = self._c(lat=3.0, lon=4.0, conf=1.0)
-    unvisited = self._c(lat=5.0, lon=6.0, conf=0.0)
+    driven = self._c(lat=3.0, lon=4.0, settled=1.0, visits=40)
+    unvisited = self._c(lat=5.0, lon=6.0, settled=0.0, visits=0)
     assert _rm.learned_corners_from([unvisited, driven]) == [(3.0, 4.0, 1.0)]
+
+  def test_a_short_legacy_entry_draws_no_ring(self):
+    """A 5-field entry (the first cut of v3.6.2 writer, or a torn upgrade) carries no visit
+    count. read_corners_shm defaults it to 0, and a corner we cannot vouch for
+    gets no ring -- while its SPEED still tints the ribbon, which is the
+    quieter and more useful degradation."""
+    assert _rm.learned_corners_from([(1.0, 2.0, 50.0, 12.0, 0.9)]) == []
 
   def test_an_empty_list_is_empty(self):
     assert _rm.learned_corners_from([]) == []
 
 
 class TestConfidenceAlpha:
-  """v3.6.3. The 'have we driven this corner' ring replaced the old governing-
-  point crosshair. Its opacity IS confidence_for(visits) — not a re-derived
-  measure of how many times we've seen it — so this pins the arithmetic and
-  the fail-safe direction of every edge case a mutation could hide behind."""
+  """v3.6.2. The ring's opacity is CONVERGENCE, not attendance.
 
-  def test_matches_confidence_for_at_the_documented_steps(self):
-    """One visit -> faint, three-plus -> solid. These are the exact numbers
-    corner_speed.confidence_for() produces, not independently chosen ones."""
-    assert _rm.confidence_alpha(0.0) == 0
-    assert _rm.confidence_alpha(0.45) == 114     # confidence_for(1)
-    assert _rm.confidence_alpha(0.725) == 184    # confidence_for(2)
-    assert _rm.confidence_alpha(1.0) == 255      # confidence_for(3+)
+  The first cut of this used `confidence_for(visits)`, which saturates at
+  three visits -- so a corner whose speed estimate was still moving 15% on its
+  third pass drew a fully solid ring, claiming certainty about a number that
+  was still being argued over. It is `confidence_of(visits, drift)` now, which
+  additionally requires successive passes to agree.
+  """
 
-  def test_zero_confidence_is_fully_transparent(self):
-    """MUTATION: a floor above zero would draw a faint ring for a corner
-    nobody has ever driven -- exactly the case _poll() already filters out,
-    so this is the second line of defence."""
-    assert _rm.confidence_alpha(0.0) == 0
+  def test_a_settled_corner_is_solid(self):
+    assert _rm.confidence_alpha(1.0) == 255
+
+  def test_a_first_visit_is_faint_but_visible(self):
+    """A corner driven once has converged on nothing, so its settled
+    confidence is ~0 -- but it HAS been driven, and that is worth seeing.
+    SEEN_MIN_ALPHA is what says so, and 20% is the requested value.
+
+    MUTATION: drop the floor and every corner is invisible for its first
+    several drives, which reads as the feature not working at all."""
+    assert _rm.confidence_alpha(0.0) == int(_rm.SEEN_MIN_ALPHA * 255)
+    assert _rm.confidence_alpha(0.0) > 0
+
+  def test_partial_confidence_lands_between(self):
+    """The middle of the range has to actually vary, or the ring is a
+    two-state lamp wearing a gradient's clothes."""
+    faint = _rm.confidence_alpha(0.0)
+    mid = _rm.confidence_alpha(0.6)
+    assert faint < mid < 255
+    assert mid == int(0.6 * 255)
+
+  def test_it_is_monotone_in_confidence(self):
+    vals = [_rm.confidence_alpha(c / 20.0) for c in range(21)]
+    assert vals == sorted(vals)
 
   def test_clamped_to_the_valid_range(self):
-    """A store bug that let confidence drift outside [0, 1] must not paint a
-    ring darker than solid or invert to negative alpha."""
+    """A store bug that let confidence outside [0, 1] must not paint a ring
+    darker than solid or invert to a negative alpha."""
     assert _rm.confidence_alpha(1.4) == 255
-    assert _rm.confidence_alpha(-0.3) == 0
+    assert _rm.confidence_alpha(-0.3) == int(_rm.SEEN_MIN_ALPHA * 255)
 
-  def test_non_finite_reads_as_not_confident_at_all(self):
+  def test_non_finite_reads_as_the_floor_not_as_certainty(self):
     """MUTATION: NaN/inf falling through to int() would either crash the
-    onroad draw loop or paint a solid ring for a value that means nothing."""
+    onroad draw loop or paint a solid ring for a value that means nothing.
+    It degrades to "seen, not settled", the most modest claim available."""
     for bad in (float('nan'), float('inf'), float('-inf')):
-      assert _rm.confidence_alpha(bad) == 0
+      assert _rm.confidence_alpha(bad) == int(_rm.SEEN_MIN_ALPHA * 255)
 
 
 class TestLearnedCornerProjection:
-  """v3.6.3 — RouteMap._project() now carries the learned-corner list through
+  """v3.6.2 — RouteMap._project() now carries the learned-corner list through
   the same ego-frame projection and lateral shift as the ribbon itself, so a
   learned ring lands exactly on the road it belongs to rather than drifting
   off it the way the pre-shift marker would have.

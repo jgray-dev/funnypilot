@@ -39,6 +39,21 @@ FASTER. So the floor rises slowly (ALPHA_FLOOR) and the ceiling falls quickly
 evidence that we must not. Whoever tunes these next should read that sentence
 before touching either number — they look symmetric and they are not.
 
+────────────────────────────────────────────────────────────────────────────
+v3.6.2 — CONFIDENCE IS CONVERGENCE, NOT ATTENDANCE
+
+Until v3.6.2 `confidence` was `confidence_for(visits)` alone, saturating at
+three visits. That measures how often we have been somewhere, which is not the
+same question as whether we have worked out the answer, and the two come apart
+exactly where it matters: a corner whose estimate was still moving 15% on its
+third pass was being treated as fully known.
+
+A record therefore also carries `d`, the mean movement of its own learned value
+per visit. `confidence_of(visits, drift)` requires BOTH — enough passes to have
+evidence, AND that evidence having stopped changing its mind. Ten thousand
+identical passes converge on 1.0; three passes that disagree do not, and no
+number of further disagreeing passes will.
+
 Import-light (stdlib only).
 """
 import math
@@ -74,6 +89,35 @@ CONF_FIRST = 0.45
 CONF_STEP = 0.275
 CONF_FULL_VISITS = 3
 CONF_LOWER_FLOOR = 0.75   # minimum weight given to a learned value BELOW default
+
+# ── settling: has the answer stopped moving? ───────────────────────────────
+#
+# v3.6.2 — COUNTING VISITS IS NOT CONFIDENCE, AND THIS IS THE FIX.
+# `confidence_for` saturates at three visits, so a corner whose estimate was
+# STILL SHIFTING on its third pass was treated as fully known. That is exactly
+# backwards: a third pass that moves the answer 15% is the strongest available
+# evidence that we do NOT yet know this corner. Visit count and convergence
+# come apart precisely in the case where getting it right matters.
+#
+# So a record also carries `d`: the mean absolute movement of its learned
+# value, m/s^2 per visit, EMA'd. A corner is settled when successive passes
+# stop changing the answer, which is the thing the word confidence should have
+# meant all along. Ten thousand identical passes drive `d` to zero; three
+# passes that disagree keep it high however many follow.
+#
+# UNITS MATTER FOR READING THESE. The speed is sqrt(a*R), so a 15% change in
+# SPEED is a 1.15^2 = 1.32x change in `a` — about 0.6 m/s^2 at a typical 1.8.
+# DRIFT_LEARNING is deliberately well under that: a pass that moves the answer
+# by half of the user's example already reads as fully unsettled.
+# DRIFT_SETTLED 0.04 is ~1% of a corner speed, i.e. under the resolution
+# anything downstream can act on.
+DRIFT_ALPHA = 0.35        # EMA weight on each pass's movement
+DRIFT_SETTLED = 0.04      # m/s^2 per visit: at or below, fully settled
+DRIFT_LEARNING = 0.35     # ...at or above, not settled at all
+# What a record with no drift history is assumed to be. UNSETTLED, not settled:
+# an unknown convergence state must cost the corner its earned speed rather
+# than grant it. Fresh records and the first cut of v3.6.2 journal lines both land here.
+DRIFT_UNKNOWN = DRIFT_LEARNING
 
 # ── the approach envelope (carried over verbatim from v3.5.6/v3.6.1) ───────
 #
@@ -133,6 +177,57 @@ def confidence_for(visits: int) -> float:
   return min(1.0, CONF_FIRST + CONF_STEP * (min(n, CONF_FULL_VISITS) - 1))
 
 
+def settle_factor(drift: float) -> float:
+  """[0, 1] — how far this corner's answer has stopped moving.
+
+  1.0 means successive passes agree to within DRIFT_SETTLED; 0.0 means the
+  estimate is still being shoved around by every pass. Non-finite reads as
+  UNSETTLED, never as settled: a corner whose convergence we cannot evaluate
+  must not be handed full authority on the strength of a NaN.
+  """
+  if not finite(drift):
+    return 0.0
+  span = DRIFT_LEARNING - DRIFT_SETTLED
+  if span <= 0.0:
+    return 1.0 if drift <= DRIFT_SETTLED else 0.0
+  return 1.0 - clamp((float(drift) - DRIFT_SETTLED) / span, 0.0, 1.0)
+
+
+def update_drift(drift: float, moved: float) -> float:
+  """Fold one pass's movement of the learned value into the drift estimate.
+
+  `moved` is |new learned a_lat - old|, in m/s^2. An EMA rather than a running
+  mean deliberately: a corner that was chaotic while the store was learning it
+  and has since settled should be allowed to read as settled, and a running
+  mean would hold its own early history against it forever.
+  """
+  d = float(drift) if finite(drift) else DRIFT_UNKNOWN
+  m = abs(float(moved)) if finite(moved) else 0.0
+  return max(0.0, d + (m - d) * DRIFT_ALPHA)
+
+
+def confidence_of(visits: int, drift: float = 0.0) -> float:
+  """How much we trust this corner's learned value. v3.6.2.
+
+  TWO INDEPENDENT THINGS HAVE TO BE TRUE, so they multiply rather than
+  either one standing alone:
+
+    confidence_for(visits)   we have been here enough times to have evidence
+    settle_factor(drift)     that evidence has stopped changing its mind
+
+  Visits alone was the whole measure until v3.6.2 and it was wrong in the one
+  direction that costs speed for no reason — a corner still adjusting on its
+  third pass read as fully known. Convergence alone would be wrong too: a
+  single pass has nothing to disagree with yet, so it trivially looks settled.
+  Requiring both is what makes the number mean what its name says.
+
+  `drift` defaults to 0.0 — perfectly settled — so a caller that has no drift
+  history gets exactly the the first cut of v3.6.2 answer. Callers that DO have one pass it;
+  see LearnStore.Corner.d.
+  """
+  return confidence_for(visits) * settle_factor(drift)
+
+
 def speed_for(radius_m: float, a_lat: float) -> float:
   """v = sqrt(a_lat * R). The one equation. Returns 0.0 on nonsense."""
   if not (finite(radius_m) and finite(a_lat)) or radius_m <= 0.0 or a_lat <= 0.0:
@@ -148,16 +243,24 @@ def lat_accel_for(radius_m: float, v: float) -> float:
 
 
 def effective_a_lat(a_lo: float, a_hi: float, visits: int,
-                    default: float = A_LAT_DEFAULT) -> float:
+                    default: float = A_LAT_DEFAULT, drift: float = 0.0) -> float:
   """Blend the learned interval with the default by confidence.
 
   DIRECTION MATTERS, and this is the whole safety posture of the feature in
   four lines. A learned value ABOVE the default is a claim that we may go
-  faster than the geometry alone would allow, and it is weighted by visit count
-  so one lucky pass cannot buy it. A learned value BELOW the default is a claim
-  that we must go slower, and it is given at least CONF_LOWER_FLOOR weight
-  immediately, because withholding a slowdown until the third visit is not a
-  conservative choice.
+  faster than the geometry alone would allow, and it is weighted by confidence
+  so neither one lucky pass nor three disagreeing ones can buy it. A learned
+  value BELOW the default is a claim that we must go slower, and it is given at
+  least CONF_LOWER_FLOOR weight immediately, because withholding a slowdown
+  until the third visit is not a conservative choice.
+
+  v3.6.2 — `drift` ENTERS THROUGH `c` AND THEREFORE THROUGH ONE BRANCH ONLY.
+  An unsettled corner has a lower `c`, which slows down the RAISING case and
+  cannot touch the lowering case, because that one is floored at
+  CONF_LOWER_FLOOR regardless of what `c` is. So convergence can only ever make
+  the car earn speed more slowly; it can never delay a slowdown. That is a
+  property of the structure here, not of the numbers, and it is worth keeping
+  that way — `test_drift_cannot_delay_a_slowdown` pins it.
 
   `min(a_lo, a_hi)` first: a ceiling always beats a floor. If a corner has
   proved it supports 2.4 and later proved it does not support 2.0, the answer
@@ -166,7 +269,7 @@ def effective_a_lat(a_lo: float, a_hi: float, visits: int,
   lo = float(a_lo) if finite(a_lo) else default
   hi = float(a_hi) if finite(a_hi) else A_LAT_MAX
   learned = clamp(min(lo, hi), A_LAT_MIN, A_LAT_MAX)
-  c = confidence_for(visits)
+  c = confidence_of(visits, drift)
   if learned >= default:
     w = c
   else:

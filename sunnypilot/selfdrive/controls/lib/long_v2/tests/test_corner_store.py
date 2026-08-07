@@ -336,10 +336,15 @@ class TestNearby:
 
 def test_store_json_is_compact():
   """25,000 records have to fit somewhere reasonable on a device whose disk
-  pressure is already a documented failure mode."""
+  pressure is already a documented failure mode.
+
+  v3.6.2 re-baselined 130 -> 135 for the eleventh field, `d`. That is +7 bytes
+  worst case, i.e. ~175 KB across a full MAX_RECORDS store against an 8 MB
+  MAX_JOURNAL_BYTES cap — the bound is re-stated rather than removed, because
+  its job is to make the NEXT field an explicit decision too."""
   line = S.Corner(37.123456, -122.654321, 91.4, 1.83, 2.44, 118.0,
-                  n=7, t=1.7e9, flags=3).to_json("1234,5678,2")
-  assert len(line) < 130
+                  n=7, t=1.7e9, flags=3, d=0.123).to_json("1234,5678,2")
+  assert len(line) < 135
 
 
 class TestLookingUpACornerAtItsOwnPosition:

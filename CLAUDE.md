@@ -119,6 +119,93 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.2, second pass — confidence (same branch, NOT a version bump)
+
+VERSION DELIBERATELY NOT BUMPED, and the reason is a constraint rather than
+laziness: `nav_webserver._eval_diag` matches `EXPECTED_VERSION` against the
+BRANCH NAME (`EXPECTED_VERSION in s`) and hard-FAILS `updater_target` when the
+updater's branch does not contain it. So the version and the branch are
+coupled by construction — bumping to 3.6.3 on `funnypilot-3.6.2` breaks the
+Verify page, and the branching policy above wants a new branch per version.
+v3.6.2 has never been flashed, so this is a correction to unshipped work
+rather than a release. If it should be its own flashable version, cut
+`funnypilot-3.6.3` and bump both files together.
+
+CONFIDENCE IS CONVERGENCE, NOT ATTENDANCE. Owner-reported, and correct:
+`confidence_for(visits)` saturated at three visits, so a corner whose speed
+estimate was STILL MOVING 15% on its third pass was treated as fully known —
+by the cap AND by the minimap. Counting how often we have been somewhere is
+not the same question as whether we have worked out the answer, and the two
+come apart exactly where getting it right matters.
+
+- `long_v2/corner_speed.py` — NEW `settle_factor`, `update_drift`,
+  `confidence_of(visits, drift)`. A record now also carries the mean movement
+  of its own learned value per visit, and confidence REQUIRES BOTH: enough
+  passes to have evidence, and that evidence having stopped changing its mind.
+  Multiplied, not either alone — one pass has nothing to disagree with yet, so
+  convergence alone would call it settled. **UNITS FOR READING THE
+  CONSTANTS**: speed is sqrt(a*R), so a 15% SPEED change is a 1.32x change in
+  `a`, ~0.6 m/s^2 at a typical budget; `DRIFT_LEARNING` 0.35 is deliberately
+  well under that, so half the reported case already reads fully unsettled.
+  Measured: identical passes reach 1.0 at the SEVENTH visit (was the third);
+  the reported case reads 0.00 where it used to read 1.00.
+  **`drift` ENTERS `effective_a_lat` THROUGH `c` AND THEREFORE THROUGH ONE
+  BRANCH ONLY** — the lowering case is floored at `CONF_LOWER_FLOOR`
+  regardless, so convergence can only ever make the car EARN SPEED MORE
+  SLOWLY and can never delay a slowdown. That is structural, not numerical.
+  `drift` defaults to 0.0 (= settled), so every pre-existing caller and test
+  gets the old answer and the change is confined to who opts in.
+- `long_v2/scc_learn_store.py` — `Corner` gains `d`. Measured on
+  `min(a_lo, a_hi)`, THE RAW LEARNED VALUE, **not on `effective_a_lat`** —
+  the effective value already contains the confidence weight and confidence is
+  computed FROM this drift, so using it closes a loop in which a corner that
+  lost confidence appears to move less, regains it, moves more, and
+  oscillates. A journal line from the first cut has no `d` and reads as UNSETTLED, not
+  settled: unknown convergence must cost a record its earned speed rather than
+  grant it. Record size 130 -> 135 bytes, re-baselined rather than removed.
+- **THE ADVERSARIAL TEST I WROTE WAS IMPOSSIBLE, AND THE REASON IS A REAL
+  PROPERTY**: `update_interval` only ever RAISES `a_lo` and only ever LOWERS
+  `a_hi`, both clamped, so `min(a_lo, a_hi)` is MONOTONE and its total travel
+  is bounded. A corner cannot argue with itself indefinitely and drift must
+  decay however adversarial the passes — there is no "permanently unsettled"
+  mode where the feature silently refuses to learn. Pinned as
+  `test_confidence_cannot_be_withheld_forever`; anyone slowing `DRIFT_ALPHA`
+  needs that bound.
+- `long_v2/scc_map_v2.py` — `_lookup` returns FOUR values now, because TWO
+  DIFFERENT QUESTIONS were being answered by one number. `corroboration`
+  (= `confidence_for(visits)`, unchanged) is scc_fusion's "is this a real
+  corner, independently of OSM" and one completed pass is all the evidence it
+  needs; `settled` is "do we trust the NUMBER". **THE FUSION'S BEHAVIOUR IS
+  DELIBERATELY UNCHANGED BY THIS RELEASE** — folding convergence into the
+  vision-veto bypass would have been a silent second change riding along.
+- `long_v2/scc_shm.py` — fp_corners field 5 is `settled` (was `confidence`),
+  field 6 `visits` is NEW. Publishing the fusion's number and labelling it
+  confidence is the conflation this release undoes. A 5-field line still
+  yields its SPEED (which is what the tint needs and is always valid) with
+  visits defaulted to 0, so version skew loses a ring rather than the ribbon.
+- `hud/route_map.py` — THE CROSSHAIR IS GONE. It marked whichever point was
+  braking us; the ring now marks every corner we have DRIVEN, on its own apex.
+  **THE FILTER IS ON VISITS AND THE OPACITY IS ON `settled`** — whether to
+  draw is an EXISTENCE question, how solid to draw it is a CONVERGENCE one,
+  and filtering on `settled` (the obvious-looking mistake) would hide every
+  corner during exactly the first drives worth watching. `SEEN_MIN_ALPHA` 0.20
+  floors it: a corner driven once has converged on nothing, but "we have been
+  here" is a real fact and a different claim from "we know how fast".
+- TESTS: **689 green** off-device across the import-light suites, ruff
+  clean. NEW `TestSettling` (12), `TestDriftCannotDelayASlowdown` (4),
+  `TestLearnedCornersFrom` (6), `TestConfidenceAlpha` (6),
+  `TestLearnedCornerProjection` (4); `TestLearningFeedsBackIn` rewritten (5).
+  FIVE guards MUTATION-TESTED, each verified to APPLY before the result was
+  believed (the v3.5.5 lesson): confidence ignoring drift, `_lookup` dropping
+  `drift=`, the ring floor removed, the ring filtering on settled, and
+  `settle_factor` failing toward confident on garbage.
+- BEHAVIOUR CHANGE TO EXPECT ON ROAD: a single clean pass no longer buys any
+  speed (it used to buy 45% of the learned budget immediately). A corner earns
+  its budget over ~7 consistent passes instead of 3 visits. The SAFE direction
+  is untouched — a corner teaching us it is slow still gets 0.75 weight on
+  visit one. If learning now feels too slow, `DRIFT_ALPHA` is the knob, NOT
+  `CONF_FULL_VISITS`.
+
 ### v3.6.2 Changes (based on funnypilot-3.6.1)
 
 SCC-M REWRITTEN. It no longer reads a speed from the map: it measures the bend

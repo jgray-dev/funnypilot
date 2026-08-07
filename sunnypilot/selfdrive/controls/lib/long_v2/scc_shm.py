@@ -103,15 +103,24 @@ def write_scc_shm(gov_lat: float, gov_lon: float, gov_v: float,
 def write_corners_shm(corners) -> None:
   """Publish the corner list ahead. v3.6.2. Diagnostic/display only.
 
-  One line: "<writer monotonic>;lat,lon,half_len_m,v_mps,conf;..." — a few
-  hundred bytes for a curvy road. `corners` is anything with the five
+  One line: "<writer monotonic>;lat,lon,half_len_m,v_mps,settled,visits;..." —
+  a few hundred bytes for a curvy road. `corners` is anything with those
   attributes; passing SCC-M v2's own TrackedCorner list is the intended use.
+
+  v3.6.2 — FIELD 5 IS `settled`, NOT `confidence`, AND FIELD 6 IS NEW.
+  The minimap asks "how sure are we of this corner's number", which is
+  convergence (`settled`), while `TrackedCorner.confidence` answers the
+  fusion's separate "have we been here" question. Publishing the latter and
+  labelling it confidence is precisely the conflation v3.6.2 exists to undo.
+  `visits` rides along because "never driven" and "driven once, still
+  arguing with itself" are different pictures and both round to a low
+  `settled` — the UI needs the count to tell them apart.
   """
   try:
     parts = []
     for c in list(corners)[:MAX_CORNERS]:
       parts.append(f"{float(c.lat):.6f},{float(c.lon):.6f},{float(c.half_len):.0f}," +
-                   f"{float(c.v_target):.2f},{float(c.confidence):.2f}")
+                   f"{float(c.v_target):.2f},{float(c.settled):.2f},{int(c.visits)}")
     _atomic_write(CORNERS_SHM_PATH, f"{time.monotonic():.3f};" + ";".join(parts))
   except Exception:
     pass
@@ -144,11 +153,17 @@ def read_scc_debug_shm():
 
 
 def read_corners_shm() -> list:
-  """[(lat, lon, half_len_m, v_mps, confidence), ...]. Empty on any doubt.
+  """[(lat, lon, half_len_m, v_mps, settled, visits), ...]. Empty on any doubt.
 
   Empty is the safe default for every failure mode — missing file, torn read,
   garbage, stale writer, a plannerd that never started — because it means the
   minimap tints nothing rather than tinting something wrong.
+
+  A 5-field line (the first cut of v3.6.2, or a writer mid-upgrade) reads with `visits`
+  defaulted to 0 rather than being dropped. THE DIRECTION IS DELIBERATE: 0
+  visits means "not a learned corner", so an old line still tints the road —
+  which is what field 4 is for and is always valid — while drawing no ring it
+  cannot substantiate.
   """
   try:
     with open(CORNERS_SHM_PATH) as f:
@@ -167,7 +182,13 @@ def read_corners_shm() -> list:
       vals = [float(x) for x in p[:5]]
       if any(v != v for v in vals):   # NaN
         continue
-      out.append(tuple(vals))
+      visits = 0
+      if len(p) >= 6:
+        try:
+          visits = max(0, int(float(p[5])))
+        except (TypeError, ValueError):
+          visits = 0
+      out.append((*vals, visits))
     return out[:MAX_CORNERS]
   except Exception:
     return []

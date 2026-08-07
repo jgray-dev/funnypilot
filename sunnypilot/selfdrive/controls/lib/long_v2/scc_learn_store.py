@@ -24,6 +24,17 @@ the update rule and the reason its asymmetry runs the opposite way to the old
 store's. `r` is the radius the corner was measured at when last seen, kept for
 diagnostics and so a record can be sanity-checked against fresh geometry.
 
+v3.6.2 adds `d`, the mean movement of the learned value per visit:
+
+    d     how far each pass is still shifting min(a_lo, a_hi), m/s^2
+
+It exists because visit count turned out to be the wrong measure of
+confidence. A corner seen three times whose answer is still swinging is not
+known; a corner seen three hundred times whose answer never moves is. `d`
+is the difference between those two, and it is what corner_speed.confidence_of
+multiplies the visit count by. A journal line written before v3.6.2 has no
+`d` and reads as UNSETTLED — see Corner.from_obj for why that direction.
+
 WHAT THIS MODULE IS: only the persistence and the geometry index. The decision
 about WHEN something is worth recording lives in scc_map_v2.py, and the
 decision about how much authority a learned point gets lives in scc_fusion.py.
@@ -69,7 +80,7 @@ import threading
 import time
 
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import (
-  A_LAT_DEFAULT, A_LAT_MAX, update_interval)
+  A_LAT_DEFAULT, A_LAT_MAX, DRIFT_UNKNOWN, update_drift, update_interval)
 
 STORE_DIR = "/data/funnypilot_scc_learn"
 # v3.6.2 — a NEW file, not a migration. See the module docstring: the old
@@ -130,21 +141,34 @@ def bearing_delta(a: float, b: float) -> float:
 
 
 class Corner:
-  """One learned bend: where it is, which way it is taken, and the lateral
-  acceleration interval this car has demonstrated through it."""
-  __slots__ = ("lat", "lon", "bearing", "a_lo", "a_hi", "r", "n", "t", "flags")
+  """One learned bend: where it is, which way it is taken, the lateral
+  acceleration interval this car has demonstrated through it, and how much
+  that interval is still moving.
 
-  def __init__(self, lat, lon, bearing, a_lo, a_hi, r=0.0, n=1, t=0.0, flags=0):
+  `d` (v3.6.2) is the mean absolute movement of the learned value per visit,
+  m/s^2. It is what separates "we have been here three times" from "we know
+  this corner" — see corner_speed.confidence_of.
+  """
+  __slots__ = ("lat", "lon", "bearing", "a_lo", "a_hi", "r", "n", "t", "flags", "d")
+
+  def __init__(self, lat, lon, bearing, a_lo, a_hi, r=0.0, n=1, t=0.0, flags=0,
+               d=DRIFT_UNKNOWN):
     self.lat, self.lon, self.bearing = lat, lon, bearing
     self.a_lo, self.a_hi, self.r = a_lo, a_hi, r
     self.n, self.t, self.flags = n, t, flags
+    self.d = d
 
   def to_json(self, key: str) -> str:
     return json.dumps({"k": key, "la": round(self.lat, 6), "lo": round(self.lon, 6),
                        "br": round(self.bearing, 1),
                        "alo": round(self.a_lo, 3), "ahi": round(self.a_hi, 3),
                        "r": round(self.r, 1),
-                       "n": self.n, "t": round(self.t, 0), "f": self.flags},
+                       "n": self.n, "t": round(self.t, 0), "f": self.flags,
+                       # 3 dp is 0.001 m/s^2, under a percent of the span
+                       # between DRIFT_SETTLED and DRIFT_LEARNING, and keeps
+                       # the record inside its size budget. See
+                       # test_store_json_is_compact.
+                       "d": round(self.d, 3)},
                       separators=(",", ":"))
 
   @staticmethod
@@ -152,10 +176,17 @@ class Corner:
     # A record missing `alo`/`ahi` is not one of ours. Raising here is correct:
     # `load()` skips lines it cannot parse, so a stray old-format journal costs
     # nothing rather than being silently reinterpreted as an acceleration.
+    #
+    # `d` DEFAULTS TO UNSETTLED, NOT TO SETTLED. A the first cut of v3.6.2 line carries no
+    # convergence history, and the safe reading of "we do not know whether this
+    # corner has converged" is that it has not — that costs the record its
+    # earned speed until it re-proves itself, where the other default would
+    # hand full authority to a number with no evidence of stability behind it.
     return d["k"], Corner(float(d["la"]), float(d["lo"]), float(d["br"]),
                           float(d["alo"]), float(d["ahi"]),
                           float(d.get("r", 0.0)), int(d.get("n", 1)),
-                          float(d.get("t", 0.0)), int(d.get("f", 0)))
+                          float(d.get("t", 0.0)), int(d.get("f", 0)),
+                          float(d.get("d", DRIFT_UNKNOWN)))
 
 
 def key_for(lat: float, lon: float, bearing: float) -> str:
@@ -375,10 +406,21 @@ class LearnStore:
       self.corners[key] = c
       self._index_add(key, c)
 
+    before = min(c.a_lo, c.a_hi)
     lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh)
     if not allow_raise:
       lo = min(lo, c.a_lo)
     c.a_lo, c.a_hi = lo, hi
+    # v3.6.2 — how far this pass moved the answer, which is what makes the
+    # difference between a corner we have visited and one we have worked out.
+    #
+    # MEASURED ON `min(a_lo, a_hi)`, THE RAW LEARNED VALUE, NOT ON
+    # `effective_a_lat`. The effective value already contains the confidence
+    # weight, and confidence is about to be computed FROM this drift — feeding
+    # one into the other closes a loop in which a corner that lost confidence
+    # would appear to move less, regain confidence, move more, and oscillate.
+    # The raw interval has no such dependency.
+    c.d = update_drift(c.d, min(lo, hi) - before)
     if radius > 0.0:
       c.r = radius
     c.n += 1

@@ -183,13 +183,19 @@ def _log(msg: str) -> None:
 class TrackedCorner:
   """A corner from the geometry, with whatever the store knows about it."""
   __slots__ = ("lat", "lon", "bearing", "radius", "half_len", "distance",
-               "a_lat", "visits", "confidence", "v_target", "sign", "turn_deg")
+               "a_lat", "visits", "confidence", "settled", "v_target",
+               "sign", "turn_deg")
 
   def __init__(self, lat, lon, bearing, radius, half_len, distance,
-               a_lat, visits, confidence, v_target, sign=0, turn_deg=0.0):
+               a_lat, visits, confidence, v_target, sign=0, turn_deg=0.0,
+               settled=0.0):
     self.lat, self.lon, self.bearing = lat, lon, bearing
     self.radius, self.half_len, self.distance = radius, half_len, distance
+    # `confidence` is the fusion's "have we been here" (visit count only).
+    # `settled` is "has the answer stopped moving" and is what the minimap
+    # draws. See SCCMapV2._lookup for why these are deliberately two numbers.
     self.a_lat, self.visits, self.confidence = a_lat, visits, confidence
+    self.settled = settled
     self.v_target = v_target
     # which way it turns, and how far through. An S-bend is two corners of
     # OPPOSITE sign, and telling that from one long corner is the difference
@@ -260,10 +266,29 @@ class SCCMapV2:
       return True
 
   def _lookup(self, lat: float, lon: float, bearing: float):
-    """(a_lat, visits, confidence) for a measured corner. Default when unknown."""
+    """(a_lat, visits, corroboration, settled) for a measured corner.
+
+    v3.6.2 — TWO DIFFERENT QUESTIONS COME OUT OF HERE AND THEY MUST NOT BE THE
+    SAME NUMBER, which is what they were until now:
+
+      corroboration  "is this a real corner, independently of OSM?" — answered
+                     by HAVING BEEN THERE. It floors scc_fusion's corroboration
+                     and bypasses the vision-disagreement veto, and one
+                     completed pass is the whole evidence it needs. Stays
+                     `confidence_for(visits)`; the fusion's behaviour is
+                     unchanged by this release.
+      settled        "do we trust the NUMBER?" — answered by successive passes
+                     agreeing. This is what weights the learned value in
+                     `effective_a_lat` and what the minimap ring's opacity
+                     shows.
+
+    Conflating them is why a corner still moving 15% on its third pass counted
+    as fully known. A corner can be certainly real and not yet worked out, and
+    those two facts belong to different consumers.
+    """
     s = self.store()
     if s is None:
-      return CS_.A_LAT_DEFAULT, 0, 0.0
+      return CS_.A_LAT_DEFAULT, 0, 0.0, 0.0
     try:
       # ahead_only=False: the query point IS the corner, so the offset is zero
       # and an ahead-of-us test would reject the record it is looking for. See
@@ -271,12 +296,12 @@ class SCCMapV2:
       # ever used, with every unit test still green.
       near = s.nearby(lat, lon, bearing, MATCH_M, MATCH_BEARING_DEG, ahead_only=False)
     except Exception:
-      return CS_.A_LAT_DEFAULT, 0, 0.0
+      return CS_.A_LAT_DEFAULT, 0, 0.0, 0.0
     if not near:
-      return CS_.A_LAT_DEFAULT, 0, 0.0
+      return CS_.A_LAT_DEFAULT, 0, 0.0, 0.0
     _d, c = min(near, key=lambda dc: dc[0])
-    return (CS_.effective_a_lat(c.a_lo, c.a_hi, c.n), int(c.n),
-            CS_.confidence_for(c.n))
+    return (CS_.effective_a_lat(c.a_lo, c.a_hi, c.n, drift=c.d), int(c.n),
+            CS_.confidence_for(c.n), CS_.confidence_of(c.n, c.d))
 
   # ── geometry ──────────────────────────────────────────────────────────────
 
@@ -308,10 +333,11 @@ class SCCMapV2:
       # up in the store and drawn on the map
       clat, clon = self._to_geodetic(rc.x, rc.y, lat, lon, bearing)
       cbrg = (bearing + rc.heading_rel) % 360.0
-      a_lat, visits, conf = self._lookup(clat, clon, cbrg)
+      a_lat, visits, conf, settled = self._lookup(clat, clon, cbrg)
       v = max(CS_.speed_for(rc.radius, a_lat), CS_.MIN_V_TARGET)
       out.append(TrackedCorner(clat, clon, cbrg, rc.radius, rc.half_len, d,
-                               a_lat, visits, conf, v, rc.sign, rc.turn_deg))
+                               a_lat, visits, conf, v, rc.sign, rc.turn_deg,
+                               settled))
     self.corners = out
     s = self.store()
     if s is not None:

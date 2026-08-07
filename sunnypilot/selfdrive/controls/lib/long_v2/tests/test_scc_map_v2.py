@@ -288,22 +288,102 @@ class TestLearningRunsRegardlessOfEngagement:
 
 
 class TestLearningFeedsBackIn:
-  def test_a_learned_budget_changes_the_speed(self, store):
+  @staticmethod
+  def _speed_with(store):
+    """The corner speed SCC-M v2 prices this bend at, given what `store`
+    knows. The SAME road every time, so the lookup lands on the record being
+    written; a different lead-in would put the corner somewhere else and the
+    comparison would silently be between two unvisited corners."""
+    scc = make(bend_route(radius=100.0, lead_in=30.0), store=store)
+    run(scc, v_ego=28.0, v_cruise=28.0, n=2)
+    assert scc.corners
+    return min(c.v_target for c in scc.corners)
+
+  def test_one_clean_pass_does_not_buy_any_speed(self, store):
+    """v3.6.2 — THIS IS THE BEHAVIOUR CHANGE, AND IT IS THE POINT.
+
+    Until v3.6.2 a single clean pass immediately bought 45% of the learned
+    budget, because `confidence` was visit count alone. One pass has nothing
+    to disagree with yet, so it is evidence that the corner is REAL, not
+    evidence that we have worked out its speed. It may now floor the fusion's
+    corroboration (which is what visits are for) while contributing nothing
+    to the speed.
+
+    MUTATION: drop `drift=c.d` from _lookup's effective_a_lat call and this
+    fails — the corner gets faster off one pass again."""
+    baseline = self._speed_with(None)
     scc = inside_a_corner(store)
     traverse(scc, v=18.0, curvature=0.012)
     leave(scc)
     assert store.count == 1
+    assert self._speed_with(store) == pytest.approx(baseline)
+    # ...but the corner is still known to be REAL, which is a different claim
+    # and the one the fusion consumes.
+    assert next(iter(store.corners.values())).n == 1
 
-    # the SAME road, so the lookup lands on the record just written; a
-    # different lead-in would put the corner elsewhere and the test would
-    # silently be comparing two unvisited corners
-    fresh = make(bend_route(radius=100.0, lead_in=30.0), store=store)
-    run(fresh, v_ego=28.0, v_cruise=28.0, n=2)
-    plain = make(bend_route(radius=100.0, lead_in=30.0))
-    run(plain, v_ego=28.0, v_cruise=28.0, n=2)
-    assert fresh.corners and plain.corners
-    assert min(c.v_target for c in fresh.corners) > min(c.v_target for c in plain.corners)
-    assert fresh.gov_confidence > 0.0
+  def test_repeated_agreeing_passes_do_buy_speed(self, store):
+    """The other half: a corner whose passes agree converges, and once it has
+    converged the learned budget reaches the cap. Without this the test above
+    would be satisfied by learning that never works at all."""
+    baseline = self._speed_with(None)
+    for _ in range(8):
+      scc = inside_a_corner(store)
+      traverse(scc, v=18.0, curvature=0.012)
+      leave(scc)
+    assert store.count == 1
+    rec = next(iter(store.corners.values()))
+    assert rec.n == 8
+    assert rec.d < CS.DRIFT_SETTLED        # it stopped moving
+    assert self._speed_with(store) > baseline
+
+  def test_a_third_pass_that_still_moves_the_answer_is_not_confident(self, store):
+    """THE REPORTED CASE, PINNED. Three visits used to saturate
+    `confidence_for` at 1.0 regardless of whether the answer had settled. Here
+    each pass genuinely lowers the ceiling, so the third one is still shifting
+    the corner speed — and must not read as certain."""
+    scc = inside_a_corner(store)
+    traverse(scc, v=18.0, curvature=0.012)
+    leave(scc)
+    rec = next(iter(store.corners.values()))
+    pos = (rec.lat, rec.lon, rec.bearing)
+    before = min(rec.a_lo, rec.a_hi)
+    # two more passes, each proving the corner supports LESS than we thought
+    for i, peak in enumerate((2.6, 2.2)):
+      store.observe(*pos, radius=100.0, a_peak=peak, severity=1.6, now=1000.0 + i)
+    assert store.count == 1, "the fixture must keep hitting the same record"
+    rec = next(iter(store.corners.values()))
+    assert rec.n == 3
+    # the answer really did move, i.e. this test is not vacuous
+    assert abs(min(rec.a_lo, rec.a_hi) - before) > 0.1
+    assert CS.confidence_for(rec.n) == 1.0        # the OLD measure: fully certain
+    assert CS.confidence_of(rec.n, rec.d) < 0.5   # the new one: still learning
+
+  def test_confidence_cannot_be_withheld_forever(self, store):
+    """THE LIVENESS SIDE, and a real property of the interval rather than of
+    the drift constants.
+
+    `update_interval` only ever RAISES `a_lo` and only ever LOWERS `a_hi`, both
+    clamped to [A_LAT_MIN, A_LAT_MAX]. So `min(a_lo, a_hi)` is monotone and its
+    total possible movement is bounded — a corner CANNOT argue with itself
+    indefinitely, and drift must therefore decay however adversarial the
+    passes are. That is why there is no 'permanently unsettled' failure mode
+    where the feature silently refuses to ever learn anything.
+
+    Anyone retuning DRIFT_ALPHA should read that: this bound is what makes the
+    EMA safe to make slower."""
+    scc = inside_a_corner(store)
+    traverse(scc, v=18.0, curvature=0.012)
+    leave(scc)
+    rec = next(iter(store.corners.values()))
+    pos = (rec.lat, rec.lon, rec.bearing)
+    # adversarial: shove hard in both directions, alternating, many times
+    for i in range(30):
+      store.observe(*pos, radius=100.0,
+                    a_peak=2.9 if i % 2 else 1.2,
+                    severity=0.1 if i % 2 else 2.4, now=1000.0 + i)
+    rec = next(iter(store.corners.values()))
+    assert rec.d < CS.DRIFT_SETTLED
+    assert CS.confidence_of(rec.n, rec.d) == pytest.approx(1.0)
 
   def test_confidence_is_published_for_the_fusion(self):
     """An unvisited corner must report zero confidence, or scc_fusion would
