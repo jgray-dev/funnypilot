@@ -7,11 +7,10 @@ See the LICENSE.md file in the root directory for more details.
 import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
-  UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
-  DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
-  AEgoElement, FrictionCoefficientElement, LatAccelFactorElement,
-  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  EpsLimitElement, DriverTorqueElement, TorqueLimitActiveElement, SuspensionBumpElement, LagdElement,
+  UiElement,
+  SccCornersElement, SccRadiusElement, SccCornerSpeedElement, SccDistanceElement,
+  SccALatElement, SccVisitsElement, SccGateElement, SccCapElement,
+  SccAuthorityElement, SccLearnedElement, SccLastPassElement, SccPassCountElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -42,78 +41,43 @@ class DeveloperUiRenderer(Widget):
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self.dev_ui_mode = self.DEV_UI_OFF
 
-    self.rel_dist_elem = RelDistElement()
-    self.rel_speed_elem = RelSpeedElement()
-    self.steering_angle_elem = SteeringAngleElement()
-    self.desired_lat_accel_elem = DesiredLateralAccelElement()
-    self.actual_lat_accel_elem = ActualLateralAccelElement()
-    self.desired_steer_elem = DesiredSteeringAngleElement()
-    self.desired_pid_steer_elem = DesiredSteeringPIDElement()
-    self.a_ego_elem = AEgoElement()
-    self.friction_elem = FrictionCoefficientElement()
-    self.lat_accel_factor_elem = LatAccelFactorElement()
-    # FunnyPilot v3.3.8: INTERP replaced — the interpolation is knot-exact by
-    # construction now, so it read a static "5". These show what actually
-    # matters for the turn-in oscillation: hardware torque authority ceiling,
-    # whether that ceiling is actively biting the request right now, the raw
-    # torsion-bar reading that drives the clamp, and the bump/pitch-rate
-    # hypothesis signal.
-    self.eps_limit_elem = EpsLimitElement()
-    self.torque_limit_active_elem = TorqueLimitActiveElement()
-    self.driver_torque_elem = DriverTorqueElement()
-    self.bump_elem = SuspensionBumpElement()
-    self.lagd_elem = LagdElement()
-    self.steering_torque_elem = SteeringTorqueEpsElement()
-    self.bearing_elem = BearingDegElement()
-    self.altitude_elem = AltitudeElement()
-
-  @staticmethod
-  def get_bottom_dev_ui_offset():
-    if ui_state.developer_ui in (DeveloperUiRenderer.DEV_UI_BOTTOM, DeveloperUiRenderer.DEV_UI_BOTH):
-      return DeveloperUiRenderer.BOTTOM_BAR_HEIGHT
-    return 0
-
-  def _update_state(self) -> None:
-    self.dev_ui_mode = ui_state.developer_ui
-
-  def _render(self, rect: rl.Rectangle) -> None:
-    if self.dev_ui_mode == self.DEV_UI_OFF:
-      return
-
-    sm = ui_state.sm
-    if sm.recv_frame["carState"] < ui_state.started_frame:
-      return
-
-    if self.dev_ui_mode == self.DEV_UI_BOTTOM:
-      self._draw_bottom_dev_ui(rect)
-    elif self.dev_ui_mode == self.DEV_UI_RIGHT:
-      self._draw_right_dev_ui(rect)
-    elif self.dev_ui_mode == self.DEV_UI_BOTH:
-      self._draw_right_dev_ui(rect)
-      self._draw_bottom_dev_ui(rect)
+    # FunnyPilot v3.6.2 — the dev UI is SCC-M v2's instrument panel now. The
+    # v3.3.8 turn-in oscillation elements (EPS/LIM/TBAR/BUMP) and the lateral
+    # readouts went with the investigation that closed; keeping a screen full
+    # of numbers nobody reads is how a debug tool stops being one.
+    self.scc_corners = SccCornersElement()
+    self.scc_radius = SccRadiusElement()
+    self.scc_corner_speed = SccCornerSpeedElement()
+    self.scc_distance = SccDistanceElement()
+    self.scc_a_lat = SccALatElement()
+    self.scc_visits = SccVisitsElement()
+    self.scc_gate = SccGateElement()
+    self.scc_cap = SccCapElement()
+    self.scc_authority = SccAuthorityElement()
+    self.scc_learned = SccLearnedElement()
+    self.scc_last_pass = SccLastPassElement()
+    self.scc_pass_count = SccPassCountElement()
 
   def _draw_right_dev_ui(self, rect: rl.Rectangle) -> None:
     sm = ui_state.sm
-    controls_state = sm['controlsState']
 
     UI_BORDER_SIZE = 20
     container_width = RIGHT_COL_WIDTH
     x = int(rect.x + rect.width - container_width - RIGHT_COL_MARGIN)
     y = int(rect.y + UI_BORDER_SIZE * 1.5)
 
+    # THE RIGHT COLUMN IS THE CORNER WE ARE BRAKING FOR: what we measured, what
+    # speed that implies, how far away it is, and how much of it survived the
+    # fusion. Fixed order and fixed length — the column must not reflow, or a
+    # value dropping out slides every other one and the screen becomes
+    # unreadable at a glance (the v3.5.9 station rule).
     elements = [
-      self.rel_dist_elem.update(sm, ui_state.is_metric),
-      self.rel_speed_elem.update(sm, ui_state.is_metric),
-      self.steering_angle_elem.update(sm, ui_state.is_metric),
+      self.scc_radius.update(sm, ui_state.is_metric),
+      self.scc_corner_speed.update(sm, ui_state.is_metric),
+      self.scc_distance.update(sm, ui_state.is_metric),
+      self.scc_cap.update(sm, ui_state.is_metric),
+      self.scc_authority.update(sm, ui_state.is_metric),
     ]
-    if controls_state.lateralControlState.which() == 'torqueState':
-      elements.append(self.desired_lat_accel_elem.update(sm, ui_state.is_metric))
-    elif controls_state.lateralControlState.which() == 'angleState':
-      elements.append(self.desired_steer_elem.update(sm, ui_state.is_metric))
-    elif controls_state.lateralControlState.which() == 'pidState':
-      elements.append(self.desired_pid_steer_elem.update(sm, ui_state.is_metric))
-
-    elements.append(self.actual_lat_accel_elem.update(sm, ui_state.is_metric))
 
     current_y = y + RIGHT_TOP_OFFSET
     for element in elements:
@@ -151,31 +115,18 @@ class DeveloperUiRenderer(Widget):
     rl.draw_rectangle(int(rect.x), y, int(rect.width), bar_height,
                       rl.Color(0, 0, 0, 100))
 
-    elements = []
-    is_torque = sm['controlsState'].lateralControlState.which() == 'torqueState'
-
-    # Leftmost (torque only): the values that discriminate the grab/loosen
-    # oscillation hypotheses — authority ceiling, whether it's biting right
-    # now, the raw torsion-bar reading, and the bump/pitch-rate signal.
-    if is_torque:
-      elements.append(self.eps_limit_elem.update(sm, ui_state.is_metric))
-      elements.append(self.torque_limit_active_elem.update(sm, ui_state.is_metric))
-      elements.append(self.driver_torque_elem.update(sm, ui_state.is_metric))
-      elements.append(self.bump_elem.update(sm, ui_state.is_metric))
-
-    if sm.valid['liveDelay']:
-      elements.append(self.lagd_elem.update(sm, ui_state.is_metric))
-
-    if is_torque:
-      if sm.valid['liveTorqueParameters']:
-        elements.extend([
-          self.friction_elem.update(sm, ui_state.is_metric),
-          self.lat_accel_factor_elem.update(sm, ui_state.is_metric),
-        ])
-    else:
-      elements.append(self.steering_torque_elem.update(sm, ui_state.is_metric))
-      if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
-        elements.append(self.bearing_elem.update(sm, ui_state.is_metric))
+    # THE BOTTOM BAR IS THE LEARNING SIDE. Unconditional, every frame, in a
+    # fixed order: a bar built conditionally re-centres itself whenever a source
+    # goes quiet, and a readout that moves is a readout you stop trusting.
+    elements = [
+      self.scc_corners.update(sm, ui_state.is_metric),
+      self.scc_a_lat.update(sm, ui_state.is_metric),
+      self.scc_visits.update(sm, ui_state.is_metric),
+      self.scc_gate.update(sm, ui_state.is_metric),
+      self.scc_last_pass.update(sm, ui_state.is_metric),
+      self.scc_pass_count.update(sm, ui_state.is_metric),
+      self.scc_learned.update(sm, ui_state.is_metric),
+    ]
 
     if not elements:
       return

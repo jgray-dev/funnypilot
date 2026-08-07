@@ -26,7 +26,8 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SC
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, read_gps
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
-  write_scc_shm, write_learn_shm, write_corners_shm, read_eps_limited as _read_eps_limited)
+  write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm,
+  read_eps_limited as _read_eps_limited)
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
@@ -280,6 +281,9 @@ class LongitudinalPlannerSP:
     # these — the learned half lives in a store on /data and nothing in the HUD
     # may touch a filesystem.
     write_corners_shm(self._scc_map_v2.corners)
+
+    # v3.6.2: the dev-UI payload. Diagnostic only — see long_v2/scc_shm.py.
+    write_scc_debug_shm(self._scc_map_v2.debug_row(self._scc_map_authority))
 
     # v3.5.0: the learned corner count + whether it is governing right now.
     write_learn_shm(self._scc_map_v2.learned_count, self._scc_map_v2.is_active,

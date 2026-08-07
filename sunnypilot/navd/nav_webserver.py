@@ -101,9 +101,6 @@ _CODE_MARKERS = [
   ("adopting flashed branch", "/data/openpilot/system/updated/updated.py", "updater self-heal"),
   ("class TriageRecorder", "/data/openpilot/selfdrive/controls/lib/triage_recorder.py", "triage recorder"),
   ("HIDDEN_CRUISE_OFFSET", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "hidden cruise governor"),
-  ("class LagdElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "lagd dev UI readout"),
-  ("class EpsLimitElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "EPS/TBAR/BUMP dev UI readout"),
-  ("class SuspensionBumpElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "bump/pitch-rate dev UI readout"),
   ("gate_map_target", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "SCC map/vision arbitration"),
   ("class BumpDamper", "/data/openpilot/selfdrive/controls/lib/bump_damper.py", "bump/weight-transfer error damper"),
   ("_update_cruise_ramp", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA predictive set-speed ramp"),
@@ -200,6 +197,13 @@ _CODE_MARKERS = [
   ("def write_corners_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "corner list published to the minimap"),
   ("def corner_speed_at", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tints by our own corner speeds"),
   ("def update_car_state_sp", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "SCC-M v2 wired at the carState rate"),
+  ("def _update_gas_gate", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "SCC-M v2 anticipatory gas gate"),
+  ("gas_gating_active", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "the gas gate reaches the throttle clip"),
+  ("def window_around_ego", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py", "forward horizon measured from the car"),
+  ("def write_scc_debug_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "dev UI payload channel"),
+  ("class SccCornersElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "dev UI is SCC-M v2 instruments"),
+  ("class SideSignal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/side_signals.py", "blinker + blind spot on the edges"),
+  ("def draw_side_signal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "side glow band"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

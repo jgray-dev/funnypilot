@@ -741,3 +741,125 @@ class TestTintDelta:
     for e, c in ((float('nan'), 15.0), (25.0, float('nan')),
                  (float('inf'), 15.0), (25.0, float('inf'))):
       assert _rm.tint_delta_mph(e, c) == 0.0
+
+
+_sig = _load('side_signals')
+
+
+class TestSideSignals:
+  """FunnyPilot v3.6.2 — the left and right edges of the state glow become the
+  blinker and the blind spot.
+
+  The behaviour that matters is not "does it light up" but the three states'
+  precedence and the fact that an idle edge costs nothing at all: this runs at
+  60 Hz over the camera image, and a band that asymptotes toward zero instead
+  of reaching it would draw 26 gradients a frame forever.
+  """
+
+  def step(self, sig, seconds, blinker=False, blindspot=False, position=None, dt=1 / 60):
+    for _ in range(int(seconds / dt)):
+      sig.update(dt, blinker, blindspot, position)
+    return sig
+
+  def test_idle_costs_nothing(self):
+    """MUTATION: drop the settle in `update`. An exponential approach never
+    REACHES zero, so an edge that has ever been lit keeps reporting a live kind
+    forever and the renderer keeps drawing 26 fully-transparent gradients a
+    frame for it.
+
+    IT MUST BE SHOWN FROM A LIT STATE. Starting from a fresh object exercises
+    nothing: presence is already exactly zero and stays there whatever the
+    settle does — the first version of this test did that and the mutation
+    walked straight through it."""
+    s = _sig.SideSignal()
+    self.step(s, 1.0, blinker=True)
+    assert s.kind == _sig.KIND_BLINKER
+    self.step(s, 2.0)
+    assert s.alpha == 0.0
+    assert s.kind == _sig.KIND_NONE, "a switched-off edge still reports itself lit"
+
+  def test_a_blinker_pulses_amber_across_the_whole_side(self):
+    s = _sig.SideSignal()
+    seen = []
+    for _ in range(int(2.0 * 60)):
+      s.update(1 / 60, True, False)
+      seen.append(s.alpha)
+    assert s.kind == _sig.KIND_BLINKER
+    assert s.centre == 0.5 and s.extent == 1.0, "a turn signal is about the whole side"
+    assert max(seen) > 0.7 and min(seen[30:]) < 0.4, "it must actually pulse"
+
+  def test_the_pulse_is_at_the_blinker_cadence(self):
+    """Not a taste value: 1.5 Hz is inside the 60-120 flashes/minute the
+    regulations require, and it matches the relay the driver can hear."""
+    s = _sig.SideSignal()
+    prev, rises = 0.0, 0
+    for _ in range(int(4.0 * 60)):
+      s.update(1 / 60, True, False)
+      if s.alpha > 0.8 >= prev:
+        rises += 1
+      prev = s.alpha
+    assert 4 <= rises <= 8, f"{rises} pulses in 4 s"
+
+  def test_the_pulse_never_goes_fully_dark(self):
+    """A hard on/off at 1.5 Hz in peripheral vision is a strobe. The dip floor
+    is what makes this readable rather than alarming."""
+    s = _sig.SideSignal()
+    lows = []
+    for _ in range(int(3.0 * 60)):
+      s.update(1 / 60, True, False)
+      lows.append(s.alpha)
+    assert min(lows[60:]) >= _sig.BLINK_MIN_A - 0.05
+
+  def test_a_blind_spot_is_red_and_sits_below_centre(self):
+    """The frame is a forward view and the zone is beside and behind the
+    driver, so it belongs low on the edge."""
+    s = self.step(_sig.SideSignal(), 4.0, blindspot=True)
+    assert s.kind == _sig.KIND_BSD
+    assert s.alpha > 0.8
+    assert s.centre > 0.5, "the blind spot is not in front of you"
+    assert s.extent < 1.0, "it is a place, not the whole side"
+
+  def test_it_slides_in_rather_than_fading_up(self):
+    """MUTATION: make the band appear at its final position. A lamp coming on
+    reads as a warning light; something arriving reads as a car."""
+    s = _sig.SideSignal()
+    s.update(1 / 60, False, True)
+    early = s.centre
+    self.step(s, 4.0, blindspot=True)
+    assert early > s.centre + 0.2, "the band did not travel"
+
+  def test_it_slides_back_out_when_the_lane_clears(self):
+    s = self.step(_sig.SideSignal(), 4.0, blindspot=True)
+    settled = s.centre
+    self.step(s, 4.0)
+    assert s.centre > settled + 0.2
+    assert s.alpha == 0.0
+
+  def test_signalling_into_an_occupied_lane_is_red_AND_pulsing(self):
+    """THE COMBINATION THAT ACTUALLY MATTERS. Red wins the colour because it is
+    the hazard; the blinker wins the rhythm because it is the intent. Showing
+    it as a steady red would make the one dangerous case the quietest of the
+    three. MUTATION: let the blinker branch win, or drop the pulse."""
+    s = _sig.SideSignal()
+    self.step(s, 1.0, blinker=True, blindspot=True)
+    seen = []
+    for _ in range(int(2.0 * 60)):
+      s.update(1 / 60, True, True)
+      seen.append(s.alpha)
+    assert s.kind == _sig.KIND_BSD, "the hazard must own the colour"
+    assert max(seen) - min(seen) > 0.3, "and the intent must own the rhythm"
+
+  def test_a_sensed_position_moves_the_band(self):
+    """`position` is None on this car — the blind-spot signal is a boolean and
+    nothing available supplies range (see the module docstring). The parameter
+    exists so that a source which did would need no other change, and this
+    pins that it is actually wired through rather than decorative."""
+    front = self.step(_sig.SideSignal(), 4.0, blindspot=True, position=0.0)
+    back = self.step(_sig.SideSignal(), 4.0, blindspot=True, position=1.0)
+    assert front.centre < back.centre
+
+  def test_garbage_never_raises_and_never_teleports(self):
+    s = _sig.SideSignal()
+    for dt in (0.0, -1.0, float('nan'), 10.0):
+      s.update(dt, True, True, float('nan'))
+      assert 0.0 <= s.alpha <= 1.0

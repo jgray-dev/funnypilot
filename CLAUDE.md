@@ -233,17 +233,83 @@ on this fork — draw the minimap, and carry speed limits for SLA.
   channel. That file carries no timestamp, so the failure default is False: an
   unreadable file contributes NO stress and can only make a corner look cleaner
   than it was, never worse.
+- `selfdrive/controls/lib/longitudinal_planner.py` — **THE GAS GATE WAS NEVER
+  CONNECTED.** SCC-M has published `gasGating` since v0.9.7 and the throttle
+  clip tested `self.sla.gas_gate_active` ALONE, so a corner capped the SPEED
+  but never stopped the car ADDING throttle on the way to it — hold the set
+  speed until the cap crosses under, then give it back with the brakes. Now
+  `or self._scc_map_v2.gas_gating_active`, same THROTTLE-ONLY construction
+  (`accel_clip[0]` untouched, so it can coast but never brake).
+  **PINNED ON THE AST** — this file imports acados and cannot be constructed
+  off-device, and a test that cannot run is exactly how a feature stays
+  disconnected for four years with a green suite.
+- `long_v2/scc_map_v2.py` — NEW `_update_gas_gate`. **ANTICIPATORY BY
+  CONSTRUCTION**: it asks the SAME envelope the cap uses, at the distance we
+  will be at in `GATE_LEAD_T` = 3 s. That makes the lead time a number in
+  seconds instead of wherever the envelope happens to cross — measured, the
+  gate comes on 332 m before a 27 mph bend at 60 mph. `GATE_V_RELEASE` <
+  `GATE_V_MARGIN` IS NOT COSMETIC: without hysteresis the gate limit-cycles at
+  its own threshold at ~1.5 s per cycle, which is the band a passenger feels as
+  surging. `GATE_MAX_S` is a WATCHDOG (v3.4.8's latched gate), not a knob. The
+  corner-skip is `v_target >= v_cruise - 0.5`, the SAME test `_raw_cap` uses —
+  `min(v_target, v_cruise)` was the first draft and is wrong both ways.
+- `long_v2/road_geometry.py` — NEW `window_around_ego`. **`points[:MAX_POINTS]`
+  TRUNCATES FROM THE ARRAY'S HEAD**, and mapd's array can contain road already
+  driven, so the FORWARD horizon shrank by however much of the past mapd
+  happened to publish: measured, a bend 310 m ahead vanished. The window is
+  taken around the CAR and walked by ARC LENGTH — a straight-line walk
+  overspends by 58% on a hairpin, and since the resample budget is fixed,
+  overspending truncates the FAR end.
+- S-BEND BEHAVIOUR VERIFIED BY CLOSED-LOOP SIMULATION, not by reading the code.
+  Both halves are in the corner list at once and the cap is the min over them,
+  so the car holds 27 mph flat through 60 m of straight between them. With
+  400 m between the same bends it accelerates to 49 mph and gates again 268 m
+  out — the difference between a rule and a driver.
+- `selfdrive/ui/sunnypilot/onroad/developer_ui/` — REPLACED. 23 element classes
+  from the v3.3.8 oscillation investigation deleted; the panel is SCC-M v2's
+  now. Each reading names a SPECIFIC failure: CORN 0 = geometry not finding
+  bends, CVSP fine but CAP flat = the fusion vetoing, GATE never on = a late
+  brake, **NPAS never incrementing = nothing learned, and the fault is the
+  OBSERVER not the budget** (the distinction v3.6.1 spent a release failing to
+  make). One `/dev/shm/fp_sccdbg` read per frame; the UI must not recompute a
+  controller's decisions.
+- `selfdrive/ui/sunnypilot/onroad/hud/side_signals.py` — NEW, stdlib-only. The
+  left/right glow edges become blinker (amber, 1.5 Hz raised cosine, dipping to
+  18% not to zero — a square wave at that rate in peripheral vision is a
+  strobe) and blind spot (red band over the zone, sliding in from behind).
+  **BOTH AT ONCE IS RED AND PULSING**: signalling into an occupied lane is the
+  one dangerous combination, so it takes the colour of the hazard and the
+  rhythm of the intent. **THE EASING AND THE PULSE MUST BE SEPARATE** — an EMA
+  over the finished alpha does not smooth a transition, it ATTENUATES the
+  waveform (gain 0.66 at 1.5 Hz with tau 0.12), so the blinker read as a dim
+  flicker. `presence` eases; the waveform multiplies it.
+  **THE BAND CANNOT TRACK THE OTHER VEHICLE AND NOTHING AVAILABLE COULD MAKE
+  IT**: `leftBlindspot`/`rightBlindspot` are BOOLEANS (`LCA11.CF_Lca_IndLeft`,
+  an indicator bit and nothing else), THE INTERIOR CAMERA FACES THE DRIVER
+  (driverStateV2 is face and pose; it has no view of an adjacent lane), and the
+  Mando radar is FORWARD facing. `position` is an optional input defaulting to
+  None for the day a rear radar publishes range; faking the motion from a
+  boolean would look exactly like the real thing while being fiction.
 - `selfdrive/controls/plannerd.py` — one added call,
   `longitudinal_planner.update_car_state_sp(sm)`, in the 100 Hz poll loop.
   THE RATE IS THE POINT: the reversals being counted are a few Hz and would
   alias at the planner's 20.
 - DELETED: `long_v2/scc_learn.py` (AST-verified unreferenced first).
-- TESTS: **759 green, 0 failed** (was 656). NEW `test_road_geometry.py` (60),
+- TESTS: **790 green, 0 failed** (was 656). NEW `test_road_geometry.py` (60),
   `test_corner_speed.py` (24), `test_corner_effort.py` (21),
   `test_scc_map_v2.py` (25), `test_scc_shm.py` (22); `test_scc_learn.py` ->
   `test_corner_store.py` (38); `test_scc_advisory.py` deleted with the feature.
   ruff clean.
-- MUTATION TESTING, 18 guards, 15 caught immediately. **THE THREE THAT SURVIVED
+- MUTATION TESTING, ROUND 2: 15 more guards, ALL caught — but six survived a
+  first pass and each was a real defect. The gas-gate wiring had no runnable
+  test (acados); `GATE_LEAD_T` = 0 changes nothing on a HARD corner so the lead
+  time had to be pinned on a gentle one; **`min(v_target, v_cruise)` in the gate
+  was my own error**; the horizon test overwrote its own route reader; "the
+  window has holes" was a claim about a contiguous slice, which cannot have
+  them (the real property is BUDGET ACCURACY); and the settle test started from
+  a fresh object where the settle is unreachable — the vacuous shape v3.4.5
+  named.
+- MUTATION TESTING, ROUND 1: 18 guards, 15 caught immediately. **THE THREE THAT SURVIVED
   WERE ALL REAL AND TWO OF THEM WERE NOT MINE.** (1) The set-speed clamp is
   UNREACHABLE through the normal path — CurveSpeedCap resets once its release
   reaches `v_cruise - RELEASE_DONE_MARGIN`, so it never emits above cruise; the

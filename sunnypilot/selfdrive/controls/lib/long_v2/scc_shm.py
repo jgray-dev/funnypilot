@@ -117,6 +117,32 @@ def write_corners_shm(corners) -> None:
     pass
 
 
+def write_scc_debug_shm(vals) -> None:
+  """Publish the dev-UI payload from plannerd. Best-effort; never raises."""
+  try:
+    body = ",".join(f"{float(v):.3f}" for v in vals)
+    _atomic_write(DEBUG_SHM_PATH, f"{body},{time.monotonic():.3f}")
+  except Exception:
+    pass
+
+
+def read_scc_debug_shm():
+  """DEBUG_INACTIVE on any doubt — a dev readout that shows a dead planner's
+  last numbers as if they were live is worse than one that shows zeros."""
+  try:
+    with open(DEBUG_SHM_PATH) as f:
+      p = [float(x) for x in f.read().strip().split(',')]
+    if len(p) < len(DEBUG_INACTIVE) + 1:
+      return DEBUG_INACTIVE
+    age = time.monotonic() - p[-1]
+    if not -1.0 < age <= STALE_S or any(x != x for x in p):
+      return DEBUG_INACTIVE
+    return (int(p[0]), p[1], p[2], p[3], p[4], int(p[5]), bool(int(p[6])),
+            p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]))
+  except Exception:
+    return DEBUG_INACTIVE
+
+
 def read_corners_shm() -> list:
   """[(lat, lon, half_len_m, v_mps, confidence), ...]. Empty on any doubt.
 
@@ -179,6 +205,21 @@ def read_learn_shm() -> tuple[int, bool, float]:
   except Exception:
     return LEARN_INACTIVE
 
+
+DEBUG_SHM_PATH = '/dev/shm/fp_sccdbg'
+
+# v3.6.2 — everything the dev UI needs to watch SCC-M v2 on its first drives,
+# in one line. A SEPARATE CHANNEL from fp_scc and fp_corners for the reason
+# this module already gives: those two have readers whose contracts are pinned
+# by tests, and widening a working channel to carry an unrelated payload is how
+# a reader that indexes [4] starts reading a different quantity.
+#
+# Field order is the order the dev UI shows them, so a reader and a screenshot
+# can be compared without counting commas:
+#   n_corners, gov_radius_m, gov_v_mps, gov_dist_m, gov_a_lat, gov_visits,
+#   gate, cap_mps, authority, learned_count,
+#   last_pass_a_peak, last_pass_severity, last_pass_radius_m, pass_count
+DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0)
 
 LAT_INTERP_PATH = '/dev/shm/lat_interp'
 # Fraction of control frames in which the EPS governor's bound was actually

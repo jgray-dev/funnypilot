@@ -130,8 +130,24 @@ CORNER_GAP_M = 25.0
 R_TRIM_LO = 0.65
 R_TRIM_HI_M = 120.0
 
-MAX_POINTS = 600      # hard bound on how much of the input array we will walk
-MAX_VERTICES = 400    # ...and on the resampled profile
+# FunnyPilot v3.6.2 — THE INPUT BUDGET IS SPENT AROUND THE CAR, NOT FROM THE
+# ARRAY'S HEAD.
+#
+# `points[:MAX_POINTS]` is the obvious way to bound this and it is WRONG:
+# mapd's array can contain road already driven, and every point of it consumes
+# the budget, so the FORWARD horizon shrinks by however much of the past mapd
+# happens to still be publishing. Measured on a synthetic route with a bend
+# 310 m ahead: truncating from the head lost it entirely, while the same ego
+# position with the array windowed around the car found it. A corner silently
+# dropping out of range is indistinguishable from a road with no corner on it.
+#
+# So the array is projected first, the nearest point to the car is found, and
+# the window is taken around THAT. The budget is then a distance either side of
+# the car rather than a position in someone else's array.
+MAX_POINTS = 2000     # hard bound on how much of the input array we will walk
+WINDOW_AHEAD_M = 500.0    # comfortably past MAX_LOOKAHEAD_M so the tail is real
+WINDOW_BEHIND_M = 120.0   # enough for a corner being traversed to stay whole
+MAX_VERTICES = 400    # bound on the resampled profile
 
 M_PER_DEG = 111320.0
 
@@ -168,6 +184,35 @@ def to_local(points, lat0: float, lon0: float, bearing_deg: float):
     e = (lon - lon0) * M_PER_DEG * clat
     out.append((n * cb + e * sb, -n * sb + e * cb))
   return out
+
+
+def window_around_ego(xy, ahead_m: float = WINDOW_AHEAD_M,
+                      behind_m: float = WINDOW_BEHIND_M):
+  """Trim an ego-frame polyline to a window either side of the car.
+
+  Cuts by ARC LENGTH FROM THE NEAREST POINT, walking outward along the route in
+  both directions, rather than by the straight-line distance of each point.
+  A hairpin brings road 300 m away to within 40 m of the car, and a
+  straight-line filter would keep it while dropping the road in between —
+  leaving a polyline with a hole in it, which the curvature estimator would
+  read as one enormous turn.
+  """
+  n = len(xy)
+  if n < 3:
+    return xy
+  near = min(range(n), key=lambda i: xy[i][0] * xy[i][0] + xy[i][1] * xy[i][1])
+
+  lo = near
+  d = 0.0
+  while lo > 0 and d < behind_m:
+    d += math.hypot(xy[lo][0] - xy[lo - 1][0], xy[lo][1] - xy[lo - 1][1])
+    lo -= 1
+  hi = near
+  d = 0.0
+  while hi < n - 1 and d < ahead_m:
+    d += math.hypot(xy[hi + 1][0] - xy[hi][0], xy[hi + 1][1] - xy[hi][1])
+    hi += 1
+  return xy[lo:hi + 1]
 
 
 def resample(xy, spacing: float = RESAMPLE_M):
@@ -365,6 +410,7 @@ def corners_from_route(points, lat0: float, lon0: float, bearing_deg: float):
     if not points or len(points) < 3:
       return [], 0.0
     xy = to_local(points[:MAX_POINTS], lat0, lon0, bearing_deg)
+    xy = window_around_ego(xy)
     rs = resample(xy)
     if len(rs) < 3:
       return [], 0.0

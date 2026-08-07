@@ -26,6 +26,8 @@ gradient scrims rather than plates, so there is no visible box edge anywhere.
 Everything here is raylib rectangle gradients: eight for the vignette and glow,
 two for the bands. No textures, no shaders, no allocation per frame.
 """
+import math
+
 import pyray as rl
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.tokens import clamp
@@ -177,3 +179,57 @@ def draw_bands(rect: rl.Rectangle, scale: float = 1.0) -> None:
   bot = min(BAND_BOT_H, h)
   rl.draw_rectangle_gradient_v(x, y + h - bot, w, bot,
                                _BLANK, rl.Color(6, 9, 13, int(BAND_BOT_A * s * 255)))
+
+
+# ── v3.6.2: the sides carry the blinker and the blind spot ──────────────────
+#
+# Drawn AFTER draw_state_glow and over it. Overdrawing rather than carving the
+# side out of the glow is deliberate: the glow is built from nested rectangle
+# OUTLINES (see _edges), so "all four edges except the left one" is not a thing
+# it can express without giving up the even-falloff property that fixed the
+# v3.5.1 uneven-corner report. A brighter coloured band on top reads as a
+# replacement, which is what it is.
+SIDE_DEPTH = 150     # px inward; deeper than the state glow so it reads as nearer
+SIDE_SLICES = 26     # vertical resolution of the band's falloff
+
+
+def draw_side_signal(rect: rl.Rectangle, left: bool, color: rl.Color,
+                     alpha: float, centre: float, extent: float) -> None:
+    """A vertical band of glow on one edge, faded at both ends.
+
+    `centre` and `extent` are fractions of frame height; the band is allowed to
+    run off either end, which is how the blind-spot indicator slides in from
+    behind the car rather than fading up in place.
+
+    Horizontal gradients, one per slice, because that is the primitive raylib
+    gives us that costs nothing: 26 draw calls for a whole side, against 30 for
+    one edge of the state glow.
+    """
+    a0 = clamp(alpha, 0.0, 1.0)
+    if a0 <= 0.0 or rect.height <= 0 or extent <= 0.0:
+        return
+
+    h = rect.height * clamp(extent, 0.0, 1.0)
+    top = rect.y + rect.height * centre - h * 0.5
+    slice_h = h / SIDE_SLICES
+    depth = min(SIDE_DEPTH, int(rect.width) // 3)
+    x0 = rect.x if left else rect.x + rect.width - depth
+
+    for i in range(SIDE_SLICES):
+        y = top + slice_h * i
+        # skip slices that have slid off the frame — the band is deliberately
+        # allowed to be partly outside it
+        if y + slice_h < rect.y or y > rect.y + rect.height:
+            continue
+        # raised cosine along the band so it has no hard ends
+        t = (i + 0.5) / SIDE_SLICES
+        prof = 0.5 - 0.5 * math.cos(2.0 * math.pi * t)
+        a = int(a0 * prof * 255)
+        if a <= 0:
+            continue
+        edge = rl.Color(color.r, color.g, color.b, a)
+        yi, hi = int(y), max(1, int(slice_h) + 1)
+        if left:
+            rl.draw_rectangle_gradient_h(int(x0), yi, depth, hi, edge, _BLANK)
+        else:
+            rl.draw_rectangle_gradient_h(int(x0), yi, depth, hi, _BLANK, edge)

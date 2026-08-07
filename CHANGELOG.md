@@ -201,6 +201,139 @@ the veto is evaluated, and `confidence_for(1)` is 0.45 against a 0.05
 threshold. The bypass is `max(c, learned)` and needs nothing else. A constant
 that can never fire is the expensive kind of dead code, so it is gone.
 
+9. THE LINKAGE TO THE LONGITUDINAL CONTROLLER, VERIFIED AND FIXED
+------------------------------------------------------------------------
+Asked to verify it. Found three things, one of them four years old.
+
+THE GAS GATE WAS NEVER CONNECTED. SCC-M has published `gasGating` since
+v0.9.7 and nothing has ever read it: the throttle clip in
+`longitudinal_planner.py` tested `self.sla.gas_gate_active` alone. So a corner
+ahead capped the SPEED but never stopped the car ADDING throttle on the way to
+it — the car held the set speed right up to the point the cap crossed under it
+and then gave the speed back with the brakes. That is the "does nothing, then
+slows late" shape, and it is not how anyone drives.
+
+  * the clip now reads SCC-M v2's gate as well, on the same mechanism and with
+    the same THROTTLE-ONLY construction: `accel_clip[0]` is untouched, so lead
+    braking and every other decel path are unaffected and the gate can coast
+    the car but never brake it.
+  * the gate is ANTICIPATORY. It asks the same envelope the cap uses, at the
+    distance we will be at in `GATE_LEAD_T` = 3 s: "if I hold this speed, will
+    the cap be under me shortly?" That makes the lead time a number in seconds
+    rather than something that falls out of where the envelope happens to
+    cross. Measured on a closed-loop sim at 60 mph into a 27 mph bend, the gate
+    comes on 332 m out and the whole approach is a coast.
+  * IT HAS HYSTERESIS, and that is not cosmetic. Without it the gate
+    limit-cycles at its own threshold — gate off, throttle, cross, gate on,
+    coast, drop back — measured at about 1.5 s per cycle, squarely in the band
+    a passenger feels as surging.
+  * it cannot latch: `GATE_MAX_S` is a WATCHDOG, not a knob. A latched throttle
+    gate is a car that will not accelerate, which this fork shipped once
+    already (v3.4.8).
+  * pinned ON THE AST, because `longitudinal_planner.py` imports the acados MPC
+    and cannot be constructed off-device. A test that cannot run is exactly how
+    a feature stays disconnected for four years with a green suite.
+
+THE FORWARD HORIZON WAS BEING EATEN BY THE ROAD BEHIND US. `points[:MAX_POINTS]`
+truncates mapd's array from its HEAD, and that array can contain road already
+driven — so the forward horizon shrank by however much of the past mapd
+happened to still be publishing. Measured on a synthetic route: a bend 310 m
+ahead vanished entirely. The window is now taken AROUND THE CAR and walked by
+ARC LENGTH; a straight-line walk overspends the budget by 58% on a hairpin,
+and since the resample budget is fixed, overspending truncates the FAR end —
+the distant corner the early approach depends on.
+
+THE STRAIGHT PART OF AN S-BEND. Verified by closed-loop simulation rather than
+by reading the code. Both halves are in the corner list at once, the cap is the
+min over them, and the gate is on whenever either wants us slower — so the car
+holds 27 mph flat through the 60 m between the halves and only accelerates once
+both are behind it. With 400 m of straight between the same two bends it DOES
+accelerate, to 49 mph, and then gates again 268 m before the second — which is
+the difference between a rule and a driver.
+
+10. THE DEV UI IS SCC-M v2's INSTRUMENT PANEL
+------------------------------------------------------------------------
+Everything that was there belonged to the v3.3.8 turn-in oscillation
+investigation, which closed. 23 element classes deleted. What replaces them is
+chosen so each reading makes a SPECIFIC failure visible rather than being
+generally informative:
+
+    CORN 0 on a road with bends       the geometry is not finding them
+    R far from the bend you can see   the radius estimator is wrong here
+    CVSP sensible but CAP unmoving    the fusion is vetoing it
+    GATE never on                     the approach will be a late brake
+    NPAS never increments             nothing is being learned, and the fault
+                                      is the observer, not the budget
+    VIS 0 forever on your commute     passes are committing somewhere else
+
+Right column: R / CVSP / DIST / CAP / AUTH — the corner we are braking for.
+Bottom bar: CORN / ALAT / VIS / GATE / PASS / NPAS / LRN — the learning side.
+Both fixed-length and unconditional, so nothing reflows when a value goes quiet.
+All of it is one /dev/shm read per frame (`fp_sccdbg`), because the alternative
+is the UI recomputing a controller's decisions and disagreeing with it.
+
+11. THE SIDE GLOW BECOMES BLINKER AND BLIND SPOT
+------------------------------------------------------------------------
+The left and right edges of the state glow now carry the two things that are
+inherently about a side of the car:
+
+    blinker only   the edge pulses AMBER at 1.5 Hz — inside the 60-120
+                   flashes/minute the regulations require, and the cadence of
+                   the relay the driver can hear. A raised cosine, not a square
+                   wave: a hard on/off at 1.5 Hz in peripheral vision is a
+                   strobe. It dips to 18%, not to nothing, so the side stays
+                   continuously readable.
+    blind spot     a RED band over the blind-spot zone, low on the edge because
+                   the zone is beside and behind the driver and the frame is a
+                   forward view. It SLIDES IN from behind rather than fading up
+                   in place, so it reads as something arriving rather than a
+                   lamp coming on.
+    both           RED, pulsing. Signalling into an occupied lane is the one
+                   combination that is actually dangerous, so it gets the
+                   colour of the hazard and the rhythm of the intent — a steady
+                   red would make it the quietest of the three.
+
+THE RED BAND CANNOT TRACK THE OTHER VEHICLE'S POSITION, and the request asked
+for it to, so being exact about why matters more than the feature:
+
+  * `carState.leftBlindspot` / `rightBlindspot` are BOOLEANS. On this car they
+    are `LCA11.CF_Lca_IndLeft` — the rear corner radars publish an indicator
+    bit on CAN and nothing else. No range, no rate, no count.
+  * THE INTERIOR CAMERA FACES THE DRIVER. It is the driver-monitoring camera;
+    openpilot publishes `driverStateV2` (face and pose) from it and nothing
+    about the world outside. It has no view of an adjacent lane, so the
+    360-degree idea has nothing to work with.
+  * the Mando radar this fork enabled in v3.3.0e is FORWARD facing. It can see
+    a car in the next lane while that car is still AHEAD, and loses it well
+    before the blind spot begins.
+
+So `position` is an optional input defaulting to None, and None means "the
+zone, not a vehicle". If a source of real longitudinal position ever exists —
+a rear radar that publishes range, or a side camera — it feeds that parameter
+and the band tracks it with no other change. Faking the motion from a boolean
+would have looked exactly like the real thing while being fiction.
+
+12. MUTATION TESTING, SECOND ROUND
+------------------------------------------------------------------------
+15 guards, all caught, but only after six survived a first pass and every one
+of those was worth the trip:
+
+  * the gas-gate wiring had no test that could run at all (acados)
+  * `GATE_LEAD_T` at 0 changed nothing on a HARD corner — the envelope is under
+    us from beyond the lookahead either way — so the lead time had to be pinned
+    on a gentle bend, where it straddles the threshold
+  * `min(v_target, v_cruise)` in the gate was MY OWN error: it cannot stop a
+    non-constraining corner gating, and under pedal override it makes one gate.
+    Replaced by the same skip the cap uses, so the two agree about which
+    corners exist
+  * the horizon test overwrote its own route reader and tested nothing
+  * "the window has holes in it" was a claim about a contiguous slice, which
+    cannot have holes. The real property is BUDGET ACCURACY, and that is what
+    it asserts now
+  * the settle test started from a fresh object, where presence is already zero
+    and the settle is unreachable — the same shape as the vacuous tests
+    v3.4.5 found
+
 FILES
 ------------------------------------------------------------------------
 NEW    long_v2/road_geometry.py, long_v2/corner_speed.py,
@@ -214,7 +347,7 @@ DELETED  long_v2/scc_learn.py (AST-verified unreferenced first)
 ALSO   long_v2/scc_shm.py (+fp_corners, +read_eps_limited), speed_governor.py,
        sunnypilot longitudinal_planner.py, selfdrive/controls/plannerd.py
 
-TESTS: 759 green, 0 failed (was 656). NEW test_road_geometry.py (60),
+TESTS: 790 green, 0 failed (was 656). NEW test_road_geometry.py (60),
 test_corner_speed.py (24), test_corner_effort.py (21), test_scc_map_v2.py (25),
 test_scc_shm.py (22); test_scc_learn.py -> test_corner_store.py (38);
 test_scc_advisory.py deleted with the feature. ruff clean.

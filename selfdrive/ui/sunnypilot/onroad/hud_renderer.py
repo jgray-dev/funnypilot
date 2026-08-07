@@ -37,6 +37,7 @@ driver monitoring, turn signals, torque bar, dev UI) are called exactly as they
 were, because they are proven and this is not the release to churn them.
 """
 import math
+import time
 
 import pyray as rl
 
@@ -50,7 +51,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.turn_signal import TurnSignalContr
 from openpilot.selfdrive.ui.sunnypilot.onroad.circular_alerts import CircularAlertsRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.long_status_dot import classify as classify_long
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
-from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome, stations
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import side_signals, stations
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.speed_sign import SpeedSign
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.route_map import RouteMap
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -157,6 +159,11 @@ class HudRendererSP(HudRenderer):
     self._sla_ratio: float = 0.0
     self._sla_on: bool = False
     self._glow_phase: float = 0.0
+    # v3.6.2 — the two side channels. One object per edge, stepped once per
+    # frame; see hud/side_signals.py.
+    self._sig_left = side_signals.SideSignal()
+    self._sig_right = side_signals.SideSignal()
+    self._sig_t: float = 0.0
     # v3.5.4 motion + scene adaptation
     self._state_tint = T.EasedColor(T.DISENGAGED)
     self._dot_tint = T.EasedColor(T.NOMINAL)
@@ -315,6 +322,28 @@ class HudRendererSP(HudRenderer):
     return 1.0
 
   # ── the wheel button is gone; nothing in the HUD is tappable now ─────────
+
+  def draw_side_signals(self, rect) -> None:
+    """Step both side channels and draw them. Guarded: this is chrome, and the
+    process that draws it also draws the offroad screen."""
+    try:
+      now = time.monotonic()
+      dt = (now - self._sig_t) if self._sig_t else 0.0
+      self._sig_t = now
+      CS = ui_state.sm['carState']
+      # THE SIGNALS ARE SHOWN WHETHER OR NOT THE FEATURE TOGGLES ARE ON. These
+      # are facts about the car and the road, not openpilot state: the blinker
+      # is lit because the driver lit it, and the blind spot is occupied
+      # whether or not we are steering.
+      self._sig_left.update(dt, CS.leftBlinker, CS.leftBlindspot)
+      self._sig_right.update(dt, CS.rightBlinker, CS.rightBlindspot)
+      for sig, is_left in ((self._sig_left, True), (self._sig_right, False)):
+        if sig.alpha <= 0.0 or sig.kind == side_signals.KIND_NONE:
+          continue
+        col = T.HALT if sig.kind == side_signals.KIND_BSD else T.ATTENTION
+        chrome.draw_side_signal(rect, is_left, col, sig.alpha, sig.centre, sig.extent)
+    except Exception:
+      pass
 
   def user_interacting(self) -> bool:
     return False

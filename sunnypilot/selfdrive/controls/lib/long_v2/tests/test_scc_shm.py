@@ -28,6 +28,7 @@ def paths(tmp_path, monkeypatch):
   monkeypatch.setattr(scc_shm, "SHM_PATH", str(tmp_path / "fp_scc"))
   monkeypatch.setattr(scc_shm, "CORNERS_SHM_PATH", str(tmp_path / "fp_corners"))
   monkeypatch.setattr(scc_shm, "LAT_INTERP_PATH", str(tmp_path / "lat_interp"))
+  monkeypatch.setattr(scc_shm, "DEBUG_SHM_PATH", str(tmp_path / "fp_sccdbg"))
   return tmp_path
 
 
@@ -164,3 +165,38 @@ class TestTheLearnPill:
     monkeypatch.setattr(scc_shm, "LEARN_SHM_PATH", str(p))
     p.write_text(f"42,1,0.750,{time.monotonic() - scc_shm.STALE_S - 1:.3f}")
     assert scc_shm.read_learn_shm() == scc_shm.LEARN_INACTIVE
+
+
+class TestTheDevUiChannel:
+  """v3.6.2. One line carrying everything the dev UI needs to watch SCC-M v2
+  on its first drives. Same staleness contract as every other channel here:
+  a dev readout showing a dead planner's last numbers as if they were live is
+  worse than one showing zeros, because it looks exactly like a working one."""
+
+  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7)
+
+  def test_round_trip(self, paths):
+    scc_shm.write_scc_debug_shm(self.ROW)
+    out = scc_shm.read_scc_debug_shm()
+    assert out[0] == 3 and out[5] == 2 and out[9] == 41 and out[13] == 7
+    assert out[6] is True
+    assert out[1] == pytest.approx(118.0, abs=0.01)
+    assert out[8] == pytest.approx(0.75, abs=0.01)
+
+  def test_missing_stale_and_garbage_all_read_inactive(self, paths):
+    assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
+    (paths / "fp_sccdbg").write_text("nonsense")
+    assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
+    old = time.monotonic() - (scc_shm.STALE_S + 1.0)
+    (paths / "fp_sccdbg").write_text(",".join(["1.0"] * 14) + f",{old:.3f}")
+    assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
+
+  def test_a_short_row_is_rejected_rather_than_indexed_past(self, paths):
+    """This is read from the UI process. An IndexError here is a dead HUD."""
+    (paths / "fp_sccdbg").write_text(f"1.0,2.0,3.0,{time.monotonic():.3f}")
+    assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
+
+  def test_writing_garbage_never_raises(self, paths):
+    scc_shm.write_scc_debug_shm(None)
+    scc_shm.write_scc_debug_shm(["x"])
+    scc_shm.write_scc_debug_shm([float('nan')] * 14)

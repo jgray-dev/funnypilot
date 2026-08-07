@@ -209,7 +209,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # coast the car but never brake it. The cruise target does not drop until
     # the boundary (resolver no longer early-switches), so the MPC cannot
     # brake for the new zone before entering it.
-    if self.sla.gas_gate_active:
+    # FunnyPilot v3.6.2 — SCC-M v2's gate joins SLA's, on the same mechanism.
+    #
+    # THE LINKAGE WAS MISSING. SCC-M has published `gasGating` since v0.9.7 and
+    # NOTHING HAS EVER READ IT: this line tested `self.sla.gas_gate_active`
+    # alone, so a corner ahead capped the speed but never stopped the car
+    # adding throttle on the way to it. The car would hold the set speed right
+    # up to the point the cap crossed under it and then have to give the speed
+    # back with the brakes — which is precisely the "it does nothing, then
+    # slows late" report, and it is not how anyone drives.
+    #
+    # SCC-M v2's gate is ANTICIPATORY (see scc_map_v2.GATE_LEAD_T): it asks
+    # whether the cap will be under us in three seconds, not whether it is now.
+    # THROTTLE-ONLY BY CONSTRUCTION, exactly like SLA's: `accel_clip[0]` is
+    # untouched, so lead braking and every other decel path are unaffected, and
+    # the gate can coast the car but can never brake it.
+    if self.sla.gas_gate_active or self._scc_map_v2.gas_gating_active:
       accel_clip[1] = min(accel_clip[1], max(accel_coast, accel_clip[0]))
 
     if force_slow_decel:

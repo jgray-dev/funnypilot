@@ -152,6 +152,10 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       chrome.draw_vignette(self._content_rect, scale)
       color = self._hud_renderer.state_color()
       chrome.draw_state_glow(self._content_rect, color, self._hud_renderer.glow_intensity())
+      # v3.6.2: the LEFT and RIGHT edges then carry the blinker and the blind
+      # spot, drawn over the glow. See hud/side_signals.py — in particular for
+      # why the blind-spot band represents the ZONE and not a tracked vehicle.
+      self._hud_renderer.draw_side_signals(self._content_rect)
     except Exception:
       pass
 

@@ -24,6 +24,7 @@ import pytest
 
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import corner_speed as CS
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import scc_learn_store as LS
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import road_geometry as RG
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import scc_map_v2 as M
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
@@ -380,3 +381,284 @@ class TestItNeverRaises:
     imported by tests and by anything that imports the planner."""
     scc = M.SCCMapV2(params=NoParams(), route_reader=list)
     assert scc._store is None
+
+
+def s_bend_route(radius=90.0, arc_deg=70.0, between_m=60.0, lead_in=250.0, node_m=4.0):
+  """Straight -> right bend -> STRAIGHT -> left bend. The shape the request
+  names: the car must not add throttle in the middle straight."""
+  pts = []
+  x = -20.0
+  while x < lead_in:
+    pts.append((x, 0.0))
+    x += node_m
+  n = max(2, int(radius * math.radians(arc_deg) / node_m))
+  for i in range(n + 1):
+    th = math.radians(arc_deg) * i / n
+    pts.append((lead_in + radius * math.sin(th), radius * (1 - math.cos(th))))
+  hx, hy = pts[-1]
+  th = math.radians(arc_deg)
+  k = 1
+  while k * node_m < between_m:
+    pts.append((hx + k * node_m * math.cos(th), hy + k * node_m * math.sin(th)))
+    k += 1
+  bx, by = pts[-1]
+  for i in range(1, n + 1):
+    a = math.radians(arc_deg) * i / n
+    lx, ly = radius * math.sin(a), -radius * (1 - math.cos(a))
+    pts.append((bx + lx * math.cos(th) - ly * math.sin(th),
+                by + lx * math.sin(th) + ly * math.cos(th)))
+  ex, ey = pts[-1]
+  for k in range(1, 60):
+    pts.append((ex + k * node_m, ey))
+  dense = []
+  for i in range(1, len(pts)):
+    a, b = pts[i - 1], pts[i]
+    seg = math.hypot(b[0] - a[0], b[1] - a[1])
+    for j in range(max(1, int(seg))):
+      t = j / max(1, int(seg))
+      dense.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+  return [(px / M_PER_DEG, py / M_PER_DEG) for px, py in dense]
+
+
+def at(scc, route, s_idx, v_ego, v_cruise):
+  """Place the car at a point on the route and take one frame."""
+  ex, ey = route[s_idx]
+  nx, ny = route[min(s_idx + 3, len(route) - 1)]
+  brg = math.degrees(math.atan2(ny - ey, nx - ex))
+  rel = [(px - ex, py - ey) for px, py in route]
+  scc._read_route = lambda rel=rel: rel
+  scc._geom_at = 0.0
+  scc.update(True, v_ego, 0.0, v_cruise, 0.0, 0.0, brg, True)
+
+
+class TestTheForwardHorizonIsMeasuredFromTheCar:
+  """MAX_POINTS used to truncate the input array from its HEAD. mapd's array
+  can contain road already driven, and every point of it spent the budget — so
+  the FORWARD horizon shrank by however much of the past mapd happened to still
+  be publishing, and a corner silently dropped out of range. A corner that is
+  not there is indistinguishable from a road with no corner on it."""
+
+  def test_a_corner_ahead_survives_a_long_tail_behind(self):
+    route = bend_route(radius=100.0, lead_in=120.0)
+    # 900 points of already-driven road prepended, as mapd may still publish
+    behind = [(-(x + 1) / M_PER_DEG, 0.0) for x in range(900)][::-1]
+    full = behind + route
+    scc = make(full)
+    at(scc, full, len(behind), 28.0, 28.0)   # ego at the join, corner ahead
+    assert scc.corners, "the corner was truncated away by road behind us"
+
+  def test_the_window_spends_its_budget_along_the_road(self):
+    """MUTATION: walk outward by straight-line distance from the car instead of
+    by arc length. MEASURED on a route with a hairpin in it: a 150 m budget
+    yields 160 m of road by arc length and 237 m by straight line — 58% over,
+    because a fold-back stops the crow-flies distance growing while the road
+    keeps going.
+
+    Over-spending is not free. The resample budget (MAX_VERTICES) is fixed, so
+    a window that runs long gets TRUNCATED AT THE FAR END — which means the
+    forward horizon quietly becomes a function of how curvy the road is, and
+    the corner that falls off is the distant one the early approach depends on.
+    """
+    route = bend_route(radius=25.0, arc_deg=180.0, lead_in=20.0)
+    tail = [(route[-1][0] + x / M_PER_DEG, route[-1][1]) for x in range(1, 400)]
+    xy = RG.to_local(route + tail, 0.0, 0.0, 0.0)
+    win = RG.window_around_ego(xy, ahead_m=150.0, behind_m=10.0)
+    arc = sum(math.hypot(win[i][0] - win[i - 1][0], win[i][1] - win[i - 1][1])
+              for i in range(1, len(win)))
+    assert arc <= 150.0 + 10.0 + 5.0, f"spent {arc:.0f} m of a 160 m budget"
+    assert arc > 120.0, "and it must actually reach out that far"
+    # the crow-flies extent is far smaller here, which is what makes the two
+    # criteria differ at all — if this fixture ever stops folding back, the
+    # test above stops testing anything
+    assert max(math.hypot(x, y) for x, y in win) < arc * 0.75
+
+
+class TestTheGasGate:
+  """The gate tells the planner to stop ADDING speed it is about to give back.
+  A human lifts off long before they brake for a bend; the car did not, because
+  `gasGating` was published and nothing read it."""
+
+  def test_the_lead_time_is_what_makes_it_early(self):
+    """MUTATION: set GATE_LEAD_T to 0. The gate then fires only once the cap is
+    ALREADY under us, which is the reactive behaviour this replaced — the car
+    holds the throttle until the speed has to come off with the brakes.
+
+    A gentle bend is what shows it: into a hard corner the envelope is under us
+    from beyond the lookahead either way, so the lead changes nothing there."""
+    # measured: with the lead, approach_cap is 25.3 against a 26.5 threshold;
+    # without it, 27.6 — the gate straddles the threshold on this fixture and
+    # on nothing sharper, because a hard corner is under us from beyond the
+    # lookahead either way
+    route = bend_route(radius=250.0, arc_deg=60.0, lead_in=180.0)
+    scc = make(route)
+    at(scc, route, 0, 27.0, 27.0)
+    assert scc.gas_gating_active, "no gate at all — pick a different fixture"
+    saved, M.GATE_LEAD_T = M.GATE_LEAD_T, 0.0
+    try:
+      scc2 = make(route)
+      at(scc2, route, 0, 27.0, 27.0)
+      assert not scc2.gas_gating_active, "the lead time changed nothing"
+    finally:
+      M.GATE_LEAD_T = saved
+
+  def test_it_fires_far_out_on_an_approach(self):
+    """"Plenty of time ahead": at 60 mph into a bend the gate is on while the
+    corner is still hundreds of metres away, so the approach is a coast rather
+    than a late brake."""
+    route = bend_route(radius=100.0, lead_in=300.0)
+    scc = make(route)
+    at(scc, route, 0, 27.0, 27.0)
+    assert scc.corners and min(c.distance for c in scc.corners) > 250.0
+    assert scc.gas_gating_active
+
+  def test_it_does_not_fire_on_a_straight_road(self):
+    straight = [(x / M_PER_DEG, 0.0) for x in range(-20, 400)]
+    scc = make(straight)
+    at(scc, straight, 30, 27.0, 27.0)
+    assert not scc.gas_gating_active
+
+  def test_it_does_not_fire_when_we_are_already_slow_enough(self):
+    """THE v3.4.8 FAILURE, and the reason this test exists: a gate defined on a
+    command rather than on the state it protects fires when there is no
+    throttle to cut, pins the accel ceiling to the coast accel, and leaves the
+    car unable to accelerate with no way out."""
+    route = bend_route(radius=100.0, lead_in=200.0)
+    scc = make(route)
+    at(scc, route, 0, 8.0, 27.0)      # crawling toward a bend that permits 13
+    assert not scc.gas_gating_active
+
+  def test_a_corner_faster_than_the_set_speed_never_gates(self):
+    """MUTATION: drop the `v_target >= v_cruise - 0.5` skip.
+
+    THE SKIP ONLY BITES UNDER PEDAL OVERRIDE, and finding that is the point of
+    having mutation-tested it: `approach_cap` is never below the corner speed,
+    so a corner at or above cruise cannot gate while v_ego <= v_cruise however
+    the condition is written. It differs only when the driver is over the set
+    speed on the pedal and such a corner is close — and there the gate must
+    still be off, because the cap is ignoring that corner and the gate and the
+    cap have to agree about which corners exist.
+    """
+    route = bend_route(radius=100.0, lead_in=60.0)   # permits ~12.9 m/s
+    scc = make(route)
+    at(scc, route, 0, 16.0, 12.0)                    # pedal override above cruise
+    assert scc.corners, "the fixture must actually contain a corner"
+    gov = min(scc.corners, key=lambda c: c.v_target)
+    assert gov.v_target > 12.0 - 0.5, "the fixture must be a NON-constraining corner"
+    assert not scc.gas_gating_active
+
+    # ...and while we are inside it, which is where approach_cap collapses to
+    # the corner speed and the two formulations differ most
+    for c in scc.corners:
+      c.distance = 0.0
+    scc._update_gas_gate(16.0, 12.0)
+    assert not scc.gas_gating_active, "gated for a corner the cap is ignoring"
+
+  def test_it_has_hysteresis(self):
+    """MUTATION: use one threshold for engage and release. The gate then
+    limit-cycles at its own boundary — gate off, throttle, cross, gate on,
+    coast, drop back — measured at about 1.5 s per cycle, which is squarely in
+    the band a passenger feels as surging."""
+    assert M.GATE_V_RELEASE < M.GATE_V_MARGIN
+
+  def test_it_cannot_latch(self):
+    """A WATCHDOG, NOT A KNOB. A latched throttle gate is a car that will not
+    accelerate, which this fork has already shipped once."""
+    route = bend_route(radius=60.0, lead_in=300.0)
+    scc = make(route)
+    held = 0
+    for _ in range(int((M.GATE_MAX_S + 5.0) / 0.05)):
+      at(scc, route, 0, 27.0, 27.0)    # frozen mid-approach, gate wants to hold
+      held += int(scc.gas_gating_active)
+    assert not scc.gas_gating_active, "the gate latched"
+    assert held * 0.05 <= M.GATE_MAX_S + 0.1
+
+  def test_it_clears_when_the_feature_is_off(self):
+    class Off:
+      def get_bool(self, key):
+        return False
+    route = bend_route(radius=100.0, lead_in=200.0)
+    scc = M.SCCMapV2(params=Off(), route_reader=lambda: route)
+    at(scc, route, 0, 27.0, 27.0)
+    assert not scc.gas_gating_active
+
+
+class TestTheStraightPartOfAnSBend:
+  """THE EXPLICIT REQUIREMENT: do not gas it between the two halves of an S.
+
+  Both bends are in the corner list at once, the cap is the min over them, and
+  the gate is on whenever either wants us slower — so the car holds the corner
+  speed through the middle instead of surging and re-braking.
+  """
+
+  def test_both_halves_are_seen_at_once(self):
+    route = s_bend_route(between_m=60.0)
+    scc = make(route)
+    at(scc, route, 120, 27.0, 27.0)
+    ahead = [c for c in scc.corners if c.distance > 0]
+    assert len(ahead) >= 2, "only one half of the S was in range"
+    assert {c.sign for c in scc.corners} != {1}, "the two halves must differ in sign"
+
+  def test_the_cap_does_not_rise_through_the_middle(self):
+    """MUTATION: drop corners behind us at the apex, or look only at the
+    nearest one. Either way the cap releases in the middle straight and the car
+    accelerates into the second half."""
+    route = s_bend_route(between_m=60.0)
+    scc = make(route)
+    for _ in range(4):
+      at(scc, route, 300, 12.5, 27.0)   # let CurveSpeedCap latch first
+    caps = []
+    for i in range(300, 460, 10):     # entry of bend 1 through to bend 2
+      at(scc, route, i, 12.5, 27.0)
+      caps.append(scc.output_v_target if scc.is_active else 27.0)
+    assert max(caps) - min(caps) < 3.0, f"the cap moved by {max(caps) - min(caps):.1f} m/s"
+
+  def test_the_gate_stays_on_through_the_middle(self):
+    route = s_bend_route(between_m=60.0)
+    scc = make(route)
+    # travelling faster than the second half allows, in the straight between
+    gated = 0
+    for i in range(360, 440, 10):
+      at(scc, route, i, 18.0, 27.0)
+      gated += int(scc.gas_gating_active)
+    assert gated >= 6, "the car was allowed to add throttle between the halves"
+
+
+class TestTheGateReachesTheThrottle:
+  """THE DEFECT THIS RELEASE FIXES, and it is a WIRING defect, so it is pinned
+  on the AST rather than by behaviour.
+
+  `longitudinal_planner.py` imports the acados MPC and cannot be constructed
+  off-device, so no runtime test in this repo can see the throttle clip. SCC-M
+  has published `gasGating` since v0.9.7 and NOTHING EVER READ IT — the clip
+  tested SLA's flag alone — and the whole suite was green for four years with
+  the feature disconnected. A test that cannot run is exactly how that happens.
+  """
+
+  def _clip_block(self):
+    import ast
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[6] / \
+        "selfdrive/controls/lib/longitudinal_planner.py"
+    tree = ast.parse(src.read_text())
+    for node in ast.walk(tree):
+      if not isinstance(node, ast.If):
+        continue
+      test = ast.unparse(node.test)
+      if "gas_gate_active" in test or "gas_gating_active" in test:
+        return test, ast.unparse(node)
+    return None, None
+
+  def test_the_throttle_clip_reads_scc_m_v2(self):
+    test, _body = self._clip_block()
+    assert test is not None, "no gas-gate branch found in the planner at all"
+    assert "_scc_map_v2.gas_gating_active" in test, (
+      "the throttle clip does not read SCC-M v2's gate; the corner cap will"
+      + " still be applied but the car will hold throttle up to it")
+
+  def test_it_is_throttle_only(self):
+    """The braking floor must be untouched. A gate that can brake is not a
+    gate, and lead-following would be riding on it."""
+    _test, body = self._clip_block()
+    assert "accel_clip[1]" in body
+    assert "accel_clip[0] =" not in body, "the gate must never move the braking floor"
+    assert "max(accel_coast" in body, "it must clamp to the coast accel, not below"

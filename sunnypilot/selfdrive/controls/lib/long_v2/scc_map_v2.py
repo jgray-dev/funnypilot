@@ -83,6 +83,39 @@ BEHIND_KEEP_M = 25.0
 # This is how far apart they may be and still be the same corner.
 SAME_CORNER_M = 30.0
 
+# ── the gas gate ───────────────────────────────────────────────────────────
+#
+# WHAT IT IS FOR, and why it is not the same thing as the speed cap. The cap
+# tells the MPC what speed to hold; the gate tells the planner to stop ADDING
+# speed it is about to have to give back. A human lifts off well before they
+# brake for a bend, and the difference between a car that does that and one
+# that holds the throttle until the cap bites is most of what "smooth" means.
+#
+# IT IS ANTICIPATORY BY CONSTRUCTION. The gate asks the SAME envelope the cap
+# uses, but at the distance we will be at in GATE_LEAD_T seconds: "if I keep
+# this speed, will the cap be under me shortly?" If yes, coast. That makes the
+# lead time an explicit number in seconds rather than something that falls out
+# of where the envelope happens to cross.
+GATE_LEAD_T = 3.0        # s of travel of lead the gate gets over the cap itself
+# v_ego must actually be ABOVE the target. THE v3.4.8 POST-MORTEM IS ABOUT
+# EXACTLY THIS: a gate defined on a command rather than on the state it is
+# meant to protect fired when there was no throttle to cut, pinned the accel
+# ceiling to the coast accel, and left the car unable to accelerate with no way
+# out. A gate that cannot tell "we are too fast" from "a corner exists" is not
+# a gate.
+GATE_V_MARGIN = 0.5      # m/s
+# HYSTERESIS, AND IT IS NOT COSMETIC. Without it the gate limit-cycles at its
+# own threshold: gate off -> the car adds throttle -> it crosses the threshold
+# -> gate on -> the car coasts -> it drops back under -> gate off. Measured in
+# a closed-loop sim of an S-bend at about 1.5 s per cycle, which is squarely in
+# the band a passenger feels as surging. The gate now needs the requirement to
+# come back up to meet us before it lets go, not merely to stop being under us.
+GATE_V_RELEASE = 0.0     # m/s of gap at which an ENGAGED gate releases
+# A WATCHDOG, NOT A TUNING KNOB. The longest legitimate hold is one approach:
+# 400 m at 27 m/s is about 15 s. Anything past this is a latch, and a latched
+# throttle gate is the failure this fork has already shipped once.
+GATE_MAX_S = 45.0
+
 # Flags on a learned record.
 FLAG_SELF = 1        # SCC-M v2 was governing during the pass
 FLAG_ENGAGED = 2     # lateral control was active during the pass
@@ -150,14 +183,18 @@ def _log(msg: str) -> None:
 class TrackedCorner:
   """A corner from the geometry, with whatever the store knows about it."""
   __slots__ = ("lat", "lon", "bearing", "radius", "half_len", "distance",
-               "a_lat", "visits", "confidence", "v_target")
+               "a_lat", "visits", "confidence", "v_target", "sign", "turn_deg")
 
   def __init__(self, lat, lon, bearing, radius, half_len, distance,
-               a_lat, visits, confidence, v_target):
+               a_lat, visits, confidence, v_target, sign=0, turn_deg=0.0):
     self.lat, self.lon, self.bearing = lat, lon, bearing
     self.radius, self.half_len, self.distance = radius, half_len, distance
     self.a_lat, self.visits, self.confidence = a_lat, visits, confidence
     self.v_target = v_target
+    # which way it turns, and how far through. An S-bend is two corners of
+    # OPPOSITE sign, and telling that from one long corner is the difference
+    # between holding speed through the middle and surging into the second half.
+    self.sign, self.turn_deg = sign, turn_deg
 
 
 class SCCMapV2:
@@ -185,6 +222,11 @@ class SCCMapV2:
     # everything the geometry found ahead, for the minimap's tint
     self.corners: list[TrackedCorner] = []
     self.learned_count = 0
+    # The last committed pass, for the dev UI. A driver watching the first few
+    # drives needs to see that learning HAPPENED, not just that a store exists —
+    # an empty store and a store nothing is being written to look identical.
+    self.last_pass = (0.0, 0.0, 0.0)   # (a_peak, severity, radius)
+    self.pass_count = 0
 
     self._cap = CurveSpeedCap(_DT)
     self._effort = LateralEffort()
@@ -192,6 +234,7 @@ class SCCMapV2:
     self._pass_key = None       # (lat, lon, bearing, radius) of the corner being driven
     self._geom_at = 0.0
     self._last_sample_t = 0.0
+    self._gate_frames = 0
 
   # ── store ─────────────────────────────────────────────────────────────────
 
@@ -268,7 +311,7 @@ class SCCMapV2:
       a_lat, visits, conf = self._lookup(clat, clon, cbrg)
       v = max(CS_.speed_for(rc.radius, a_lat), CS_.MIN_V_TARGET)
       out.append(TrackedCorner(clat, clon, cbrg, rc.radius, rc.half_len, d,
-                               a_lat, visits, conf, v))
+                               a_lat, visits, conf, v, rc.sign, rc.turn_deg))
     self.corners = out
     s = self.store()
     if s is not None:
@@ -368,6 +411,8 @@ class SCCMapV2:
       s.observe(key[0], key[1], key[2], key[3], a_peak, severity, flags,
                 allow_raise=not self.is_active)
       self.learned_count = s.count
+      self.last_pass = (a_peak, severity, key[3])
+      self.pass_count += 1
       _log(f"scc_map_v2: pass R={key[3]:.0f}m a_peak={a_peak:.2f} sev={severity:.2f}"
            + f" rev={self._pass.reversals} lim={self._pass.limit_time:.2f}s flags={flags}")
     except Exception:
@@ -410,6 +455,44 @@ class SCCMapV2:
       self.corner_radius_m = best_c.radius
     return best
 
+  def _update_gas_gate(self, v_ego: float, v_cruise: float) -> None:
+    """Should the planner stop adding throttle? See the GATE_ constants.
+
+    THREE NARROWINGS, ALL FAIL-SAFE — each can only make the gate fire in
+    strictly fewer situations, which is the right direction for something whose
+    failure mode is a car that will not accelerate:
+
+      1. v_ego must be above the corner's requirement by GATE_V_MARGIN. With no
+         speed to give back there is nothing to gate.
+      2. a corner that permits more than the set speed is SKIPPED, using the
+         same test `_raw_cap` uses. `min(v_target, v_cruise)` was the first
+         draft of this and it is subtly wrong in both directions: it cannot
+         stop such a corner gating (the envelope was already above v_ego), and
+         when the driver is over the set speed on the pedal it makes a
+         non-constraining sweeper gate. Skipping is what the cap does, so the
+         gate and the cap now agree about which corners exist.
+      3. GATE_MAX_S bounds any single hold. A latched throttle gate is the
+         v3.4.8 failure and this is the backstop against it, not a knob.
+    """
+    gate = False
+    if self.is_enabled and v_ego > 0.0:
+      # a gate already engaged holds until the requirement comes back up to
+      # meet us; see GATE_V_RELEASE
+      margin = GATE_V_RELEASE if self.gas_gating_active else GATE_V_MARGIN
+      for c in self.corners:
+        if c.v_target >= v_cruise - 0.5:
+          continue          # does not constrain us; same test the cap applies
+        # where we will be in GATE_LEAD_T seconds, at the speed we hold now
+        d = max(0.0, max(c.distance, 0.0) - v_ego * GATE_LEAD_T)
+        if CS_.approach_cap(c.v_target, d) < v_ego - margin:
+          gate = True
+          break
+
+    self._gate_frames = self._gate_frames + 1 if gate else 0
+    if self._gate_frames * _DT > GATE_MAX_S:
+      gate = False
+    self.gas_gating_active = gate
+
   def update(self, long_enabled: bool, v_ego: float, a_ego: float, v_cruise: float,
              lat: float, lon: float, bearing: float, gps_ok: bool) -> None:
     """NOTE the signature no longer takes `sm` or `fric`.
@@ -440,6 +523,11 @@ class SCCMapV2:
       self._reset()
       return
 
+    # BEFORE the cap, deliberately: the gate's whole job is to act while the
+    # cap is still above us, so it is computed from the corner list rather than
+    # from the cap's output.
+    self._update_gas_gate(v_ego, v_cruise)
+
     try:
       self.raw_v_target = self._raw_cap(v_cruise)
     except Exception:
@@ -456,12 +544,29 @@ class SCCMapV2:
       # CurveSpeedCap's release ceiling deliberately sits a little above cruise.
       self.output_v_target = min(max(cap, CS_.MIN_V_TARGET), v_cruise)
       self.output_a_target = a_ego     # display only; the MPC owns decel
-      self.gas_gating_active = v_ego > self.output_v_target + 0.5
     else:
       self.state = "INACTIVE"
       self.output_v_target = CAP_INACTIVE
       self.output_a_target = 0.0
-      self.gas_gating_active = False
+
+  def debug_row(self, authority: float = 0.0):
+    """The dev-UI payload, in scc_shm's documented field order."""
+    gov = None
+    for c in self.corners:
+      if abs(c.lat - self.gov_lat) < 1e-7 and abs(c.lon - self.gov_lon) < 1e-7:
+        gov = c
+        break
+    ahead = sum(1 for c in self.corners if c.distance > -5.0)
+    cap = self.output_v_target if self.output_v_target < CAP_INACTIVE else 0.0
+    return (ahead,
+            gov.radius if gov else 0.0,
+            gov.v_target if gov else 0.0,
+            self.gov_distance,
+            gov.a_lat if gov else 0.0,
+            gov.visits if gov else 0,
+            int(bool(self.gas_gating_active)),
+            cap, authority, self.learned_count,
+            self.last_pass[0], self.last_pass[1], self.last_pass[2], self.pass_count)
 
   def _reset(self):
     self.state = "INACTIVE"
@@ -470,6 +575,7 @@ class SCCMapV2:
     self.raw_v_target = CAP_INACTIVE
     self.is_active = False
     self.gas_gating_active = False
+    self._gate_frames = 0
     self.corner_radius_m = 0.0
     self.gov_lat = 0.0
     self.gov_lon = 0.0
