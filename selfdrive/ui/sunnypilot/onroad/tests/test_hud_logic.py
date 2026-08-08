@@ -1008,3 +1008,63 @@ class TestSideSignals:
     for dt in (0.0, -1.0, float('nan'), 10.0):
       s.update(dt, True, True, float('nan'))
       assert 0.0 <= s.alpha <= 1.0
+
+
+class TestTheCornerWireFormatContract:
+  """FunnyPilot v3.6.3 — THE MINIMAP DIED ON THE ROAD BECAUSE THIS DID NOT EXIST.
+
+  v3.6.2 added a sixth field (`visits`) to /dev/shm/fp_corners so the learned
+  ring could tell "never driven" from "driven once". `corner_speed_at` still
+  unpacked five names, so the first corner published raised
+
+      ValueError: too many values to unpack (expected 5)
+
+  and `safe_draw` disabled the minimap for the rest of the session. On straight
+  road the corner list is empty and the loop body never runs, so it presented
+  as the map working at first and then vanishing mid-drive.
+
+  EVERY EXISTING TEST PASSED because `TestCornerSpeedAt` builds its fixture BY
+  HAND as a 5-tuple. A hand-written fixture cannot notice that the producer
+  changed shape — it only ever tests the consumer against the author's memory
+  of the format. These cases feed the CONSUMER with what the PRODUCER actually
+  emits, so the two cannot drift again.
+  """
+
+  def _emit(self, tmp_path, monkeypatch, corners):
+    """Round-trip through the real writer and reader."""
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import scc_shm
+    monkeypatch.setattr(scc_shm, "CORNERS_SHM_PATH", str(tmp_path / "fp_corners"))
+
+    class _C:
+      def __init__(self, lat, lon, half_len, v_target, settled, visits):
+        self.lat, self.lon = lat, lon
+        self.half_len, self.v_target = half_len, v_target
+        self.settled, self.visits = settled, visits
+
+    scc_shm.write_corners_shm([_C(*c) for c in corners])
+    return scc_shm.read_corners_shm()
+
+  def test_the_real_wire_format_does_not_crash_the_consumer(self, tmp_path, monkeypatch):
+    """MUTATION: revert corner_speed_at to unpacking five names."""
+    out = self._emit(tmp_path, monkeypatch, [(37.5, -122.0, 50.0, 12.0, 0.45, 3)])
+    assert out, "the producer wrote nothing; this test would be vacuous"
+    assert _rm.corner_speed_at(37.5, -122.0, out) == pytest.approx(12.0, abs=0.05)
+
+  def test_the_learned_ring_reads_the_same_tuples(self, tmp_path, monkeypatch):
+    """Both consumers of this channel are driven from one producer output, so
+    a future field cannot satisfy one and break the other."""
+    out = self._emit(tmp_path, monkeypatch,
+                     [(37.5, -122.0, 50.0, 12.0, 0.45, 3),
+                      (37.6, -122.1, 40.0, 18.0, 0.0, 0)])
+    rings = _rm.learned_corners_from(out)
+    assert len(rings) == 1                      # only the driven one
+    assert rings[0][2] == pytest.approx(0.45)
+
+  def test_a_further_widened_entry_still_works(self):
+    """The point of indexing rather than unpacking: this consumer must be
+    indifferent to fields added for somebody else's reader."""
+    seven = (37.5, -122.0, 50.0, 12.0, 0.45, 3, 999.0)
+    assert _rm.corner_speed_at(37.5, -122.0, [seven]) == pytest.approx(12.0)
+
+  def test_a_short_entry_is_skipped_not_fatal(self):
+    assert _rm.corner_speed_at(37.5, -122.0, [(37.5, -122.0)]) == 0.0

@@ -193,7 +193,22 @@ def corner_speed_at(lat: float, lon: float, corners) -> float:
   """
   best = 0.0
   clat = math.cos(math.radians(lat)) if -90.0 < lat < 90.0 else 1.0
-  for c_lat, c_lon, half, v, _conf in corners:
+  # INDEXED, NOT UNPACKED, AND THAT IS THE WHOLE FIX (v3.6.3). This read
+  # `for c_lat, c_lon, half, v, _conf in corners:` — exactly five names — while
+  # v3.6.2 widened the fp_corners entry to six fields to carry `visits`. Every
+  # frame with a corner ahead therefore raised
+  #     ValueError: too many values to unpack (expected 5)
+  # and `safe_draw` disabled the whole minimap FOR THE SESSION. It looked like
+  # the map working and then dying a few seconds into a drive, because on
+  # straight road the list is empty and the loop body never runs.
+  #
+  # Reading by index makes this consumer indifferent to fields added for other
+  # readers, which is the property a positional wire format needs if it is
+  # going to keep growing.
+  for c in corners:
+    if len(c) < 5:
+      continue
+    c_lat, c_lon, half, v = c[0], c[1], c[2], c[3]
     if v <= 0.0:
       continue
     d = math.hypot((c_lat - lat) * _M_PER_DEG, (c_lon - lon) * _M_PER_DEG * clat)

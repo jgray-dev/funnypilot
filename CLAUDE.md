@@ -119,6 +119,63 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.3 Changes (based on funnypilot-3.6.2)
+
+Two on-road defects from the first real drive of v3.6.2. Both owner-reported.
+
+- `hud/route_map.py` — **THE MINIMAP DIED A FEW SECONDS INTO EVERY DRIVE, AND
+  IT WAS A TUPLE ARITY BUG OF MINE.** v3.6.2 widened the `/dev/shm/fp_corners`
+  entry to six fields to carry `visits`; `corner_speed_at` still read
+  `for c_lat, c_lon, half, v, _conf in corners:` — five names. The first corner
+  published raised `ValueError: too many values to unpack (expected 5)`, and
+  `safe_draw` disabled the widget FOR THE SESSION. On straight road the corner
+  list is empty and the loop body never runs, so it presented as the map
+  working at first and then vanishing — which is exactly the shape `safe_draw`
+  failures always have, and the first thing to suspect when a widget goes away
+  and does not come back. Confirmed on the device:
+  `grep -rhao "onroad hud widget .[a-z_]*. raised" /data/log/` -> `route_map`.
+  Now INDEXED, not unpacked, so this consumer is indifferent to fields added
+  for other readers — the property a positional wire format needs if it is
+  going to keep growing.
+- **WHY THE WHOLE SUITE PASSED**: `TestCornerSpeedAt` builds its fixture BY
+  HAND as a 5-tuple. A hand-written fixture cannot notice that the producer
+  changed shape; it tests the consumer against the author's memory of the
+  format. NEW `TestTheCornerWireFormatContract` drives the consumer with the
+  actual output of `write_corners_shm` -> `read_corners_shm`, so the two
+  cannot drift again. Mutation-tested by restoring the five-name unpack.
+- `speed_limit/speed_limit_assist.py` — **THE 6 s WINDOW HAD NO TEETH.** Once
+  it lapsed and the UI took the arrow down, moving the set speed still turned
+  SLA on. Two doors out of `inactive` are DELETED:
+  (1) `set_speed_matches_limit -> _activate()`, which activated outright with
+  no prompt at any point; (2) v3.5.5's `_button_event_recent() ->
+  _enter_pre_active()`.
+  **THE SECOND ONE IS WHY A SINGLE CLICK ACTIVATED**, and the mechanism is
+  worth keeping: press and release are SEPARATE `buttonEvents` 100-300 ms
+  apart, while the state machine runs every 50 ms. `_button_event_recent()`
+  arms on the PRESS, so the press re-opened the window — and `_clear_releases()`
+  ran before the release existed, so the release of that SAME click then
+  landed inside the fresh window and confirmed it. Arrow visible for a tenth
+  of a second, SLA on.
+  **THIS REVERSES v3.5.5 DELIBERATELY.** That release added the escape because
+  a lockout had been reported ("changing speed to enable it does nothing").
+  The lockout is now the INTENDED behaviour: outside the window a set-speed
+  change is only a set-speed change, and the reset is cycling longitudinal
+  control off and on, which routes through `disabled` and opens a fresh
+  window. Anyone reading the v3.5.5 note needs to know it was reversed on
+  purpose, not regressed.
+  `set_speed_matches_limit` still activates INSIDE the window — with the set
+  speed on the sign there is no direction left to press, so the match is the
+  confirmation.
+- TESTS: **732 green**, ruff clean. `TestInactiveIsEscapable` rewritten as
+  `TestTheWindowIsTheWholePermission` (9) — it pinned exactly the behaviour
+  this release removes, so keeping it would have been keeping the bug. THREE
+  guards mutation-tested: the five-name unpack, and each deleted door
+  restored individually.
+- `FUNNYPILOT_VERSION` -> 3.6.3, `EXPECTED_VERSION` -> "3.6.3", branch
+  `funnypilot-3.6.3`. The two move together by construction — `_eval_diag`
+  matches `EXPECTED_VERSION` against the BRANCH NAME and hard-fails
+  `updater_target` otherwise.
+
 ### v3.6.2, fourth pass — THE FIRST FLASH BOOT-LOOPED
 
     TypeError: Can't instantiate abstract class DeveloperUiRenderer

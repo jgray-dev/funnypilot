@@ -130,13 +130,21 @@ class TestArming:
     assert sla.state == SpeedLimitAssistState.preActive
 
 
-class TestInactiveIsEscapable:
-  """FunnyPilot v3.5.5 — the reported "SLA refuses to re-enable; the only fix
-  is toggling the setting off and on".
+class TestTheWindowIsTheWholePermission:
+  """FunnyPilot v3.6.3 — once the 6 s lapses, the cruise buttons do NOT touch SLA.
 
-  preActive is a 6 s window and, before this, the only doors into it were a
-  ZONE CHANGE or the first limit of the drive — both events the driver does not
-  control. Miss the window and there was no gesture that could reopen it.
+  Owner-reported and explicit: after the UI takes the arrow down, changing the
+  set speed must only change the set speed. The way to ask again is to cycle
+  longitudinal control, which opens a fresh window.
+
+  THIS REVERSES v3.5.5 ON PURPOSE. That release added a cruise press as an
+  escape from `inactive`, because a lockout had been reported. The escape made
+  the expiry meaningless in a way that was worse: press and release are
+  SEPARATE button events 100-300 ms apart while this state machine runs every
+  50 ms, so the press re-opened the window and the release of that same click
+  landed inside it and confirmed. One click, arrow visible for a tenth of a
+  second, SLA on. The lockout is now the intended behaviour and the long-control
+  cycle is the documented reset.
   """
 
   def _timed_out(self):
@@ -144,45 +152,71 @@ class TestInactiveIsEscapable:
     events = FakeEvents()
     engage(sla, events, cluster_mph=40., limit_mph=45.)
     assert sla.state == SpeedLimitAssistState.preActive
-    # let the window expire with the SAME zone still in force, which is exactly
-    # the case that had no exit
+    # let the window expire with the SAME zone still in force
     step(sla, events, cluster_mph=40., limit_mph=45., n=WINDOW_FRAMES + 2)
     assert sla.state == SpeedLimitAssistState.inactive
     return sla, events
 
   def test_it_really_does_time_out_first(self):
-    """Anti-vacuous: if this stopped landing in `inactive` the tests below
+    """Anti-vacuous: if this stopped landing in `inactive` every test below
     would pass without exercising anything."""
     sla, _ = self._timed_out()
     assert not sla.is_active
 
-  def test_a_cruise_press_reopens_the_window(self):
-    """MUTATION: delete the `_button_event_recent()` branch. The driver is then
-    locked out until the next sign — the reported bug, verbatim."""
+  def test_a_cruise_press_does_not_reopen_the_window(self):
+    """MUTATION: restore the v3.5.5 `_button_event_recent()` branch."""
     sla, events = self._timed_out()
     release(sla, ButtonType.decelCruise)
     step(sla, events, cluster_mph=40., limit_mph=45.)
-    assert sla.state == SpeedLimitAssistState.preActive
-
-  def test_reopening_does_not_by_itself_activate(self):
-    """The reopening press must NOT double as the confirm: activation adopts
-    the set speed, so a single stray tap silently locking SLA on at whatever
-    the cluster happens to read is the failure mode to avoid."""
-    sla, events = self._timed_out()
-    release(sla, ButtonType.accelCruise)
-    step(sla, events, cluster_mph=40., limit_mph=45.)
-    assert sla.state == SpeedLimitAssistState.preActive
+    assert sla.state == SpeedLimitAssistState.inactive
     assert not sla.is_active
 
-  def test_a_second_directional_press_then_confirms(self):
-    """End to end, this is the gesture the driver described: adjust speed, see
-    the arrow, press again in its direction."""
+  def test_a_single_click_cannot_activate(self):
+    """THE REPORTED BEHAVIOUR, PINNED. The press re-armed and its own release
+    confirmed, so one click turned SLA on with no visible prompt."""
     sla, events = self._timed_out()
-    release(sla, ButtonType.decelCruise)
-    step(sla, events, cluster_mph=40., limit_mph=45.)
-    release(sla, ButtonType.accelCruise)  # 40 in a 45 zone -> the arrow says UP
+    release(sla, ButtonType.accelCruise)          # 40 in a 45 zone: the old arrow said UP
+    step(sla, events, cluster_mph=40., limit_mph=45., n=4)
+    assert not sla.is_active
+
+  def test_repeated_presses_still_cannot_activate(self):
+    """Not merely delayed by one press — the door is shut. MUTATION: keep any
+    inactive -> preActive transition driven by button events."""
+    sla, events = self._timed_out()
+    for _ in range(6):
+      release(sla, ButtonType.accelCruise)
+      step(sla, events, cluster_mph=40., limit_mph=45., n=3)
+    assert sla.state == SpeedLimitAssistState.inactive
+    assert not sla.is_active
+
+  def test_dialing_onto_the_limit_no_longer_activates(self):
+    """The other door out of `inactive`, and the quieter one: walking the
+    cluster onto the sign used to activate outright with no prompt at any
+    point. That is still 'changing my set speed', so it must do nothing."""
+    sla, events = self._timed_out()
+    step(sla, events, cluster_mph=45., limit_mph=45., n=4)
+    assert not sla.is_active
+    assert sla.state == SpeedLimitAssistState.inactive
+
+  def test_cycling_longitudinal_control_reopens_it(self):
+    """THE DOCUMENTED RESET, and the reason the above is not a lockout.
+    Long control off routes SLA through `disabled`; back on gives a fresh
+    window, and a directional press inside it activates as always."""
+    sla, events = self._timed_out()
+    step(sla, events, cluster_mph=40., limit_mph=45., long_enabled=False, n=3)
+    assert sla.state == SpeedLimitAssistState.disabled
+    step(sla, events, cluster_mph=40., limit_mph=45., n=GUARD_FRAMES + 3)
+    assert sla.state == SpeedLimitAssistState.preActive
+    release(sla, ButtonType.accelCruise)
     step(sla, events, cluster_mph=40., limit_mph=45.)
     assert sla.is_active
+
+  def test_a_new_zone_still_offers_activation(self):
+    """The other legitimate door stays open: a zone change is an event the
+    road produced, not a set-speed adjustment."""
+    sla, events = self._timed_out()
+    step(sla, events, cluster_mph=40., limit_mph=55.)
+    assert sla.state == SpeedLimitAssistState.preActive
 
   def test_no_limit_means_no_prompt(self):
     """A press with nothing to assist toward must stay quiet."""
@@ -280,12 +314,17 @@ class TestPreActiveConfirm:
     assert sla.is_active
     assert sla.dynamic_offset_ratio == 0.0
 
-  def test_dialing_onto_limit_activates_from_inactive(self):
+  def test_dialing_onto_limit_activates_inside_the_window(self):
+    """Still true DURING the prompt: with the set speed on the sign there is
+    no direction left to press, so the match is the confirmation.
+
+    v3.6.3 narrowed this to the window only — see
+    TestTheWindowIsTheWholePermission for the outside-the-window case, which
+    is now inert."""
     sla = make_sla()
     events = FakeEvents()
     engage(sla, events, cluster_mph=40., limit_mph=45.)
-    step(sla, events, cluster_mph=40., limit_mph=45., n=WINDOW_FRAMES + 2)
-    assert sla.state == SpeedLimitAssistState.inactive
+    assert sla.state == SpeedLimitAssistState.preActive
     step(sla, events, cluster_mph=45., limit_mph=45.)
     assert sla.is_active
 

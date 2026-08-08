@@ -24,9 +24,13 @@ Activation (the original arrow flow):
     (cruise_ext.py) so it doesn't step the set speed — activation ADOPTS the
     current set speed unchanged (no jump, no jerk) and derives the dynamic
     ratio from it: 50 set in a 45 zone activates at +11%, still doing 50.
-  * If the set speed already equals the limit, SLA activates immediately
-    (nothing to confirm, ratio 0). The window simply times out back to
-    inactive otherwise, and re-arms on the next zone change.
+  * If the set speed already equals the limit DURING THE WINDOW, SLA activates
+    immediately (nothing to confirm, ratio 0).
+  * v3.6.3 — OUTSIDE THE WINDOW, THE CRUISE BUTTONS DO NOTHING TO SLA. Once
+    the 6 s lapses the state returns to inactive, the UI takes the arrow down,
+    and a set-speed change is only a set-speed change. To ask again, cycle
+    longitudinal control off and on: that routes through `disabled` and opens
+    a fresh window. The window is the permission, and it expires.
 
 While active (the v3.2.6e stack, unchanged):
   * The cluster set speed IS the SLA target. Manual cruise adjustments
@@ -527,40 +531,42 @@ class SpeedLimitAssist:
           self._clear_releases()
 
       else:  # armed (inactive)
+        # FunnyPilot v3.6.3 — THE WINDOW IS THE WHOLE PERMISSION, AND OUTSIDE
+        # IT A SET-SPEED CHANGE IS JUST A SET-SPEED CHANGE.
+        #
+        # Owner-reported and explicit: once the 6 s window lapses and the UI
+        # takes the arrow down, adjusting the cruise speed must not touch SLA
+        # at all. The only way back is to cycle longitudinal control off and on,
+        # which routes through `disabled` and re-enters preActive below with a
+        # fresh 6 s — a deliberate gesture the driver chooses, rather than a
+        # side effect of moving the set speed.
+        #
+        # TWO DOORS WERE REMOVED HERE, and both were reachable by moving the
+        # set speed while no arrow was showing:
+        #
+        #   1. `set_speed_matches_limit -> _activate()`. Dialling the cluster
+        #      onto the sign activated outright, with no prompt at any point.
+        #   2. v3.5.5's `_button_event_recent() -> _enter_pre_active()`. That
+        #      was added to escape a reported lockout ("changing speed to
+        #      enable it does nothing"), but it made the expiry meaningless:
+        #      the press RE-OPENED the window and, because press and release
+        #      are separate events 100-300 ms apart while the state machine
+        #      runs every 50 ms, the release of that SAME click then landed in
+        #      the freshly opened window and confirmed it. One click, arrow
+        #      visible for a tenth of a second, SLA on.
+        #
+        # THE LOCKOUT v3.5.5 WORRIED ABOUT IS NOW THE INTENDED BEHAVIOUR, so
+        # it is not a regression — but it IS the same behaviour that was once
+        # reported as a bug, and anyone reading that history needs to know it
+        # was reversed on purpose. The long-control cycle is the documented
+        # reset; see the `disabled` branch below.
         if self._has_speed_limit and (self.speed_limit_final_last_changed or not self._had_speed_limit):
           # new zone (or first limit seen): offer activation
           self._enter_pre_active()
-        elif self.set_speed_matches_limit:
-          # dialing the set speed onto the limit activates at any time
-          self._activate()
-        elif self._has_speed_limit and self._button_event_recent():
-          # FunnyPilot v3.5.5 — INACTIVE WAS A TRAP, AND THIS IS THE WAY OUT.
-          #
-          # Reported: "SLA refuses to re-enable — I can see the indicator by the
-          # speed limit, but changing speed to enable it does nothing", cleared
-          # only by toggling the setting off and on. That toggle works because
-          # it routes through `disabled`, which re-enters preActive; nothing
-          # else did.
-          #
-          # THE DEFECT: preActive is a 6 s window, and the ONLY other doors into
-          # it were a zone change or the very first limit of the drive. Miss the
-          # window once and the driver is locked out until the next sign, with
-          # no gesture that can reopen it. Every escape route needed an event the
-          # DRIVER DOES NOT CONTROL.
-          #
-          # WHY A LEAD MAKES IT LIKELY, which is the clue that found it: braking
-          # for a lead disengages, and re-engaging re-arms the window — so the
-          # 6 s runs out at the exact moment the driver is busy with the car in
-          # front. Behind a lead you also sit with a set speed BELOW the limit,
-          # so the arrow asks for `+`, and `+` is the one press you do not want
-          # to make while closing on someone. Either way the window expires
-          # unconfirmed.
-          #
-          # A cruise press now REOPENS the window. It cannot activate anything
-          # on its own — `_enter_pre_active` clears the pending releases, so the
-          # confirming press is still a second, DIRECTIONAL one, exactly as
-          # before. All this restores is the driver's ability to ask.
-          self._enter_pre_active()
+        else:
+          # Nothing else may leave `inactive`. Releases are dropped so a press
+          # made here cannot be consumed as a confirm by a window opened later.
+          self._clear_releases()
 
     else:  # DISABLED
       if self.long_enabled and self.enabled:
