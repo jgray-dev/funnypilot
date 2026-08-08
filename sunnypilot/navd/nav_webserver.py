@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.3"
+EXPECTED_VERSION = "3.6.4"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #

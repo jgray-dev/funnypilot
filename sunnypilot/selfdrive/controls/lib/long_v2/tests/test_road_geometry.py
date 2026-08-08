@@ -289,3 +289,43 @@ class TestTotality:
     long_route = [(x / M, 0.0) for x in range(20000)]
     xy = RG.to_local(long_route, 0.0, 0.0, 0.0)
     assert len(RG.resample(xy)) <= RG.MAX_VERTICES
+
+
+class TestTheTurnGateSitsWhereNoiseStops:
+  """FunnyPilot v3.6.4 — MIN_CORNER_TURN_DEG 18 -> 16.
+
+  Reported: the second half of an S-bend was not detected at all, despite the
+  minimap drawing a sharper bend than the first. A bend's arc is `R * sweep`,
+  so a short-sweep bend occupies far less than curvature_profile's window and
+  its measured run is diluted — which drags the run's TOTAL TURN below the
+  gate and drops the corner entirely.
+
+  16 was chosen by measurement, not by feel. Across node spacings 15-100 m and
+  1-3 m of node noise the false-corner count is IDENTICAL at 16 and 18 (33 in
+  both, all of them at 3 m noise, all pre-existing), while 16 recovers bends
+  that 18 rejects. 14 costs 2 more false corners and 12 costs 5, so 16 is the
+  last free step.
+  """
+
+  def test_a_bend_between_the_old_and_new_gate_is_found(self):
+    """MUTATION: put the gate back to 18."""
+    found = None
+    for sweep in (17.0, 17.5, 18.5, 19.0, 20.0):
+      pts = arc_route(radius=90.0, arc_deg=sweep, node_m=15.0)
+      cs, _ = RG.corners_from_route(pts, 0.0, 0.0, 0.0)
+      hit = [c for c in cs if 16.0 <= c.turn_deg < 18.0]
+      if hit:
+        found = hit[0]
+        break
+    assert found is not None, "no bend landed in the 16-18 degree band to test with"
+    assert found.radius > 0.0
+
+  def test_the_gate_is_still_above_the_noise_floor(self):
+    """The gate only means anything if noise stays under it. Same grid the
+    module docstring quotes, at the noise levels it claims to cover."""
+    for node_m in (20.0, 30.0, 60.0, 100.0):
+      for noise in (1.0, 2.0):
+        for seed in range(8):
+          cs, _ = RG.corners_from_route(
+            straight_route(node_m=node_m, noise=noise, seed=seed), 0.0, 0.0, 0.0)
+          assert cs == [], f"invented {cs} at node_m={node_m} noise={noise}"

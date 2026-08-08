@@ -119,6 +119,74 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.4 Changes (based on funnypilot-3.6.3)
+
+Two on-road reports: SCC-M v2 missing the second half of an S-bend (and taking
+the first too fast), and the minimap tint saying nothing about what long
+control is doing.
+
+- `hud/route_map.py` — **THE RIBBON SHOWS THE PLAN NOW, NOT THE FOOTPRINT.**
+  A corner used to paint its colour over its own extent and nothing else, so
+  the approach — the part you feel, where the throttle lifts and then the
+  brakes come on — was untinted road. HUE still comes from the corner's FULL
+  drop (a hard bend must look hard from a mile out, not merely distant);
+  OPACITY is now `(expected - cap(s)) / (expected - v_corner)`.
+  Going IN, `cap` is SCC-M v2's OWN `approach_cap`, imported lazily from
+  corner_speed.py — not a copy, so the ribbon cannot disagree with the cap the
+  car is holding. Coming OUT it is `CurveSpeedCap.RELEASE_RATE`, so the tint
+  fades where authority genuinely returns to the set speed instead of stopping
+  dead at the apex. **0% OPACITY MEANS THE SET SPEED DECIDES HERE**, which is
+  exactly the requirement.
+  Measured, 60 mph set into a 29 mph bend: 45% at 600 ft, 63% at 400 ft, 94%
+  at 200 ft, 100% from 100 ft through the apex, then 64% / 37% / 13% at
+  100 / 200 / 300 ft past and 0% by 450 ft.
+  **ALPHA IS EXACTLY 1.0 AT EVERY APEX BY CONSTRUCTION** — the remaining
+  distance is zero there, so `cap` IS `v_corner`. No bend can fade to
+  invisible however far off it is; only its run-in and run-out fade. That is
+  what makes opacity safe to use as an information channel at all.
+  The two ends are asymmetric on purpose: entry is capped at 1.20 m/s^2
+  (`long_mpc.CRUISE_MIN_ACCEL`), exit is 2.5, so the run-out is about half the
+  run-in — "brake early, accelerate out", drawn.
+- `long_v2/road_geometry.py` — `MIN_CORNER_TURN_DEG` 18 -> 16. MEASURED: across
+  node spacings 15-100 m and 1-3 m of node noise the false-corner count is
+  IDENTICAL at 16 and 18 (33 both, all at 3 m noise, all pre-existing), while
+  16 recovers bends 18 rejects. 14 costs 2 more, 12 costs 5. 16 is the last
+  free step.
+- **THE S-BEND DIAGNOSIS, AND WHY THE FIX IS NOT IN YET.** A bend's arc is
+  `R * sweep`, so a 40 m radius through 20 degrees is 14 m of arc inside
+  curvature_profile's 50 m window — the other 36 m is straight road and the
+  average comes out at 28% of the truth. Measured over 48 synthetic S-bends:
+  14/48 second bends missed and a true R=40 reading as **R=172 (+330%)**, i.e.
+  priced as a sweeper and entered far too fast. That is BOTH halves of the
+  report from one mechanism.
+  TWO FIXES WERE TRIED AND BOTH MEASURED WORSE, so neither shipped:
+  (1) an ADAPTIVE window (max over widths) improved the median +46% -> +17%
+  but INVENTED corners on noisy straights at close node spacing — 4 per 40
+  seeds at 20 m nodes with 2 m error, turning through 26 degrees, straight
+  past the gate. An earlier measurement showing "no cost" had sampled ONE node
+  spacing and got lucky; `TestANoisyStraightRoadIsNotACorner` caught it.
+  (2) re-measuring an ACCEPTED run's radius narrowly on a less-smoothed line
+  took too-loose to 0/48 — but read a 100 m bend as **18 m** at 60 m node
+  spacing, because that reintroduces finding 1 (staircase aliasing). Caught by
+  `TestPointSpacingDoesNotChangeTheAnswer`.
+  **THE SMOOTHING IS LOAD-BEARING AND THE WINDOW CANNOT SIMPLY BE NARROWED.**
+  A real fix needs an estimator that is node-aware rather than window-based
+  (per-run circle fit weighted by node positions), which is a bigger piece of
+  work than a constant change and should not be guessed at. Until then short
+  -sweep bends remain understated and `tight_trim`/learning are what absorb it.
+- TESTS: **461 green** across the onroad and long_v2 suites, ruff clean. NEW
+  `TestTheSlowdownGradient` (10), `TestTheTurnGateSitsWhereNoiseStops` (2).
+  FOUR guards mutation-tested; **TWO SURVIVED THE FIRST PASS AND BOTH WERE
+  VACUOUS TESTS OF MINE**: the exit-fade case asserted only ordering and the
+  endpoints, so `[1, 0, 0, 0, 0]` passed with the fade deleted; and nothing
+  pinned the turn gate at all. Both rewritten to assert the intermediate
+  values, which is where the behaviour actually lives.
+- `stitch_to_ego` is arity-tolerant now, same lesson as v3.6.3's
+  `corner_speed_at`: this point tuple has grown twice and a consumer that
+  spells out every field breaks the next time one is added.
+- `FUNNYPILOT_VERSION` -> 3.6.4, `EXPECTED_VERSION` -> "3.6.4", branch
+  `funnypilot-3.6.4`.
+
 ### v3.6.3 Changes (based on funnypilot-3.6.2)
 
 Two on-road defects from the first real drive of v3.6.2. Both owner-reported.

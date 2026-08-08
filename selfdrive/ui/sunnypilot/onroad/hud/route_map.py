@@ -247,6 +247,86 @@ def learned_corners_from(corners) -> list[tuple[float, float, float]]:
   return [(c[0], c[1], c[4]) for c in corners if len(c) > 5 and c[5] >= 1]
 
 
+# ── v3.6.4: the tint is a PLAN, not a footprint ────────────────────────────
+#
+# Until now a corner painted its colour over its own extent and nothing else,
+# so the ribbon said WHERE the bend is but nothing about what the car is doing
+# about it. The approach — the part you actually feel, where the throttle comes
+# off and then the brakes come on — was untinted road.
+#
+# Now HUE still comes from the corner's FULL drop (so a hard bend looks hard
+# from a mile out) and OPACITY is how much of that drop has already happened at
+# each point on the road:
+#
+#     alpha(s) = (expected - cap(s)) / (expected - v_corner)
+#
+# 0 means the speed there is the driver's set speed and this corner has no say;
+# 1 means the cap has arrived at the corner's own speed. Going IN, `cap` is
+# SCC-M v2's own `approach_cap` — the integrated decel budget the controller
+# uses, so the ribbon darkens exactly as the car sheds speed. Coming OUT it is
+# CurveSpeedCap's release ramp, so the fade back to road grey happens where
+# authority genuinely returns to the set speed rather than stopping dead at the
+# corner's exit.
+#
+# THE TWO ENDS ARE ASYMMETRIC BY CONSTRUCTION and that is information: entry
+# uses a budget capped at 1.20 m/s^2 (long_mpc.CRUISE_MIN_ACCEL), the exit uses
+# 2.5 m/s^2, so the run-out is about half the length of the run-in — which is
+# what "brake early, accelerate out" looks like drawn on a road.
+RELEASE_RATE = 2.5      # mirrors curve_cap.RELEASE_RATE; pinned by test
+
+
+def corner_plan_at(s: float, corners_s, approach_cap):
+    """(v_gov, cap) at arc position `s` along the route.
+
+    `corners_s` is [(s_apex, v_target), ...] in the same arc frame. The
+    governing corner is the one whose envelope is LOWEST here — the same
+    min() the controller takes, so the ribbon cannot disagree with the cap.
+
+    (0.0, 0.0) means no corner has any say at this point.
+    """
+    best, gov = float('inf'), 0.0
+    for s_apex, v in corners_s:
+      if v <= 0.0:
+        continue
+      d = s_apex - s
+      if d >= 0.0:
+        cap = approach_cap(v, d)
+      else:
+        # past it: CurveSpeedCap ramps the cap back up at RELEASE_RATE, so the
+        # speed permitted `ds` beyond the apex is sqrt(v^2 + 2*a*ds).
+        cap = math.sqrt(v * v + 2.0 * RELEASE_RATE * (-d))
+      if cap < best:
+        best, gov = cap, v
+    if gov <= 0.0 or not T.finite(best):
+      return 0.0, 0.0
+    return gov, best
+
+
+def plan_alpha(expected_mps: float, v_gov: float, cap_mps: float) -> float:
+    """How much of this corner's slowdown has already happened here, 0..1.
+
+    1.0 AT EVERY APEX BY CONSTRUCTION, and that is the property that makes
+    this safe to use as opacity: at the corner the remaining distance is zero,
+    so `cap` IS `v_gov` and the ratio is exactly 1. No bend can fade away, however
+    far off it is — only its run-in and run-out fade.
+    """
+    if not (T.finite(expected_mps) and T.finite(v_gov) and T.finite(cap_mps)):
+      return 0.0
+    full = expected_mps - v_gov
+    if v_gov <= 0.0 or full <= 0.01:
+      return 0.0
+    return T.clamp((expected_mps - cap_mps) / full, 0.0, 1.0)
+
+
+def blend(neutral, colour, a: float):
+    """Road grey -> the corner's colour, by alpha. Kept as a blend rather than
+    a real alpha channel because the ribbon is stroked over the camera image:
+    fading toward the ROAD keeps it legible, fading toward transparent would
+    let whatever is underneath decide what the driver sees."""
+    a = T.clamp(a, 0.0, 1.0)
+    return tuple(int(neutral[i] + (colour[i] - neutral[i]) * a) for i in range(3))
+
+
 def confidence_alpha(conf: float) -> int:
   """A learned corner's ring opacity, 0..255, from its SETTLED confidence.
 
@@ -326,13 +406,13 @@ def zone_change(pts):
   statement about the same event, rather than two colour languages.
   """
   base = 0.0
-  for f, _r, _v, lim in pts:
+  for f, _r, _v, lim, *_ in pts:
     if f >= 0.0 and lim > 0.0:
       base = lim
       break
   if base <= 0.0:
     return None
-  for i, (f, _r, _v, lim) in enumerate(pts):
+  for i, (f, _r, _v, lim, *_) in enumerate(pts):
     if f > 0.0 and lim > 0.0 and abs(lim - base) > 0.3:
       return i, lim, base
   return None
@@ -467,8 +547,11 @@ def stitch_to_ego(pts):
   f0 = pts[0][0]
   if not T.finite(f0) or f0 <= 0.0 or f0 > STITCH_MAX_M:
     return pts
-  _f, _r, v, lim = pts[0]
-  return [(0.0, 0.0, v, lim), *pts]
+  # v3.6.4 — INDEXED AND ARITY-TOLERANT, for the reason corner_speed_at was
+  # fixed in v3.6.3: this tuple has now grown twice, and a consumer that spells
+  # out every field breaks silently the next time a field is added for someone
+  # else. Everything after (fwd, right) is carried through untouched.
+  return [(0.0, 0.0, *pts[0][2:]), *pts]
 
 
 class RouteMap:
@@ -483,6 +566,7 @@ class RouteMap:
     self._fix = None            # (lat, lon, bearing) as last polled
     self._pose = None           # (lat, lon, bearing) as displayed, eased
     self._raw_corners: list[tuple[float, float, float]] = []  # (lat, lon, conf), conf > 0 only
+    self._approach_cap = None   # lazily bound corner_speed.approach_cap, or False
     self._learned = False
     self._have_fix = False
     self._why_last = ""
@@ -604,11 +688,39 @@ class RouteMap:
     except Exception:
       self._learned = False
 
+    # v3.6.4 — SCC-M v2's OWN approach envelope, imported lazily and cached.
+    # corner_speed.py is stdlib-only, but the import runs at poll time rather
+    # than at module scope for the same reason the Params handle does: nothing
+    # in hud/ may fail at import, and this module ships in the process that
+    # draws the offroad screen. If it is unavailable the ribbon simply keeps
+    # the pre-v3.6.4 look (full opacity over each corner's own extent).
+    if self._approach_cap is None:
+      try:
+        from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import approach_cap
+        self._approach_cap = approach_cap
+      except Exception:
+        self._approach_cap = False
+
     # v3.6.2: which of these corners have we actually DRIVEN. Filtered here,
     # once per poll, rather than in render(): a corner's learned state does
     # not change frame to frame, and render() should not spend a
     # comprehension on every draw.
     self._raw_corners = learned_corners_from(corners)
+
+    # v3.6.4: corner apexes in the SAME ego frame the points are walked in, so
+    # the plan is evaluated along the road rather than as a straight line.
+    corners_fwd = []
+    _cl = math.cos(math.radians(lat0))
+    for c in corners:
+      try:
+        if c[3] <= 0.0:
+          continue
+        _n = (c[0] - lat0) * _M_PER_DEG
+        _e = (c[1] - lon0) * _M_PER_DEG * _cl
+        corners_fwd.append((_n * math.cos(math.radians(bearing)) +
+                            _e * math.sin(math.radians(bearing)), c[3]))
+      except Exception:
+        continue
 
     pts = []
     seen = 0
@@ -635,7 +747,14 @@ class RouteMap:
       # v3.6.2 — THE SPEED TAG IS OURS, NOT mapd's. `p["velocity"]` is
       # deliberately not read: SCC-M v2 does not use it, so drawing it would
       # show the driver a corner speed nothing in the car has agreed to.
-      v = corner_speed_at(plat, plon, corners)
+      # v3.6.4 — TWO NUMBERS PER POINT, BOTH GEOMETRY-ONLY so they survive the
+      # 1 Hz poll: `v` is the governing corner's own speed (which sets the HUE)
+      # and `cap` is the envelope value here (which sets the OPACITY). The live
+      # set speed is applied per frame in render(), where it belongs.
+      if self._approach_cap:
+        v, cap = corner_plan_at(fwd, corners_fwd, self._approach_cap)
+      else:
+        v, cap = corner_speed_at(plat, plon, corners), 0.0
       # which zone is in force at this point. Stored RAW, not folded into a
       # delta: since v3.5.2 the comparison depends on the live set speed and
       # SLA offset, which change every frame while this poll is 1 Hz.
@@ -655,7 +774,7 @@ class RouteMap:
             and math.hypot(fwd - kept_at[0], right - kept_at[1]) < DECIMATE_M):
           continue
       kept_at, kept_v, kept_lim = (fwd, right), v, lim
-      pts.append((plat, plon, v, lim))
+      pts.append((plat, plon, v, lim, cap))
 
     if points and not pts:
       # the array had points but none survived the range filter -- the usual
@@ -712,7 +831,7 @@ class RouteMap:
       east = (plon - lon0) * _M_PER_DEG * clat
       return north * cb + east * sb, -north * sb + east * cb
 
-    pts = [(*to_ego(plat, plon), v, lim) for plat, plon, v, lim in self._raw]
+    pts = [(*to_ego(plat, plon), v, lim, cap) for plat, plon, v, lim, cap in self._raw]
 
     # v3.5.5: take the lane/centreline offset out so the ribbon runs through
     # the marker. Computed BEFORE the stitch (the stitch adds a point at the
@@ -721,7 +840,7 @@ class RouteMap:
     # off the road it belongs to.
     shift = lateral_offset_at_ego(pts)
     if shift:
-      pts = [(f, r - shift, v, lim) for f, r, v, lim in pts]
+      pts = [(f, r - shift, v, lim, cap) for f, r, v, lim, cap in pts]
 
     corners = [(*to_ego(plat, plon), conf) for plat, plon, conf in self._raw_corners]
     if shift:
@@ -769,12 +888,16 @@ class RouteMap:
     # result that cannot differ between passes. Identical output, half the work.
     segs = []
     for i in range(1, len(pts)):
-      f0, r0, _v0, _l0 = pts[i - 1]
-      f1, r1, v1, lim1 = pts[i]
+      f0, r0, _v0, _l0, _c0 = pts[i - 1]
+      f1, r1, v1, lim1, cap1 = pts[i]
       a, b = px(f0, r0), px(f1, r1)
 
       expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
-      c = ramp_color(tint_delta_mph(expected, v1))
+      # v3.6.4 — HUE from the corner's FULL drop, OPACITY from how much of it
+      # has happened here. The hue must not fade with the alpha, or a hard
+      # bend would look gentle from a distance instead of merely distant.
+      full = ramp_color(tint_delta_mph(expected, v1))
+      c = blend(_RAMP[0][1], full, plan_alpha(expected, v1, cap1))
 
       # SUBDIVIDE. A highway segment can span the whole strip; drawing it as one
       # line meant one opacity for all of it and, worse, dropping the whole

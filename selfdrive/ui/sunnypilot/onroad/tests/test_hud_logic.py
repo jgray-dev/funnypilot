@@ -1068,3 +1068,109 @@ class TestTheCornerWireFormatContract:
 
   def test_a_short_entry_is_skipped_not_fatal(self):
     assert _rm.corner_speed_at(37.5, -122.0, [(37.5, -122.0)]) == 0.0
+
+
+class TestTheSlowdownGradient:
+  """FunnyPilot v3.6.4 — the ribbon shows the PLAN, not the corner's footprint.
+
+  Hue still comes from the corner's full drop; opacity is how much of that drop
+  has already happened at each point. Going in that is SCC-M v2's own
+  approach_cap, coming out it is CurveSpeedCap's release ramp, so the ribbon
+  darkens as the car sheds speed and fades where authority returns to the set
+  speed.
+  """
+  MPH = 2.23694
+
+  def _cap(self):
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import approach_cap
+    return approach_cap
+
+  def test_alpha_is_exactly_one_at_the_apex(self):
+    """THE PROPERTY THAT MAKES OPACITY SAFE TO USE AT ALL: at the apex the
+    remaining distance is zero, so the cap IS the corner speed and the ratio is
+    exactly 1. No bend can fade to invisible however far away it is — only its
+    run-in and run-out fade."""
+    v_set, v_corner = 60 / self.MPH, 29 / self.MPH
+    gov, cap = _rm.corner_plan_at(0.0, [(0.0, v_corner)], self._cap())
+    assert gov == pytest.approx(v_corner)
+    assert cap == pytest.approx(v_corner)
+    assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0)
+
+  def test_it_builds_monotonically_through_the_approach(self):
+    """MUTATION: evaluate the envelope at a fixed distance, or drop the
+    approach term. The whole point is that it grows as the corner closes."""
+    v_set, v_corner = 60 / self.MPH, 29 / self.MPH
+    ac = self._cap()
+    alphas = []
+    for ft in (700, 600, 500, 400, 300, 200, 100, 0):
+      gov, cap = _rm.corner_plan_at(-ft * 0.3048, [(0.0, v_corner)], ac)
+      alphas.append(_rm.plan_alpha(v_set, gov, cap))
+    assert alphas == sorted(alphas)
+    assert alphas[-1] == pytest.approx(1.0)
+    assert alphas[0] < 0.6
+
+  def test_it_fades_back_to_nothing_after_the_corner(self):
+    """The exit is CurveSpeedCap's own release, so the tint ends where the set
+    speed genuinely takes over again rather than stopping at the apex."""
+    v_set, v_corner = 60 / self.MPH, 29 / self.MPH
+    ac = self._cap()
+    alphas = []
+    for ft in (0, 100, 200, 300, 450):
+      gov, cap = _rm.corner_plan_at(ft * 0.3048, [(0.0, v_corner)], ac)
+      alphas.append(_rm.plan_alpha(v_set, gov, cap))
+    assert alphas == sorted(alphas, reverse=True)
+    assert alphas[0] == pytest.approx(1.0)
+    assert alphas[-1] == 0.0
+    # THE INTERMEDIATE VALUES ARE THE TEST. An earlier version asserted only
+    # the ordering and the ends, and PASSED with the exit fade deleted --
+    # [1, 0, 0, 0, 0] is still sorted descending and still ends at zero. The
+    # exit has to actually ramp.
+    assert 0.0 < alphas[-2] < alphas[1] < 1.0
+    assert alphas[1] > 0.3
+
+  def test_the_exit_is_shorter_than_the_entry(self):
+    """Not cosmetic: entry uses a budget capped at 1.20 m/s^2 while the release
+    is 2.5, so 'brake early, accelerate out' is visible in the shape."""
+    v_set, v_corner = 60 / self.MPH, 29 / self.MPH
+    ac = self._cap()
+    def alpha_at(m):
+      gov, cap = _rm.corner_plan_at(m, [(0.0, v_corner)], ac)
+      return _rm.plan_alpha(v_set, gov, cap)
+    assert alpha_at(100.0) < alpha_at(-100.0)
+
+  def test_a_corner_that_does_not_constrain_us_is_invisible(self):
+    """0% opacity means 'the set speed decides here'. A bend we would take at
+    or above the set speed has nothing to say and must not tint the road."""
+    v_set = 30 / self.MPH
+    gov, cap = _rm.corner_plan_at(-50.0, [(0.0, 45 / self.MPH)], self._cap())
+    assert _rm.plan_alpha(v_set, gov, cap) == 0.0
+
+  def test_no_corners_is_no_plan(self):
+    assert _rm.corner_plan_at(0.0, [], self._cap()) == (0.0, 0.0)
+    assert _rm.plan_alpha(25.0, 0.0, 0.0) == 0.0
+
+  def test_the_slower_of_two_corners_governs(self):
+    """The same min() the controller takes, so the ribbon cannot disagree with
+    the cap the car is actually holding."""
+    ac = self._cap()
+    gov, _cap = _rm.corner_plan_at(-80.0, [(0.0, 20.0), (40.0, 9.0)], ac)
+    assert gov == pytest.approx(9.0)
+
+  def test_garbage_never_paints(self):
+    for e, g, c in ((float('nan'), 12.0, 14.0), (25.0, float('inf'), 14.0),
+                    (25.0, 12.0, float('nan'))):
+      assert _rm.plan_alpha(e, g, c) == 0.0
+
+  def test_blend_ends_are_exact(self):
+    """alpha 0 is the road, alpha 1 is the corner's colour, and nothing in
+    between escapes the two."""
+    grey, red = (118, 134, 152), (255, 68, 68)
+    assert _rm.blend(grey, red, 0.0) == grey
+    assert _rm.blend(grey, red, 1.0) == red
+    mid = _rm.blend(grey, red, 0.5)
+    assert all(min(grey[i], red[i]) <= mid[i] <= max(grey[i], red[i]) for i in range(3))
+
+  def test_the_release_rate_matches_the_controller(self):
+    """Two copies of one constant drift. MUTATION: change either side."""
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import RELEASE_RATE
+    assert _rm.RELEASE_RATE == RELEASE_RATE

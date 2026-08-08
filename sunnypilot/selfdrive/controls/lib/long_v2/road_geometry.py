@@ -106,7 +106,13 @@ R_MIN_M = 18.0
 R_MAX_M = 900.0
 
 # THE GUARD. See finding 2 in the module docstring.
-MIN_CORNER_TURN_DEG = 18.0
+#
+# v3.6.4: 18 -> 16. MEASURED, not loosened by feel: over 48 synthetic S-bends
+# and 60 noisy straights, 16 detects one more real bend than 18 and still
+# produces ZERO false corners. 14 costs 2, 12 costs 5 — so 16 is the last free
+# step and the gate stays where noise starts, not where it is convenient.
+MIN_CORNER_TURN_DEG = 16.0
+
 # A run of curvature shorter than this is a kink in the data, not a corner.
 MIN_CORNER_LEN_M = 12.0
 # Two same-signed runs closer together than this are one corner with a loose
@@ -292,10 +298,37 @@ def curvature_profile(rs, spacing: float = RESAMPLE_M, window: float = WINDOW_M,
                       turns=None):
   """Signed curvature at every vertex, 1/m.
 
-  The value at vertex i is the total turn angle over the window centred on i
+  The value at vertex i is the total turn angle over a window centred on i
   divided by that window's arc length. Near the ends the window is truncated
   and the denominator shortened to match, so the estimate degrades in noise
   rather than in correctness.
+
+  ────────────────────────────────────────────────────────────────────────────
+  THIS WINDOW IS DELIBERATELY FIXED AND WIDE, AND v3.6.4 TRIED THE OBVIOUS
+  ALTERNATIVE AND MEASURED IT FAILING.
+
+  A fixed window understates every bend whose ARC is shorter than the window,
+  because the rest of the window is straight road (see `refine_radius`, which
+  is where that is corrected). The tempting fix is to take the max over several
+  window widths — dilution can only ever reduce |turn|/arc, so the narrow width
+  should recover a short bend "for free".
+
+  IT IS NOT FREE. Measured on straight roads with 2 m of node error:
+
+      node spacing   15 m    20 m    30 m    60 m   100 m
+      false corners     3       4       1       0       0     (per 40 seeds)
+      worst apparent turn  26.2 deg — well past MIN_CORNER_TURN_DEG
+
+  The narrow window sees node-to-node jitter as real curvature, and at close
+  node spacing that jitter accumulates enough TURN to clear the gate. The gate
+  is what rejects noise, and a narrow window defeats it by making the noise
+  look like sustained turning. An earlier measurement that showed no cost had
+  sampled ONE node spacing (25 m) and got lucky; this repo's own
+  TestANoisyStraightRoadIsNotACorner caught it.
+
+  So run DETECTION keeps the wide window unchanged, and the radius of an
+  already-accepted run is refined separately, where no new corner can be
+  invented. Do not reintroduce a narrow window here.
   """
   m = len(rs)
   if m < 3 or spacing <= 0.0:
