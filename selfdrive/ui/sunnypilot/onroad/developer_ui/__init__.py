@@ -58,6 +58,52 @@ class DeveloperUiRenderer(Widget):
     self.scc_last_pass = SccLastPassElement()
     self.scc_pass_count = SccPassCountElement()
 
+  @staticmethod
+  def get_bottom_dev_ui_offset() -> int:
+    """How much of the bottom of the frame this widget owns.
+
+    RESTORED in v3.6.2 after the rewrite dropped it. `hud_renderer._render`
+    and `driver_state` both call it to keep other widgets clear of the bar;
+    with it missing they raise AttributeError, which kills the UI process the
+    same way the abstract-method error did — just one boot later.
+    """
+    if ui_state.developer_ui in (DeveloperUiRenderer.DEV_UI_BOTTOM, DeveloperUiRenderer.DEV_UI_BOTH):
+      return DeveloperUiRenderer.BOTTOM_BAR_HEIGHT
+    return 0
+
+  def _update_state(self) -> None:
+    """Widget.render() calls this before _render every frame. Without it
+    `dev_ui_mode` never leaves DEV_UI_OFF and the panel silently never draws —
+    the quietest of the three defects the rewrite introduced, and the only one
+    that would not have crashed."""
+    self.dev_ui_mode = ui_state.developer_ui
+
+  def _render(self, rect: rl.Rectangle) -> None:
+    """THE ABSTRACT METHOD `Widget` REQUIRES. Its absence is what put the
+    device in a boot loop on the first flash of v3.6.2: `Widget` is an
+    `abc.ABC` whose public `render()` dispatches here, so a subclass without
+    it cannot be INSTANTIATED at all. The rewrite replaced the body with
+    `_draw_right_dev_ui`/`_draw_bottom_dev_ui` and never re-declared the
+    method those two are dispatched from.
+
+    Note this is not an import error, which is why every import guard in the
+    package passed — see test_hud_widgets_are_concrete.
+    """
+    if self.dev_ui_mode == self.DEV_UI_OFF:
+      return
+
+    sm = ui_state.sm
+    if sm.recv_frame["carState"] < ui_state.started_frame:
+      return
+
+    if self.dev_ui_mode == self.DEV_UI_BOTTOM:
+      self._draw_bottom_dev_ui(rect)
+    elif self.dev_ui_mode == self.DEV_UI_RIGHT:
+      self._draw_right_dev_ui(rect)
+    elif self.dev_ui_mode == self.DEV_UI_BOTH:
+      self._draw_right_dev_ui(rect)
+      self._draw_bottom_dev_ui(rect)
+
   def _draw_right_dev_ui(self, rect: rl.Rectangle) -> None:
     sm = ui_state.sm
 

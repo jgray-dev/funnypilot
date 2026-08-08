@@ -119,6 +119,56 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.2, fourth pass — THE FIRST FLASH BOOT-LOOPED
+
+    TypeError: Can't instantiate abstract class DeveloperUiRenderer
+               without an implementation for abstract method '_render'
+
+Splash screen forever, ssh fine. **NOT AN IMPORT ERROR — AN INSTANTIATION
+ERROR, AND THAT DISTINCTION IS THE WHOLE LESSON.** The dev-UI rewrite replaced
+the body of `_render` with `_draw_right_dev_ui`/`_draw_bottom_dev_ui` and never
+re-declared the method those are dispatched FROM. `system.ui.widgets.Widget` is
+an `abc.ABC` whose public `render()` calls an abstract `_render`, so the class
+could not be constructed at all; `selfdrive/ui/ui.py` builds every layout up
+front, so the UI died, manager restarted it, and it died again.
+
+- `developer_ui/__init__.py` — THREE methods were deleted by that rewrite and
+  only ONE of them crashed, so fixing just the reported one would have cost two
+  more round trips: `_render` (abstract -> TypeError, this boot loop),
+  `get_bottom_dev_ui_offset` (still called by `hud_renderer.py:449` and
+  `driver_state.py:17` -> AttributeError, the NEXT boot loop), and
+  `_update_state` (Widget has a concrete default, so no crash — `dev_ui_mode`
+  simply never leaves `DEV_UI_OFF` and the panel silently never draws).
+  All three restored.
+- **WHY EVERY EXISTING GUARD PASSED.** `test_hud_imports.py` imports modules;
+  this module imports fine and the class object builds fine. It also only
+  scans `hud/`, which is deliberately IO-free — `developer_ui/` imports
+  `ui_state`, which needs `msgq/ipc_pyx.so`, so it CANNOT be imported
+  off-device at all. A runtime check was never possible here.
+- `onroad/tests/test_widget_contracts.py` — NEW, an AST scan, for the same
+  reason `test_capnp_annotations.py` is one: the path cannot be executed off
+  the device, so a static check is the only thing that works. Two contracts:
+  (1) every Widget subclass DEFINED IN THE ONROAD TREE implements `_render`;
+  (2) every `SomeClass.attr` referenced across modules actually exists on that
+  class — which is the `get_bottom_dev_ui_offset` defect.
+  **THE FIRST DRAFT OF THE CHECKER WAS ITSELF BROKEN AND WOULD NEVER HAVE
+  FIRED**: `Widget` DOES define `_render`, as an `@abstractmethod`, so treating
+  any inherited definition as satisfying the contract makes every subclass look
+  fine. `_is_abstract` is load-bearing; an abstract declaration is the OPPOSITE
+  of an implementation, it is what CREATES the requirement. Pinned by
+  `test_the_widget_base_was_found_and_is_abstract`, which fails if
+  `Widget._render` ever gains a concrete body.
+  SCOPED TO THE ONROAD TREE: the Widget base file is parsed for ancestry only,
+  because `NavWidget` there is an intentional intermediate abstract base that
+  its own subclasses complete — checking it is a false positive.
+- TESTS: **725 green**, ruff clean. Both deletions mutation-tested by removing
+  the methods again and confirming the new guard fails.
+- PROCESS NOTE, and the most useful line here: the triage one-liner ran the
+  bare `python3`, which lacks pyray/capnp/numpy outside the venv, so every UI
+  import "failed" for an unrelated reason and the probe was worthless. THE
+  SWAGLOG HAD THE EXACT TRACEBACK. `grep -h exc_info /data/log/*` first,
+  always; a synthetic import probe is a guess about the failure mode.
+
 ### v3.6.2, third pass — the bump confound and lateral smoothing
 
 TWO SPECULATIVE FIXES, verified by ARITHMETIC rather than by a drive, at the
