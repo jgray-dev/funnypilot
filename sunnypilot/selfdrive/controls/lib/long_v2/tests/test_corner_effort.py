@@ -20,8 +20,13 @@ DT = 0.01     # the carState rate this is actually fed at
 
 
 def drive(effort, seconds, angle_fn, v=20.0, curv=0.01, torque=0.0,
-          lat_active=False, saturated=False, eps_limited=False, pass_=None):
-  """Feed `effort` for `seconds`, steering by `angle_fn(t)`."""
+          lat_active=True, saturated=False, eps_limited=False, pass_=None):
+  """Feed `effort` for `seconds`, steering by `angle_fn(t)`.
+
+  `lat_active` DEFAULTS TRUE since v3.6.4: a pass openpilot did not steer is
+  not a measurement of the corner (see MIN_ENGAGED_FRAC), so the engaged case
+  is now the normal one to build a fixture from.
+  """
   n = int(seconds / DT)
   for i in range(n):
     t = i * DT
@@ -247,7 +252,7 @@ class TestTheDisturbanceGate:
     n = int(round(seconds / self.DT))
     marks = {int((i + 1) * n / reversals) - 1 for i in range(reversals)} if reversals else set()
     for i in range(n):
-      effort.update(self.DT, v, a_lat / (v * v), 0.0, 0.0, False,
+      effort.update(self.DT, v, a_lat / (v * v), 0.0, 0.0, True,
                     pitch_rate_deg_s=pitch)
       effort.reversal = i in marks
       effort.limited = limited
@@ -473,7 +478,7 @@ class TestLaneDepartureDrivesSeverity:
     p, e = CE.CornerPass(), CE.LateralEffort()
     p.begin()
     for _ in range(int(seconds / self.DT)):
-      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False,
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, True,
                departure_m=departure, lane_change=lane_change)
       e.a_lat = 2.0
       p.add(e, self.DT, 20.0)
@@ -503,7 +508,7 @@ class TestLaneDepartureDrivesSeverity:
     p.begin()
     for i in range(400):
       d = 0.4 if 100 <= i < 150 else 0.0
-      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False, departure_m=d)
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, True, departure_m=d)
       e.a_lat = 2.0
       p.add(e, self.DT, 20.0)
     assert p.depart_peak == pytest.approx(0.4)
@@ -523,8 +528,49 @@ class TestLaneDepartureDrivesSeverity:
     p, e = CE.CornerPass(), CE.LateralEffort()
     p.begin()
     for _ in range(400):
-      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False,
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, True,
                pitch_rate_deg_s=7.0, departure_m=0.6)
       e.a_lat = 2.0
       p.add(e, self.DT, 20.0)
     assert p.depart_peak == 0.0
+
+
+class TestOnlyOpenpilotsOwnPassesCount:
+  """FunnyPilot v3.6.4 — a pass the DRIVER steered is not evidence about the
+  corner. Drift wide because you are tired and every signal still live with
+  lateral off reports it as "this corner is too fast"."""
+  DT = 0.01
+
+  def _pass(self, engaged_frac=1.0, seconds=4.0):
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    n = int(seconds / self.DT)
+    for i in range(n):
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, i < n * engaged_frac)
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0)
+    return p
+
+  def test_an_engaged_pass_is_usable(self):
+    p = self._pass(1.0)
+    assert p.engaged_fraction() == pytest.approx(1.0)
+    assert p.usable()
+
+  def test_a_hand_driven_pass_is_not(self):
+    """MUTATION: drop the MIN_ENGAGED_FRAC term from usable(). This is the
+    whole change — a bend the driver steered must teach the store nothing."""
+    p = self._pass(0.0)
+    assert p.engaged_fraction() == 0.0
+    assert not p.usable()
+
+  def test_a_takeover_mid_corner_discards_the_pass(self):
+    """Half-driven is not half-evidence: the severity signals cannot be
+    attributed once control changed hands inside the bend."""
+    assert not self._pass(0.5).usable()
+
+  def test_a_single_dropped_frame_does_not_discard_it(self):
+    """MIN_ENGAGED_FRAC is a fraction rather than an all-or-nothing flag so
+    one late frame at a boundary cannot throw away a real measurement."""
+    p = self._pass(0.99)
+    assert p.engaged_fraction() > CE.MIN_ENGAGED_FRAC
+    assert p.usable()

@@ -1,5 +1,10 @@
 """FunnyPilot v3.6.2 — how hard did the car have to work to get round that?
 
+ONLY PASSES OPENPILOT ITSELF DROVE ARE MEASURED (v3.6.4, MIN_ENGAGED_FRAC).
+A tired or distracted driver drifting wide is evidence about the driver, and
+filing it against the corner makes that bend permanently slower for a reason
+that has nothing to do with the road.
+
 SCC-M v2's definition of the ideal corner speed is the one that was asked for:
 AS FAST AS POSSIBLE WITHOUT lateral oscillation, without the driver-torque
 clamp cutting our steering request, without the steering controller hitting
@@ -14,9 +19,9 @@ THE FOUR SIGNALS, AND WHERE EACH ONE COMES FROM
                   into a bend is removed; what is left is correction. Counting
                   amplitude-qualified sign changes gives reversals per second,
                   which is a rate the driver would describe as "sawing".
-                  AVAILABLE IN BOTH REGIMES, which is what makes requirement 4
-                  work — a driver fighting a corner looks the same as a
-                  controller fighting one.
+                  A driver fighting a corner looks identical to a controller
+                  fighting one, which is exactly why a pass the driver steered
+                  is not evidence — see MIN_ENGAGED_FRAC.
 
   torque clamp    `|carState.steeringTorque|` against TBAR_LIMIT. The K5's
                   driver-torque clamp starts reducing our authority at a sensor
@@ -33,10 +38,7 @@ THE FOUR SIGNALS, AND WHERE EACH ONE COMES FROM
   lane departure  `modelV2.laneLines` at the car. THE MOST DIRECT OF THE FOUR:
                   the other three ask how hard the controller worked, this one
                   asks whether the car stayed where it belonged, which is what
-                  "too fast for the bend" means physically. Available in BOTH
-                  regimes — the model draws the lines whether or not openpilot
-                  is steering — so it works for the blind-corner case where a
-                  hand-driven bend turns out tighter than it looked.
+                  "too fast for the bend" means physically.
 
 ────────────────────────────────────────────────────────────────────────────
 AND ONE THING THAT MUST BE SUBTRACTED (v3.6.2)
@@ -113,6 +115,38 @@ MAX_SEVERITY = 3.0
 
 MIN_PASS_S = 1.0       # shorter than this and the rate statistics mean nothing
 MIN_PASS_V = 5.0       # m/s; below this the lateral signals are not informative
+
+# ── who was steering ───────────────────────────────────────────────────────
+#
+# v3.6.4 — ONLY OPENPILOT'S OWN PASSES ARE EVIDENCE. THIS REVERSES REQUIREMENT
+# 4 OF THE ORIGINAL BRIEF ON PURPOSE; do not "restore" it without reading this.
+#
+# The brief asked for learning regardless of engagement, on the reasoning that
+# a bend driven far too fast by hand shows how far past the limits it was. The
+# owner's counter-example is decisive and it applies to the whole measure, not
+# to one signal: drift wide through a bend because you are tired, distracted,
+# or looking at the wrong thing, and every signal that is still live with the
+# driver steering reports it as "this corner is too fast" — so the store files
+# a permanently slower corner on evidence about the HUMAN.
+#
+# It is not a partial problem. `limited` (the torque clamp, saturation, the EPS
+# governor) is ALREADY gated on lat_active, because with the driver steering a
+# high torque reading is just the driver driving. So with lateral off, severity
+# is composed ENTIRELY of oscillation and lane departure — the two signals that
+# measure the person rather than the road. There is nothing left that is about
+# the corner.
+#
+# The asymmetry seals it. A driver-caused reading almost always LOWERS the
+# ceiling, which is the direction that sticks and the direction with no
+# symptom: a corner that is too slow produces no complaint, no alert and no
+# oscillation, so nothing ever revisits it. Learning would drift quietly
+# downward with the driver's worst days as its evidence.
+#
+# THE COST, STATED: the store now only fills on engaged drives, so it fills
+# more slowly. That is the right trade — a slower-filling map of measurements
+# the car actually made beats a fast-filling map of measurements about the
+# driver.
+MIN_ENGAGED_FRAC = 0.95   # of the pass, with openpilot steering
 
 # ── running out of lane ────────────────────────────────────────────────────
 #
@@ -238,12 +272,14 @@ class LateralEffort:
     self.limited = False       # a hard lateral limit is being hit this frame
     self.disturbed = False     # the road is hitting the car; see DISTURB_DEG_S
     self.departure = 0.0       # metres our nearer edge is outside the lane
+    self.engaged = False       # openpilot was steering this frame
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
              eps_limited: bool = False, pitch_rate_deg_s: float = 0.0,
              departure_m: float = 0.0, lane_change: bool = False) -> None:
     self.reversal = False
+    self.engaged = bool(lat_active)
 
     # A LANE CHANGE IS NOT A LANE DEPARTURE. Crossing a line on purpose says
     # nothing about the corner, so the signal is suppressed outright rather
@@ -321,6 +357,7 @@ class CornerPass:
     self.open = False
     self.duration = 0.0
     self.clean_duration = 0.0  # duration minus time the road was hitting us
+    self.engaged_duration = 0.0  # time openpilot was steering; see MIN_ENGAGED_FRAC
     self.a_peak = 0.0
     self.depart_peak = 0.0     # worst lane departure, metres
     self.reversals = 0
@@ -340,6 +377,10 @@ class CornerPass:
     self.a_peak = max(self.a_peak, effort.a_lat)
     self.v_min = min(self.v_min, float(v_ego) if _finite(v_ego) else 0.0)
     self.blocked = self.blocked or bool(blocked)
+    # Counted over the WHOLE pass, not the clean part: who was in control is a
+    # separate question from whether the road was hitting us.
+    if effort.engaged:
+      self.engaged_duration += dt
 
     # v3.6.2 — DISTURBED TIME IS EXCISED FROM BOTH SIDES OF THE RATE, and
     # doing only one is the trap. Dropping the reversals but keeping the time
@@ -361,6 +402,12 @@ class CornerPass:
     if effort.limited:
       self.limit_time += dt
 
+  def engaged_fraction(self) -> float:
+    """How much of the pass openpilot steered. 1.0 = all of it."""
+    if self.duration <= 0.0:
+      return 0.0
+    return self.engaged_duration / self.duration
+
   def clean_fraction(self) -> float:
     """How much of the pass was measurable. 1.0 = nothing hit the car."""
     if self.duration <= 0.0:
@@ -375,6 +422,7 @@ class CornerPass:
     return (self.open and not self.blocked and self.duration >= MIN_PASS_S
             and self.clean_duration >= MIN_PASS_S
             and self.clean_fraction() >= MIN_CLEAN_FRAC
+            and self.engaged_fraction() >= MIN_ENGAGED_FRAC
             and self.v_min >= MIN_PASS_V and self.a_peak > 0.0)
 
   def verdict(self) -> tuple[float, float]:

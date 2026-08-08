@@ -199,13 +199,43 @@ control is doing.
   provoke a correction.
   It is a PEAK, not a rate: one wheel over the line is a fact about the corner
   and does not have to persist to count.
+- `long_v2/corner_effort.py` — **LEARNING IS NOW GATED ON OPENPILOT STEERING,
+  WHICH REVERSES REQUIREMENT 4 OF THE ORIGINAL BRIEF ON PURPOSE.** Owner-
+  reported and decisive: drift wide through a bend because you are tired,
+  distracted or looking at the wrong thing, and every signal still live with
+  lateral off reports it as "this corner is too fast" — so the store files a
+  permanently slower corner on evidence about the HUMAN.
+  **IT IS NOT A PARTIAL PROBLEM.** `limited` (the torque clamp, saturation, the
+  EPS governor) was ALREADY gated on `lat_active`, because with the driver
+  steering a high torque reading is just the driver driving. So with lateral
+  off, severity consisted ENTIRELY of oscillation and lane departure — the two
+  signals that measure the person rather than the road. Nothing was left that
+  was about the corner.
+  **THE ASYMMETRY SEALS IT**: a driver-caused reading almost always LOWERS the
+  ceiling, which is the direction that sticks AND the direction with no
+  symptom — a corner that is too slow produces no complaint, no alert and no
+  oscillation, so nothing ever revisits it. Learning would have drifted quietly
+  downward with the driver's worst days as its evidence.
+  NEW `MIN_ENGAGED_FRAC` 0.95 and `CornerPass.engaged_duration`, counted over
+  the WHOLE pass rather than the clean part: who was in control is a separate
+  question from whether the road was hitting us. A fraction rather than an
+  all-or-nothing flag so one late frame at a boundary cannot discard a real
+  measurement, while a takeover mid-corner does.
+  THE COST, STATED: the store only fills on engaged drives now, so it fills
+  more slowly. That is the right trade — a slower-filling map of measurements
+  the car actually made beats a fast-filling map of measurements about the
+  driver. Learning is still NOT gated on the SmartCruiseControlMap toggle.
 - `long_v2/scc_shm.py`, `developer_ui/` — `last_pass` gains the departure and
   the debug row a 15th field; NEW `LANE` readout in cm, green at zero, red past
   25 cm. A short row reads INACTIVE rather than shifting every field by one.
-- TESTS: **463 green** across the onroad and long_v2 suites, ruff clean. NEW
+- TESTS: **765 green** across the onroad and long_v2 suites, ruff clean. NEW
   `TestTheSlowdownGradient` (10), `TestTheTurnGateSitsWhereNoiseStops` (2).
-  `TestLaneDepartureGeometry` (8), `TestLaneDepartureDrivesSeverity` (6).
-  NINE guards mutation-tested; **TWO SURVIVED THE FIRST PASS AND BOTH WERE
+  `TestLaneDepartureGeometry` (8), `TestLaneDepartureDrivesSeverity` (6),
+  `TestOnlyOpenpilotsOwnPassesCount` (4);
+  `TestLearningRunsRegardlessOfEngagement` rewritten as
+  `TestOnlyOpenpilotsOwnPassesAreLearned` (5) — it pinned exactly the
+  behaviour this reverses, so keeping it would have been keeping the bug.
+  ELEVEN guards mutation-tested; **TWO SURVIVED THE FIRST PASS AND BOTH WERE
   VACUOUS TESTS OF MINE**: the exit-fade case asserted only ordering and the
   endpoints, so `[1, 0, 0, 0, 0]` passed with the fade deleted; and nothing
   pinned the turn gate at all. Both rewritten to assert the intermediate

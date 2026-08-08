@@ -26,11 +26,13 @@ for corners AHEAD, so a corner can never be capped from the pass that is
 recording it — the same invariant v3.5.0 established, now guaranteed by
 geometry rather than by call order.
 
-LEARNING DOES NOT DEPEND ON ANYTHING BEING ENGAGED. The measurement is lateral
-acceleration from the steering angle and steering behaviour, both of which
-exist with openpilot off, so ordinary driving builds the map. It is also not
-gated on the SmartCruiseControlMap toggle: turning SCC-M off should stop the
-car slowing down, not stop it noticing things.
+LEARNING IS NOT GATED ON THE SmartCruiseControlMap TOGGLE — turning SCC-M off
+should stop the car slowing down, not stop it noticing things. It IS gated on
+LATERAL BEING ACTIVE (v3.6.4, corner_effort.MIN_ENGAGED_FRAC): a pass the
+driver steered measures the driver, not the corner, and a tired or distracted
+wide line would otherwise file a permanently slower bend on evidence that has
+nothing to do with the road. See corner_effort's docstring — this reverses the
+original requirement 4 deliberately.
 
 ────────────────────────────────────────────────────────────────────────────
 WHAT IT MAY NEVER DO

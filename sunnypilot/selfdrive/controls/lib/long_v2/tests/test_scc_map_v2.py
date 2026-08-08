@@ -7,8 +7,12 @@ wired the right way round, and four properties in particular:
   1. THE SET SPEED IS A HARD CEILING. Requirement 7, and the one property that
      must hold locally rather than as a consequence of what the governor does
      with the value.
-  2. LEARNING RUNS WITH NOTHING ENGAGED. Requirement 4. A pass driven by a
-     human, with the toggle off, must still populate the store.
+  2. ONLY PASSES OPENPILOT DROVE ARE LEARNED FROM. v3.6.4 reversed the
+     original requirement 4 here: a pass the driver steered measures the
+     DRIVER, and filing a tired driver's wide line against the corner makes
+     that bend permanently slower for a reason that is not about the road.
+     Learning is still not gated on the SmartCruiseControlMap toggle — only on
+     lateral being active.
   3. A CORNER IS NEVER LEARNED FROM THE PASS THAT IS CAPPING IT UPWARDS.
      Otherwise the estimate ratchets and the feature stops working on the
      roads it is for.
@@ -200,7 +204,7 @@ class TestTheSetSpeedIsACeiling:
 # ── learning ────────────────────────────────────────────────────────────────
 
 def traverse(scc, seconds=6.0, dt=0.01, v=18.0, curvature=0.012,
-             angle=lambda t: 25.0, torque=0.0, lat_active=False,
+             angle=lambda t: 25.0, torque=0.0, lat_active=True,
              saturated=False, eps_limited=False, t0=100.0):
   """Drive through whatever corner SCC-M v2 currently thinks we are inside."""
   n = int(seconds / dt)
@@ -232,38 +236,63 @@ def inside_a_corner(store, radius=100.0):
   return scc
 
 
-class TestLearningRunsRegardlessOfEngagement:
-  """REQUIREMENT 4. The v3.5.0 observer needed a SPEED DIP, which a driver
-  taking a bend briskly by hand does not produce. This one is told where the
-  corner is by the geometry and measures lateral acceleration, so a pass with
-  nothing engaged is a first-class observation."""
+class TestOnlyOpenpilotsOwnPassesAreLearned:
+  """v3.6.4 — THIS REVERSES REQUIREMENT 4 OF THE ORIGINAL BRIEF, DELIBERATELY.
 
-  def test_a_hand_driven_pass_is_recorded(self, store):
+  The brief asked for learning regardless of engagement. The owner's
+  counter-example is decisive: drift wide through a bend because you are
+  tired, distracted or looking at the wrong thing, and every signal still live
+  with lateral off reports it as "this corner is too fast" — so the store
+  files a permanently slower corner on evidence about the HUMAN.
+
+  It is not partial. `limited` was already gated on lat_active, so with the
+  driver steering severity consists ENTIRELY of oscillation and lane
+  departure: the two signals that measure the person rather than the road.
+  """
+
+  def test_a_hand_driven_pass_is_not_recorded(self, store):
+    """MUTATION: drop MIN_ENGAGED_FRAC from CornerPass.usable()."""
     scc = inside_a_corner(store)
     traverse(scc, lat_active=False)
     leave(scc)
+    assert store.count == 0
+
+  def test_a_hand_driven_pass_cannot_slow_a_corner(self, store):
+    """The direction that matters. A driver sawing his way round a bend must
+    not lower that corner's ceiling — that is the change that sticks, and a
+    corner that is too slow produces no symptom anyone would notice."""
+    scc = inside_a_corner(store)
+    traverse(scc, v=22.0, curvature=0.012, lat_active=False,
+             angle=lambda t: 25.0 + 5.0 * math.sin(2 * math.pi * 3.0 * t))
+    leave(scc)
+    assert store.count == 0
+
+  def test_an_engaged_pass_is_still_recorded(self, store):
+    """...and the feature still works. MUTATION: gate on the wrong sense of
+    lat_active and nothing is ever learned at all."""
+    scc = inside_a_corner(store)
+    traverse(scc, lat_active=True)
+    leave(scc)
     assert store.count == 1
 
-  def test_a_clean_brisk_pass_raises_the_budget(self, store):
+  def test_an_engaged_clean_brisk_pass_raises_the_budget(self, store):
     scc = inside_a_corner(store)
     # 18 m/s at curvature 0.012 -> 3.9 m/s^2, smooth steering
-    traverse(scc, v=18.0, curvature=0.012, lat_active=False)
+    traverse(scc, v=18.0, curvature=0.012, lat_active=True)
     leave(scc)
     c = next(iter(store.corners.values()))
     assert c.a_lo > CS.A_LAT_DEFAULT
 
-  def test_driving_far_too_fast_teaches_the_ceiling(self, store):
-    """The case the requirement names explicitly: driven far too fast with
-    nothing engaged, the signals show HOW FAR past the limits we were, and the
-    stored budget lands near what the corner actually supports rather than near
-    what was just done."""
+  def test_driving_far_too_fast_while_engaged_teaches_the_ceiling(self, store):
+    """The severity arithmetic still answers "how far past"; it just only
+    listens to passes openpilot itself drove."""
     scc = inside_a_corner(store)
-    traverse(scc, v=22.0, curvature=0.012,
+    traverse(scc, v=22.0, curvature=0.012, lat_active=True,
              angle=lambda t: 25.0 + 5.0 * math.sin(2 * math.pi * 3.0 * t))
     leave(scc)
     c = next(iter(store.corners.values()))
     a_done = 22.0 ** 2 * 0.012
-    assert c.a_hi < a_done / 1.5, f"pulled {a_done:.1f}, learned ceiling {c.a_hi:.1f}"
+    assert c.a_hi < a_done
 
   def test_a_blocked_pass_is_discarded(self, store):
     """A lane change through a bend is not a measurement of the bend."""
