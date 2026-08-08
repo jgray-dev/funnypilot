@@ -174,9 +174,38 @@ control is doing.
   (per-run circle fit weighted by node positions), which is a bigger piece of
   work than a constant change and should not be guessed at. Until then short
   -sweep bends remain understated and `tight_trim`/learning are what absorb it.
-- TESTS: **461 green** across the onroad and long_v2 suites, ruff clean. NEW
+- `long_v2/corner_effort.py` — **A FOURTH SEVERITY SIGNAL: LEAVING THE LANE.**
+  Owner-requested, and the most direct of the four — the other three ask how
+  hard the CONTROLLER worked, this one asks whether the car stayed where it
+  belonged, which is what "too fast for the bend" means physically. It is also
+  the signal for the reported case: a blind corner that turns out tighter than
+  it looked is more unexpected than unmanageable, and the car runs wide.
+  NEW pure `lane_departure_m(y_left, y_right, p_left, p_right)`. The model
+  frame is y-POSITIVE-LEFT, so the ego lane is `laneLines[1]`/`[2]` and the
+  overhang past a line is `max(0, HALF_TRACK_M - y_left, HALF_TRACK_M + y_right)`
+  — zero while both edges are inside, metres once one is not. `HALF_TRACK_M`
+  0.93 is half the K5's body width; mirrors are excluded on purpose.
+  `DEPART_LIMIT_M` 0.25 is severity 1.0, i.e. a quarter of a metre past the
+  line lowers that corner's ceiling on its own.
+  **THREE GATES, ALL FAILING TOWARD "MEASURED NOTHING"**: `laneLineProbs` under
+  `LANE_PROB_MIN`, an implausible lane width (the model latching a road edge or
+  a junction), and non-finite input all yield 0.0 — the same answer as "inside
+  the lane", deliberately, so a model that has lost the lines can only ever make
+  a pass look CLEANER than it was. The other three signals still cover it.
+  **A LANE CHANGE IS NOT A LANE DEPARTURE** and is suppressed outright rather
+  than damped: crossing a line on purpose says nothing about the corner. A
+  bump-induced departure is excised by the same `clean_duration` gate as the
+  other signals — the road can throw the car out of a lane as easily as it can
+  provoke a correction.
+  It is a PEAK, not a rate: one wheel over the line is a fact about the corner
+  and does not have to persist to count.
+- `long_v2/scc_shm.py`, `developer_ui/` — `last_pass` gains the departure and
+  the debug row a 15th field; NEW `LANE` readout in cm, green at zero, red past
+  25 cm. A short row reads INACTIVE rather than shifting every field by one.
+- TESTS: **463 green** across the onroad and long_v2 suites, ruff clean. NEW
   `TestTheSlowdownGradient` (10), `TestTheTurnGateSitsWhereNoiseStops` (2).
-  FOUR guards mutation-tested; **TWO SURVIVED THE FIRST PASS AND BOTH WERE
+  `TestLaneDepartureGeometry` (8), `TestLaneDepartureDrivesSeverity` (6).
+  NINE guards mutation-tested; **TWO SURVIVED THE FIRST PASS AND BOTH WERE
   VACUOUS TESTS OF MINE**: the exit-fade case asserted only ordering and the
   endpoints, so `[1, 0, 0, 0, 0]` passed with the fade deleted; and nothing
   pinned the turn gate at all. Both rewritten to assert the intermediate

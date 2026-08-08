@@ -147,7 +147,7 @@ def read_scc_debug_shm():
     if not -1.0 < age <= STALE_S or any(x != x for x in p):
       return DEBUG_INACTIVE
     return (int(p[0]), p[1], p[2], p[3], p[4], int(p[5]), bool(int(p[6])),
-            p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]))
+            p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]), p[14])
   except Exception:
     return DEBUG_INACTIVE
 
@@ -239,8 +239,9 @@ DEBUG_SHM_PATH = '/dev/shm/fp_sccdbg'
 # can be compared without counting commas:
 #   n_corners, gov_radius_m, gov_v_mps, gov_dist_m, gov_a_lat, gov_visits,
 #   gate, cap_mps, authority, learned_count,
-#   last_pass_a_peak, last_pass_severity, last_pass_radius_m, pass_count
-DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0)
+#   last_pass_a_peak, last_pass_severity, last_pass_radius_m, pass_count,
+#   last_pass_lane_departure_m
+DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0)
 
 LAT_INTERP_PATH = '/dev/shm/lat_interp'
 # Fraction of control frames in which the EPS governor's bound was actually

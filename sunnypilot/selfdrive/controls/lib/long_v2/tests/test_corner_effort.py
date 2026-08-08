@@ -410,3 +410,121 @@ class TestTheDisturbanceGate:
     for one question drift; this fails the day someone tunes one of them."""
     from openpilot.selfdrive.controls.lib.bump_damper import TRIGGER_DEG_S
     assert CE.DISTURB_DEG_S == TRIGGER_DEG_S
+
+
+class TestLaneDepartureGeometry:
+  """FunnyPilot v3.6.4 — the fourth signal, and the most direct one.
+
+  The other three ask how hard the CONTROLLER worked. This one asks whether the
+  car stayed where it belonged, which is what "too fast for the bend" means
+  physically. Exact values throughout: the model frame is y-positive-left, the
+  car's edges are at +/- HALF_TRACK_M, and the arithmetic is one max().
+  """
+  L, R = 1.85, -1.85          # a centred car in a 3.7 m lane
+  P = 0.9                     # confident lane lines
+
+  def test_centred_is_zero(self):
+    assert CE.lane_departure_m(self.L, self.R, self.P, self.P) == 0.0
+
+  def test_inside_the_lines_is_still_zero(self):
+    """Drifting within the lane is not a departure. MUTATION: drop the max(0,
+    ...) and every ordinary corner would report a 'departure'."""
+    assert CE.lane_departure_m(1.4, -2.3, self.P, self.P) == 0.0
+
+  def test_crossing_the_left_line_measures_the_overhang(self):
+    """Left line 0.60 m from the centreline means our left edge (0.93 m out)
+    is 0.33 m past it."""
+    d = CE.lane_departure_m(0.60, -3.10, self.P, self.P)
+    assert d == pytest.approx(CE.HALF_TRACK_M - 0.60)
+    assert d == pytest.approx(0.33, abs=0.01)
+
+  def test_crossing_the_right_line_is_symmetric(self):
+    """Which way we fell out of the lane says nothing about the corner."""
+    left = CE.lane_departure_m(0.60, -3.10, self.P, self.P)
+    right = CE.lane_departure_m(3.10, -0.60, self.P, self.P)
+    assert left == pytest.approx(right)
+
+  def test_an_unconfident_line_measures_nothing(self):
+    """A guessed line is a reason to measure NOTHING, not to measure something
+    wrong. MUTATION: drop the probability gate."""
+    assert CE.lane_departure_m(0.60, -3.10, 0.1, self.P) == 0.0
+    assert CE.lane_departure_m(0.60, -3.10, self.P, 0.1) == 0.0
+
+  def test_an_implausible_lane_width_measures_nothing(self):
+    """Outside LANE_W_MIN/MAX the model has latched a road edge or the far
+    side of a junction, and a departure computed from that is fiction."""
+    assert CE.lane_departure_m(0.60, -0.90, self.P, self.P) == 0.0     # 1.5 m
+    assert CE.lane_departure_m(4.0, -4.0, self.P, self.P) == 0.0       # 8 m
+
+  def test_it_is_bounded(self):
+    """One swerve is not a measurement of the corner."""
+    assert CE.lane_departure_m(-1.0, -4.5, self.P, self.P) == CE.MAX_DEPART_M
+
+  def test_garbage_measures_nothing(self):
+    for a, b in ((float('nan'), -1.85), (1.85, float('inf')), (None, -1.85)):
+      assert CE.lane_departure_m(a, b, self.P, self.P) == 0.0
+
+
+class TestLaneDepartureDrivesSeverity:
+  """It has to actually reach the learned value, or it is only a readout."""
+  DT = 0.01
+
+  def _pass_with(self, departure, seconds=4.0, lane_change=False):
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for _ in range(int(seconds / self.DT)):
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False,
+               departure_m=departure, lane_change=lane_change)
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0)
+    return p
+
+  def test_staying_in_lane_is_a_clean_pass(self):
+    p = self._pass_with(0.0)
+    assert p.depart_peak == 0.0
+    assert p.verdict()[1] == 0.0
+
+  def test_a_quarter_metre_out_is_exactly_at_the_limit(self):
+    """DEPART_LIMIT_M is the point at which the departure ALONE lowers the
+    corner's ceiling. MUTATION: drop the departure term from verdict()."""
+    p = self._pass_with(CE.DEPART_LIMIT_M)
+    assert p.verdict()[1] == pytest.approx(1.0)
+
+  def test_further_out_is_proportionally_worse(self):
+    """Continuous, like the other two: 'how far past' rather than a flag."""
+    p = self._pass_with(0.5)
+    assert p.verdict()[1] == pytest.approx(2.0)
+
+  def test_it_is_a_peak_not_a_rate(self):
+    """One wheel a quarter of a metre outside the line is a fact about the
+    corner; it does not have to persist to count. Half a second of departure
+    in a four second pass must still register."""
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for i in range(400):
+      d = 0.4 if 100 <= i < 150 else 0.0
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False, departure_m=d)
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0)
+    assert p.depart_peak == pytest.approx(0.4)
+    assert p.verdict()[1] > 1.0
+
+  def test_a_lane_change_is_not_a_lane_departure(self):
+    """Crossing a line on purpose says nothing about the corner. MUTATION:
+    drop the lane_change suppression and every lane change inside a bend
+    teaches that the bend is slow."""
+    p = self._pass_with(0.6, lane_change=True)
+    assert p.depart_peak == 0.0
+    assert p.verdict()[1] == 0.0
+
+  def test_a_bump_induced_departure_is_excised_like_the_others(self):
+    """The road can throw the car out of the lane as easily as it can provoke
+    a correction, so the disturbance gate covers this signal too."""
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for _ in range(400):
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, False,
+               pitch_rate_deg_s=7.0, departure_m=0.6)
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0)
+    assert p.depart_peak == 0.0

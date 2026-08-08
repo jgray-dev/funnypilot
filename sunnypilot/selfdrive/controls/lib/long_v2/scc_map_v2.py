@@ -223,7 +223,7 @@ class SCCMapV2:
     # The last committed pass, for the dev UI. A driver watching the first few
     # drives needs to see that learning HAPPENED, not just that a store exists —
     # an empty store and a store nothing is being written to look identical.
-    self.last_pass = (0.0, 0.0, 0.0)   # (a_peak, severity, radius)
+    self.last_pass = (0.0, 0.0, 0.0, 0.0)   # (a_peak, severity, radius, departure)
     self.pass_count = 0
 
     self._cap = CurveSpeedCap(_DT)
@@ -355,7 +355,8 @@ class SCCMapV2:
                     steering_angle_deg: float, steer_torque: float,
                     lat_active: bool, saturated: bool, eps_limited: bool,
                     blinker: bool, standstill: bool, gps_acc: float,
-                    pitch_rate_deg_s: float = 0.0) -> None:
+                    pitch_rate_deg_s: float = 0.0, departure_m: float = 0.0,
+                    lane_change: bool = False) -> None:
     """Watch the car drive. Called at the carState rate; never raises.
 
     A pass opens when the car enters the extent of the nearest corner ahead and
@@ -383,7 +384,7 @@ class SCCMapV2:
 
       self._effort.update(dt, v_ego, curvature, steering_angle_deg,
                           steer_torque, lat_active, saturated, eps_limited,
-                          pitch_rate_deg_s)
+                          pitch_rate_deg_s, departure_m, lane_change)
 
       inside = None
       for c in self.corners:
@@ -437,7 +438,7 @@ class SCCMapV2:
       # and `pass_count` live, which is the readout that actually gets looked
       # at. A cloudlog call on the commit path is one more thing that can
       # block inside a 100 Hz observer for nothing.
-      self.last_pass = (a_peak, severity, key[3])
+      self.last_pass = (a_peak, severity, key[3], self._pass.depart_peak)
       self.pass_count += 1
     except Exception:
       pass
@@ -590,7 +591,8 @@ class SCCMapV2:
             gov.visits if gov else 0,
             int(bool(self.gas_gating_active)),
             cap, authority, self.learned_count,
-            self.last_pass[0], self.last_pass[1], self.last_pass[2], self.pass_count)
+            self.last_pass[0], self.last_pass[1], self.last_pass[2], self.pass_count,
+            self.last_pass[3])
 
   def _reset(self):
     self.state = "INACTIVE"

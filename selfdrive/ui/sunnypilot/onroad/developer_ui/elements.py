@@ -201,6 +201,28 @@ class SccLastPassElement:
     return UiElement(f"{a_peak:.1f}/{sev:.1f}", "PASS", "", col)
 
 
+class SccLaneDepartElement:
+  """FunnyPilot v3.6.4 — how far outside the lane the last pass got, in cm.
+
+  THE MOST DIRECT OF THE FOUR SIGNALS. The other three ask how hard the
+  controller had to work; this one asks whether the car actually stayed where
+  it belonged. Anything non-zero means a wheel was over a line during the
+  bend, which is the plainest possible evidence the speed was too high — and
+  it is what the driver notices on a blind corner that turns out tighter than
+  it looked.
+
+  Green at zero, amber inside the line-touching band, red once it is past
+  DEPART_LIMIT_M (25 cm), which is the point at which the departure alone
+  drives severity to 1.0 and lowers that corner's ceiling.
+  """
+  def update(self, sm, is_metric):
+    d = _scc_debug()[14]
+    if d <= 0.0:
+      return UiElement("0", "LANE", "cm", _GREEN)
+    col = _RED if d >= 0.25 else _AMBER
+    return UiElement(f"{d * 100:.0f}", "LANE", "cm", col)
+
+
 class SccPassCountElement:
   """Passes committed this drive. IF THIS STAYS 0 THE FEATURE IS NOT LEARNING,
   and the fault is in the observer rather than in any budget or threshold —

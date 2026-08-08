@@ -211,7 +211,8 @@ class TestTheDevUiChannel:
   a dev readout showing a dead planner's last numbers as if they were live is
   worse than one showing zeros, because it looks exactly like a working one."""
 
-  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7)
+  # v3.6.4 adds field 15: the last pass's worst lane departure, metres.
+  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7, 0.31)
 
   def test_round_trip(self, paths):
     scc_shm.write_scc_debug_shm(self.ROW)
@@ -220,6 +221,13 @@ class TestTheDevUiChannel:
     assert out[6] is True
     assert out[1] == pytest.approx(118.0, abs=0.01)
     assert out[8] == pytest.approx(0.75, abs=0.01)
+    assert out[14] == pytest.approx(0.31, abs=0.01)
+
+  def test_a_short_row_reads_inactive(self, paths):
+    """A writer that has not been upgraded yet must read as "no data", not as
+    a row whose fields have all shifted by one."""
+    scc_shm.write_scc_debug_shm(self.ROW[:-1])
+    assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
 
   def test_missing_stale_and_garbage_all_read_inactive(self, paths):
     assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE

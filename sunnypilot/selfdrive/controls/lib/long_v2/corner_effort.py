@@ -2,12 +2,13 @@
 
 SCC-M v2's definition of the ideal corner speed is the one that was asked for:
 AS FAST AS POSSIBLE WITHOUT lateral oscillation, without the driver-torque
-clamp cutting our steering request, and without the steering controller hitting
-its limits. This module turns those three into a number, per pass, so the
-answer is measured rather than inferred from how the car "felt".
+clamp cutting our steering request, without the steering controller hitting
+its limits — and, since v3.6.4, WITHOUT LEAVING THE LANE. This module turns
+those four into a number, per pass, so the answer is measured rather than
+inferred from how the car "felt".
 
 ────────────────────────────────────────────────────────────────────────────
-THE THREE SIGNALS, AND WHERE EACH ONE COMES FROM
+THE FOUR SIGNALS, AND WHERE EACH ONE COMES FROM
 
   oscillation     `steeringAngleDeg`, high-passed. The steady ramp of steering
                   into a bend is removed; what is left is correction. Counting
@@ -28,6 +29,14 @@ THE THREE SIGNALS, AND WHERE EACH ONE COMES FROM
                   and the EPS governor's own `limited` fraction published on
                   /dev/shm/lat_interp. Both are meaningless with lateral off,
                   and both are ignored there.
+
+  lane departure  `modelV2.laneLines` at the car. THE MOST DIRECT OF THE FOUR:
+                  the other three ask how hard the controller worked, this one
+                  asks whether the car stayed where it belonged, which is what
+                  "too fast for the bend" means physically. Available in BOTH
+                  regimes — the model draws the lines whether or not openpilot
+                  is steering — so it works for the blind-corner case where a
+                  hand-driven bend turns out tighter than it looked.
 
 ────────────────────────────────────────────────────────────────────────────
 AND ONE THING THAT MUST BE SUBTRACTED (v3.6.2)
@@ -105,6 +114,44 @@ MAX_SEVERITY = 3.0
 MIN_PASS_S = 1.0       # shorter than this and the rate statistics mean nothing
 MIN_PASS_V = 5.0       # m/s; below this the lateral signals are not informative
 
+# ── running out of lane ────────────────────────────────────────────────────
+#
+# v3.6.4 — THE FOURTH SIGNAL, AND THE MOST DIRECT ONE. The other three ask how
+# hard the CONTROLLER worked; this one asks whether the car actually stayed
+# where it was supposed to be. Leaving the lane through a bend is not a proxy
+# for "too fast", it is the thing itself, and it is exactly what the driver
+# notices on a blind corner that turns out tighter than it looked.
+#
+# GEOMETRY. openpilot's model frame is x forward, y POSITIVE LEFT. `laneLines`
+# is four polylines and the ego lane is [1] (left) and [2] (right), so at the
+# car the left line sits at y ~ +1.85 and the right at y ~ -1.85. The car's own
+# edges are at +/- HALF_TRACK_M, so how far a wheel is PAST a line is
+#
+#     max(0, HALF_TRACK_M - y_left, HALF_TRACK_M + y_right)
+#
+# which is zero while both edges are inside the lines and grows in metres once
+# one is not. Centred in a 3.7 m lane that evaluates to exactly 0.
+#
+# 1.86 m is the K5's body width; half of it is the distance from the centreline
+# the model measures against to the outside of a tyre. Mirrors are excluded on
+# purpose — a mirror overhanging a line is not a lane departure.
+HALF_TRACK_M = 0.93
+# Below this the model is guessing where the line is, and a guessed line is a
+# reason to measure NOTHING rather than to measure something wrong.
+LANE_PROB_MIN = 0.5
+# Sanity on the lane the model reports. Outside this it has probably latched a
+# road edge, a kerb or the far side of a junction, and the departure computed
+# from it would be fiction.
+LANE_W_MIN_M = 2.3
+LANE_W_MAX_M = 4.6
+# Departure at which the pass is exactly at the limit. A quarter of a metre
+# past the line is unambiguous — well beyond the model's own lateral noise,
+# and visibly outside the lane from the driver's seat.
+DEPART_LIMIT_M = 0.25
+# A single pass may not claim more than this, for the same reason MAX_SEVERITY
+# exists: one swerve is not a measurement of the corner.
+MAX_DEPART_M = 1.0
+
 # ── road disturbance ───────────────────────────────────────────────────────
 #
 # v3.6.2 — THE CONFOUND THIS CAR IS KNOWN TO HAVE. The whole severity measure
@@ -145,6 +192,31 @@ def _finite(x) -> bool:
   return f == f and abs(f) != float('inf')
 
 
+def lane_departure_m(y_left: float, y_right: float,
+                     p_left: float, p_right: float) -> float:
+  """How far the car's nearer edge is OUTSIDE the ego lane, metres. v3.6.4.
+
+  `y_*` are the model's lane lines at the car, in its own frame (+y left);
+  `p_*` are the matching `laneLineProbs`. Returns 0.0 for "inside the lane"
+  AND for "cannot tell", and those are deliberately the same answer: an
+  unreadable lane must contribute no stress, so a model that has lost the
+  lines can only ever make a pass look cleaner than it was, never worse. The
+  other three signals still cover the pass.
+
+  Pure and stdlib-only so the geometry can be tested without a model running;
+  the capnp unpacking lives in the planner.
+  """
+  if not (_finite(y_left) and _finite(y_right) and _finite(p_left) and _finite(p_right)):
+    return 0.0
+  if p_left < LANE_PROB_MIN or p_right < LANE_PROB_MIN:
+    return 0.0
+  width = float(y_left) - float(y_right)
+  if not (LANE_W_MIN_M <= width <= LANE_W_MAX_M):
+    return 0.0
+  out = max(0.0, HALF_TRACK_M - float(y_left), HALF_TRACK_M + float(y_right))
+  return min(out, MAX_DEPART_M)
+
+
 class LateralEffort:
   """Per-frame lateral signals, stateful only in the oscillation high-pass.
 
@@ -165,11 +237,20 @@ class LateralEffort:
     self.a_lat = 0.0           # measured lateral acceleration, m/s^2
     self.limited = False       # a hard lateral limit is being hit this frame
     self.disturbed = False     # the road is hitting the car; see DISTURB_DEG_S
+    self.departure = 0.0       # metres our nearer edge is outside the lane
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
-             eps_limited: bool = False, pitch_rate_deg_s: float = 0.0) -> None:
+             eps_limited: bool = False, pitch_rate_deg_s: float = 0.0,
+             departure_m: float = 0.0, lane_change: bool = False) -> None:
     self.reversal = False
+
+    # A LANE CHANGE IS NOT A LANE DEPARTURE. Crossing a line on purpose says
+    # nothing about the corner, so the signal is suppressed outright rather
+    # than merely damped — this is the one case where the measurement is not
+    # noisy, it is about something else entirely.
+    self.departure = 0.0 if lane_change else (
+      float(departure_m) if (_finite(departure_m) and departure_m > 0.0) else 0.0)
 
     # Road disturbance. Held past the event because the correction it provokes
     # ARRIVES LATE — see DISTURB_HOLD_S. Failure defaults to NOT disturbed, so
@@ -241,6 +322,7 @@ class CornerPass:
     self.duration = 0.0
     self.clean_duration = 0.0  # duration minus time the road was hitting us
     self.a_peak = 0.0
+    self.depart_peak = 0.0     # worst lane departure, metres
     self.reversals = 0
     self.limit_time = 0.0
     self.v_min = 1e9
@@ -274,6 +356,8 @@ class CornerPass:
       return
     self.clean_duration += dt
     self.reversals += int(effort.reversal)
+    if effort.departure > self.depart_peak:
+      self.depart_peak = min(effort.departure, MAX_DEPART_M)
     if effort.limited:
       self.limit_time += dt
 
@@ -306,5 +390,11 @@ class CornerPass:
       return 0.0, 0.0
     osc_rate = self.reversals / self.clean_duration
     limit_frac = self.limit_time / self.clean_duration
-    sev = max(osc_rate / OSC_RATE_LIMIT, limit_frac / LIMIT_FRAC_LIMIT)
+    # v3.6.4: leaving the lane is the third way a pass can be over the limit,
+    # and it is a PEAK rather than a rate — one wheel a quarter of a metre
+    # outside the line is a fact about the corner, not something that has to
+    # persist to count.
+    sev = max(osc_rate / OSC_RATE_LIMIT,
+              limit_frac / LIMIT_FRAC_LIMIT,
+              self.depart_peak / DEPART_LIMIT_M)
     return self.a_peak, min(sev, MAX_SEVERITY)

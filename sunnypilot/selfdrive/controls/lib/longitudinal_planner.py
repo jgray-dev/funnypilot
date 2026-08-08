@@ -25,6 +25,8 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, read_gps
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import SpeedGovernor, gate_map_target
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_effort import (
+  lane_departure_m as _lane_departure_m)
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
   write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm,
   read_eps_limited as _read_eps_limited, read_pitch_rate as _read_pitch_rate)
@@ -112,12 +114,30 @@ class LongitudinalPlannerSP:
       except Exception:
         pass
 
+      # v3.6.4 — HOW FAR OUT OF THE LANE DID WE GET. The capnp unpacking lives
+      # here; the geometry is a pure function in corner_effort so it can be
+      # tested without a model. Any doubt yields 0.0 = "inside the lane", which
+      # is the same answer as "cannot tell" on purpose: an unreadable lane must
+      # contribute NO stress, so a model that has lost the lines can only ever
+      # make a pass look cleaner than it was.
+      departure, lane_change = 0.0, False
+      try:
+        md = sm['modelV2']
+        lanes = md.laneLines
+        probs = md.laneLineProbs
+        if len(lanes) >= 3 and len(probs) >= 3 and len(lanes[1].y) and len(lanes[2].y):
+          departure = _lane_departure_m(float(lanes[1].y[0]), float(lanes[2].y[0]),
+                                        float(probs[1]), float(probs[2]))
+        lane_change = md.meta.laneChangeState != 0    # 0 == LaneChangeState.off
+      except Exception:
+        departure, lane_change = 0.0, False
+
       _lat, _lon, _brg, acc, _ok = read_gps(sm)
       self._scc_map_v2.observe_frame(
         now, float(CS.vEgo), float(cst.curvature), float(CS.steeringAngleDeg),
         float(CS.steeringTorque), bool(sm['carControl'].latActive), saturated,
         _read_eps_limited(), bool(CS.leftBlinker or CS.rightBlinker),
-        bool(CS.standstill), acc, _read_pitch_rate())
+        bool(CS.standstill), acc, _read_pitch_rate(), departure, lane_change)
     except Exception:
       pass
 
