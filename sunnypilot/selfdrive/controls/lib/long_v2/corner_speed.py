@@ -58,6 +58,12 @@ Import-light (stdlib only).
 """
 import math
 
+# The upward rate CurveSpeedCap will actually let the cap climb at. IMPORTED
+# rather than mirrored so `corner_cap`'s run-out and the smoother downstream of
+# it cannot drift apart; curve_cap.py is constants-only and stdlib-only, so
+# this keeps corner_speed.py importable off-device.
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import RELEASE_RATE
+
 # ── the lateral-acceleration budget ────────────────────────────────────────
 #
 # 1.8 m/s^2 is DELIBERATELY BELOW SCC-V's own a_lat_target of 2.1. An unvisited
@@ -127,9 +133,18 @@ DRIFT_UNKNOWN = DRIFT_LEARNING
 # the corner closes, and the car speeds back up mid-approach. See the v3.5.6
 # section of CLAUDE.md; this table and the reasoning behind it are unchanged.
 #
-# 1.20 m/s^2 IS THE CEILING BECAUSE long_mpc.CRUISE_MIN_ACCEL IS -1.2. This is
-# a SPEED cap; the MPC cannot follow a steeper envelope. Do not raise one
-# without the other.
+# THE STEEPEST SEGMENT IS 1.20 m/s^2 AND v3.6.5 DELIBERATELY LEFT IT THERE
+# WHILE RAISING THE MPC's CEILING TO 1.6. The old note said "1.20 is the
+# ceiling because long_mpc.CRUISE_MIN_ACCEL is -1.2; do not raise one without
+# the other" — correct, and the mistake was that the two were set EQUAL. The
+# MPC clips the cruise target to a CRUISE_MIN_ACCEL ramp before it ever solves,
+# so an envelope at 95% of that ceiling leaves the car no way to catch up once
+# it falls behind, and it never gets back on schedule.
+#
+# So the fix is headroom, not a steeper ask: the table below is unchanged and
+# still validated, and the MPC now has ~40% margin to FOLLOW it. If a corner is
+# still entered too fast after v3.6.5, this table is the next knob — and it can
+# now be steepened up to about 1.35 before the same trap reappears.
 _J_BP = (0.0, 60.0, 150.0, 400.0)    # m of distance-to-go, after the arrival lead
 _J_V = (0.0, 72.0, 144.0, 269.0)     # integral of the budget, m^2/s^2
 
@@ -336,3 +351,51 @@ def approach_cap(v_corner: float, distance_m: float) -> float:
     return float('inf')
   d_eff = max(0.0, distance_m - v_corner * ARRIVAL_LEAD_T)
   return math.sqrt(v_corner * v_corner + 2.0 * _interp(d_eff, _J_BP, _J_V))
+
+
+def corner_cap(v_corner: float, distance_m: float, half_len_m: float) -> float:
+  """The speed permitted NOW for a whole corner, approach AND run-out. v3.6.5.
+
+  `distance_m` is to the APEX, positive ahead. `half_len_m` is half the length
+  of the detected bend, so the arc runs from +half_len (entry) to -half_len
+  (exit) in this frame.
+
+  THREE REGIMES, AND THE THIRD IS THE v3.6.5 FIX:
+
+    ahead of the entry   the integrated approach envelope, `approach_cap`.
+    inside the bend      exactly `v_corner`. The whole arc is at the measured
+                         radius, so the speed limit applies across all of it —
+                         releasing at the apex would ask the car to accelerate
+                         while it is still turning.
+    past the exit        sqrt(v^2 + 2 * RELEASE_RATE * s_past).
+
+  WHAT WAS WRONG BEFORE. The cap was `approach_cap(v, max(distance, 0))`, so a
+  corner already behind us evaluated to a FLAT `v_corner` right up until
+  `_refresh_corners` dropped it at BEHIND_KEEP_M past the exit — then the cap
+  vanished and CurveSpeedCap ramped from nothing. Measured on a 40 m-half-length
+  bend at 13 m/s that is 25 m of dead hold plus up to another 13 m of refresh
+  staleness: about 2.9 s of sitting at corner speed on straightening road
+  before any throttle came back. That is the reported "noticeable delay in
+  reapplying throttle to accelerate out of the corner", and it was structural
+  rather than a tuning value.
+
+  RELEASE_RATE IS IMPORTED, NOT COPIED. It is the rate CurveSpeedCap will
+  actually let the cap rise at, so publishing a raw envelope that climbs faster
+  would just be throttled downstream and publishing one that climbs slower
+  would be the binding constraint without saying so. Taking the same number
+  makes the two agree by construction rather than by a comment.
+
+  BEHIND_KEEP_M IS UNCHANGED AND STILL NEEDED — it keeps the corner in the list
+  long enough for the observer's pass to close on the far side. This changes
+  what the corner ASKS FOR while it is there, not how long it is kept.
+  """
+  if not (finite(v_corner) and finite(distance_m)) or v_corner <= 0.0:
+    return float('inf')
+  half = float(half_len_m) if (finite(half_len_m) and half_len_m > 0.0) else 0.0
+  d = float(distance_m)
+  if d >= 0.0:
+    return approach_cap(v_corner, d)
+  past = -d - half
+  if past <= 0.0:
+    return float(v_corner)          # still inside the bend
+  return math.sqrt(v_corner * v_corner + 2.0 * RELEASE_RATE * past)

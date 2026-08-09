@@ -204,9 +204,9 @@ class SccLastPassElement:
 class SccLaneDepartElement:
   """FunnyPilot v3.6.4 — how far outside the lane the last pass got, in cm.
 
-  THE MOST DIRECT OF THE FOUR SIGNALS. The other three ask how hard the
-  controller had to work; this one asks whether the car actually stayed where
-  it belonged. Anything non-zero means a wheel was over a line during the
+  THE MOST DIRECT OF THE CONTROLLER-SIDE SIGNALS. The other three ask how hard
+  the controller had to work; this one asks whether the car actually stayed
+  where it belonged. Anything non-zero means a wheel was over a line during the
   bend, which is the plainest possible evidence the speed was too high — and
   it is what the driver notices on a blind corner that turns out tighter than
   it looked.
@@ -214,6 +214,20 @@ class SccLaneDepartElement:
   Green at zero, amber inside the line-touching band, red once it is past
   DEPART_LIMIT_M (25 cm), which is the point at which the departure alone
   drives severity to 1.0 and lowers that corner's ceiling.
+
+  v3.6.5 — A PERMANENT 0 HERE WAS A BUG, NOT A CLEAN DRIVE, and it read that
+  way for the whole of v3.6.4: `lane_departure_m` was written for a
+  y-positive-LEFT model frame and openpilot's is y-positive-RIGHT, so the lane
+  width came out negative, the plausibility gate rejected every frame, and the
+  signal returned the same 0.0 it returns for "inside the lane". If it ever
+  goes permanently green again on a drive that included a wide line, suspect
+  the gates before the geometry — a signal whose failure mode is its own
+  healthy reading needs the departure to be seen non-zero at least once.
+
+  A takeover has NO row of its own on purpose: it lands in PASS as a severity
+  of TAKEOVER_SEVERITY (2.0) or more, which already reads red, and widening the
+  debug wire format again for something the existing readout says is how a
+  positional channel accumulates fields nobody looks at.
   """
   def update(self, sm, is_metric):
     d = _scc_debug()[14]

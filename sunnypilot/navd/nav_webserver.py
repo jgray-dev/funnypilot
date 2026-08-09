@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.4"
+EXPECTED_VERSION = "3.6.5"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -164,7 +164,12 @@ _CODE_MARKERS = [
   ("def believed_lead_decel", "/data/openpilot/selfdrive/controls/lib/lead_physics.py", "lead stopping-distance physics"),
   ("def lateral_offset_at_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap lane alignment"),
   ("def stitch_to_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ribbon reaches the car"),
-  ("INACTIVE WAS A TRAP", "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py", "SLA re-arm on a cruise press"),
+  # v3.6.3 REVERSED v3.5.5's escape hatch on purpose, so this row moved with it:
+  # the marker used to grep "INACTIVE WAS A TRAP", which that release deleted,
+  # and the Verify page has been reporting MISSING ever since.
+  ("THE WINDOW IS THE WHOLE PERMISSION",
+   "/data/openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py",
+   "SLA activates only inside its window"),
   # v3.5.6
   ("def proximity_authority", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "SCC-M proximity authority"),
   ("DECIMATE_M", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap route decimation"),
@@ -204,6 +209,16 @@ _CODE_MARKERS = [
   ("class SccCornersElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "dev UI is SCC-M v2 instruments"),
   ("class SideSignal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/side_signals.py", "blinker + blind spot on the edges"),
   ("def draw_side_signal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "side glow band"),
+  # v3.6.4
+  ("def lane_departure_m", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure severity signal"),
+  ("MIN_ENGAGED_FRAC", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "only openpilot's own passes are learned"),
+  ("def plan_alpha", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tint is the long-control plan"),
+  # v3.6.5
+  ("def corner_cap", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "corner run-out hands throttle back"),
+  ("def _dead_reckon", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "corner distances close between refreshes"),
+  ("CRUISE_MIN_ACCEL = -1.6", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC headroom over the approach envelope"),
+  ("TAKEOVER_SEVERITY", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "a driver takeover is a verdict"),
+  ("y POSITIVE RIGHT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure frame convention fixed"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

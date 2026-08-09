@@ -771,3 +771,129 @@ class TestTheGateReachesTheThrottle:
     assert "accel_clip[1]" in body
     assert "accel_clip[0] =" not in body, "the gate must never move the braking floor"
     assert "max(accel_coast" in body, "it must clamp to the coast accel, not below"
+
+
+class TestTheDistancesDoNotGoStale:
+  """FunnyPilot v3.6.5 — the geometry is throttled, the cap is not.
+
+  `_refresh_corners` runs at most every _GEOM_PERIOD_S because its source is
+  1 Hz data, but `update()` runs every model frame and nothing used to move
+  `distance` in between. The envelope was therefore fed a distance that was
+  correct at the refresh and up to `v_ego * _GEOM_PERIOD_S` metres too LARGE by
+  the end of the interval — 13.4 m at 26.8 m/s, and always in the loose
+  direction, because the number only ever ages toward "further away than it is".
+
+  Worth 0.9 m/s of extra speed on the steep part of the envelope, delivered as
+  a 0.5 s staircase. Half of "it is often too late to decelerate".
+  """
+
+  def _placed(self, d=200.0, v_ego=25.0):
+    scc = make(bend_route(radius=90.0))
+    run(scc, v_ego=v_ego, v_cruise=30.0, n=1)
+    assert scc.corners
+    for c in scc.corners:
+      c.distance = d
+    return scc
+
+  def test_update_closes_the_distance_on_a_non_refresh_frame(self):
+    """THE WIRING, NOT THE FUNCTION — and the distinction is not academic. The
+    first version of this class called `_dead_reckon` directly and SURVIVED the
+    mutation that deletes the call from `update()`: a test that reaches past
+    the call site cannot see the call site. So this one drives the real entry
+    point with the geometry throttle engaged, exactly as it is between the two
+    refreshes of any real second of driving.
+    """
+    import time as _t
+    scc = self._placed(d=200.0, v_ego=25.0)
+    now = _t.monotonic()
+    scc._geom_at = now          # a refresh just happened; this frame skips it
+    scc._dr_at = now - 0.1
+    scc.update(True, 25.0, 0.0, 30.0, 0.0, 0.0, 0.0, True)
+    assert scc.corners[0].distance == pytest.approx(200.0 - 2.5, abs=0.3)
+
+  def test_the_function_subtracts_exactly_what_was_driven(self):
+    """MUTATION: change the sign, or scale it. 25 m/s for 0.1 s is 2.5 m."""
+    scc = self._placed(d=200.0, v_ego=25.0)
+    scc._dr_at = 100.0
+    scc._dead_reckon(100.1, 25.0)
+    assert scc.corners[0].distance == pytest.approx(200.0 - 2.5)
+
+  def test_it_is_exactly_the_distance_travelled(self):
+    """Not a fudge factor: 20 m/s for 0.25 s is 5 m, and nothing else."""
+    scc = self._placed(d=300.0)
+    scc._dr_at = 50.0
+    scc._dead_reckon(50.25, 20.0)
+    assert scc.corners[0].distance == pytest.approx(295.0)
+
+  def test_a_refresh_frame_advances_nothing(self):
+    """_refresh_corners re-stamps `_dr_at`, so the frame that recomputed the
+    distances from the live GPS must not then subtract from them as well.
+    MUTATION: drop the `self._dr_at = now` line in _refresh_corners and every
+    refresh double-counts up to half a second of travel."""
+    scc = make(bend_route(radius=90.0))
+    run(scc, v_ego=25.0, v_cruise=30.0, n=1)
+    before = [c.distance for c in scc.corners]
+    scc._geom_at = 0.0
+    scc.update(True, 25.0, 0.0, 30.0, 0.0, 0.0, 0.0, True)
+    after = [c.distance for c in scc.corners]
+    assert after == pytest.approx(before)
+
+  def test_a_clock_jump_is_rejected_not_applied(self):
+    """Over-closing the distance would tighten the cap on evidence we do not
+    have, so an implausible dt does nothing at all."""
+    scc = self._placed(d=200.0)
+    scc._dr_at = 10.0
+    scc._dead_reckon(400.0, 25.0)          # 390 s of 'travel'
+    assert scc.corners[0].distance == pytest.approx(200.0)
+
+  def test_standing_still_moves_nothing(self):
+    scc = self._placed(d=120.0)
+    scc._dr_at = 10.0
+    scc._dead_reckon(10.2, 0.0)
+    assert scc.corners[0].distance == pytest.approx(120.0)
+
+  def test_it_tightens_the_cap_rather_than_loosening_it(self):
+    """The direction is the whole point. A stale distance can only ever say the
+    corner is further away than it is, i.e. permit more speed."""
+    scc = self._placed(d=150.0, v_ego=25.0)
+    stale = scc._raw_cap(30.0)
+    scc._dr_at = 100.0
+    scc._dead_reckon(100.4, 25.0)
+    assert scc._raw_cap(30.0) < stale
+
+
+class TestTheExitHandsAuthorityBack:
+  """v3.6.5 — the controller-side half of TestTheRunOut in test_corner_speed."""
+
+  def _past(self, past_m, half=20.0, v_target=13.0):
+    scc = make(bend_route(radius=90.0))
+    run(scc, v_ego=25.0, v_cruise=30.0, n=1)
+    assert scc.corners
+    scc.corners = scc.corners[:1]
+    c = scc.corners[0]
+    c.half_len, c.v_target, c.distance = half, v_target, -(half + past_m)
+    return scc
+
+  def test_the_cap_climbs_as_the_corner_recedes(self):
+    """MUTATION: restore `approach_cap(v, max(distance, 0))` in _raw_cap. Every
+    value below becomes exactly v_target and the ordering assertion fails."""
+    caps = [self._past(s)._raw_cap(30.0) for s in (0.0, 10.0, 25.0, 60.0)]
+    assert caps[0] == pytest.approx(13.0)
+    assert all(b > a for a, b in zip(caps, caps[1:], strict=False))
+
+  def test_the_gate_lets_go_on_the_way_out_too(self):
+    """The gas gate is a THROTTLE clip, so a gate still holding on the exit
+    would undo the cap's release. MUTATION: leave `max(c.distance, 0.0)` in
+    _update_gas_gate and the car coasts out of every bend."""
+    scc = self._past(40.0)
+    scc.is_enabled = True
+    scc._update_gas_gate(v_ego=15.0, v_cruise=30.0)
+    assert not scc.gas_gating_active
+
+  def test_the_gate_still_holds_on_the_way_in(self):
+    """...and the anti-mutation half: it must not have simply stopped working."""
+    scc = self._past(0.0)
+    scc.corners[0].distance = 120.0
+    scc.is_enabled = True
+    scc._update_gas_gate(v_ego=27.0, v_cruise=30.0)
+    assert scc.gas_gating_active

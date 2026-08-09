@@ -8,12 +8,13 @@ that has nothing to do with the road.
 SCC-M v2's definition of the ideal corner speed is the one that was asked for:
 AS FAST AS POSSIBLE WITHOUT lateral oscillation, without the driver-torque
 clamp cutting our steering request, without the steering controller hitting
-its limits — and, since v3.6.4, WITHOUT LEAVING THE LANE. This module turns
-those four into a number, per pass, so the answer is measured rather than
-inferred from how the car "felt".
+its limits, WITHOUT LEAVING THE LANE (v3.6.4) — and, since v3.6.5, WITHOUT THE
+DRIVER FEELING THE NEED TO TAKE OVER. This module turns those five into a
+number, per pass, so the answer is measured rather than inferred from how the
+car "felt".
 
 ────────────────────────────────────────────────────────────────────────────
-THE FOUR SIGNALS, AND WHERE EACH ONE COMES FROM
+THE FIVE SIGNALS, AND WHERE EACH ONE COMES FROM
 
   oscillation     `steeringAngleDeg`, high-passed. The steady ramp of steering
                   into a bend is removed; what is left is correction. Counting
@@ -35,16 +36,23 @@ THE FOUR SIGNALS, AND WHERE EACH ONE COMES FROM
                   /dev/shm/lat_interp. Both are meaningless with lateral off,
                   and both are ignored there.
 
-  lane departure  `modelV2.laneLines` at the car. THE MOST DIRECT OF THE FOUR:
-                  the other three ask how hard the controller worked, this one
-                  asks whether the car stayed where it belonged, which is what
-                  "too fast for the bend" means physically.
+  lane departure  `modelV2.laneLines` at the car. THE MOST DIRECT OF THE FIRST
+                  FOUR: the other three ask how hard the controller worked,
+                  this one asks whether the car stayed where it belonged, which
+                  is what "too fast for the bend" means physically.
+
+  takeover        (v3.6.5) openpilot was driving the bend and the human took an
+                  axis back — lateral off, longitudinal off, or the brake
+                  pedal. The only signal with a person in it, and it is not a
+                  measurement of the person: it is their verdict on OUR speed.
+                  See TAKEOVER_SEVERITY for why that does not reopen what
+                  v3.6.4 closed.
 
 ────────────────────────────────────────────────────────────────────────────
 AND ONE THING THAT MUST BE SUBTRACTED (v3.6.2)
 
-All three signals above assume that if the car is working hard, the SPEED is
-why. On this car that is demonstrably not always true: v3.3.8 recorded sawing
+The controller-effort signals above assume that if the car is working hard,
+the SPEED is why. On this car that is demonstrably not always true: v3.3.8 recorded sawing
 at a railroad crossing with the EPS governor at full authority and nothing
 wrong with the speed. A bump unloads the front axle, the self-aligning torque
 changes, and the controller corrects for the road rather than for the corner.
@@ -148,6 +156,47 @@ MIN_PASS_V = 5.0       # m/s; below this the lateral signals are not informative
 # driver.
 MIN_ENGAGED_FRAC = 0.95   # of the pass, with openpilot steering
 
+# ── the driver's own verdict (v3.6.5) ──────────────────────────────────────
+#
+# A FIFTH SIGNAL, AND THE ONLY ONE WITH A HUMAN IN IT. THIS DOES NOT REOPEN
+# WHAT v3.6.4 CLOSED, and the distinction is the whole design:
+#
+#   v3.6.4 threw out passes THE DRIVER DROVE, because the signals then measure
+#   how well the human steered and file it against the road.
+#   v3.6.5 keeps passes OPENPILOT DROVE and the human INTERRUPTED. That is not
+#   a measurement of the human at all — it is the human's judgement of
+#   openpilot's speed, and it is the most direct statement of "too fast for
+#   this bend" available anywhere in the car.
+#
+# So a takeover is only evidence on a pass that STARTED engaged, and the
+# measurement ENDS at the takeover: everything after it is the human driving,
+# which is exactly what v3.6.4 rules out.
+#
+# WHAT COUNTS. Lateral disengagement, longitudinal disengagement, and the brake
+# pedal. NOT the accelerator — a driver adding throttle mid-bend is evidence we
+# were too SLOW, and folding it in here would let the one signal that argues
+# for more speed lower the ceiling instead.
+#
+# 2.0 means "this corner supports about half the lateral acceleration we just
+# pulled". Stronger than being at the limit (1.0), because a person physically
+# intervened; short of MAX_SEVERITY (3.0), because a takeover says the speed
+# was wrong without saying by how much, and a single pass may not condemn a
+# corner outright. It enters through the same max() as the other four, so a
+# pass that was ALSO sawing reports whichever verdict is worse.
+TAKEOVER_SEVERITY = 2.0
+# A takeover is a discrete EVENT, not a rate, so it does not need MIN_PASS_S of
+# window to mean something — and requiring one would discard exactly the case
+# that matters most, a driver grabbing the wheel in the first half second
+# because the car entered far too fast. The rate-based signals still need their
+# window and simply contribute nothing when they do not have it.
+MIN_TAKEOVER_S = 0.3
+# How long the human has to actually hold an axis before it reads as a
+# takeover. `latActive` drops for a frame at plenty of boundaries that are not
+# interventions — a model drop, the moment a corner leaves the list, the edge
+# of an engage transition — and a single frame must not be able to condemn a
+# corner. Short enough that a real grab is caught well before the apex.
+TAKEOVER_DWELL_S = 0.25
+
 # ── running out of lane ────────────────────────────────────────────────────
 #
 # v3.6.4 — THE FOURTH SIGNAL, AND THE MOST DIRECT ONE. The other three ask how
@@ -156,12 +205,29 @@ MIN_ENGAGED_FRAC = 0.95   # of the pass, with openpilot steering
 # for "too fast", it is the thing itself, and it is exactly what the driver
 # notices on a blind corner that turns out tighter than it looked.
 #
-# GEOMETRY. openpilot's model frame is x forward, y POSITIVE LEFT. `laneLines`
-# is four polylines and the ego lane is [1] (left) and [2] (right), so at the
-# car the left line sits at y ~ +1.85 and the right at y ~ -1.85. The car's own
-# edges are at +/- HALF_TRACK_M, so how far a wheel is PAST a line is
+# GEOMETRY — AND v3.6.5 GOT THE SIGN OF IT WRONG, WHICH IS WHY THE DEV UI READ
+# A CONSTANT 0 cm FOR A WHOLE RELEASE. openpilot's device frame is
+# **x forward, y POSITIVE RIGHT, z down** (common/transformations/camera.py:73),
+# not y-positive-left. `ldw.py` confirms it independently: it tests the LEFT
+# line against a NEGATIVE bound (`laneLines[1].y[0] > -(1.08 + CAMERA_OFFSET)`)
+# and the RIGHT against a positive one. So at the car the left line sits at
+# y ~ -1.85 and the right at y ~ +1.85, and the ego lane's width is
+# `y_right - y_left`.
 #
-#     max(0, HALF_TRACK_M - y_left, HALF_TRACK_M + y_right)
+# THE WAY IT FAILED IS THE INTERESTING PART. With the signs swapped the width
+# came out at -3.7 m, which fails the LANE_W_MIN_M..LANE_W_MAX_M plausibility
+# gate on every single frame, so the function returned 0.0 always. Had that
+# gate not been there, `max(0, HALF_TRACK - y_left, HALF_TRACK + y_right)` on
+# a perfectly centred car would have reported 2.78 m of departure — severity
+# pinned at MAX on every pass, and every corner in the store learned as far too
+# fast. The sanity gate turned a dangerous wrong answer into a visibly dead
+# one, which is the whole reason to write gates that fail toward "measured
+# nothing".
+#
+# Corrected, the car's own edges are at +/- HALF_TRACK_M and how far a wheel is
+# PAST a line is
+#
+#     max(0, y_left + HALF_TRACK_M, HALF_TRACK_M - y_right)
 #
 # which is zero while both edges are inside the lines and grows in metres once
 # one is not. Centred in a 3.7 m lane that evaluates to exactly 0.
@@ -230,7 +296,11 @@ def lane_departure_m(y_left: float, y_right: float,
                      p_left: float, p_right: float) -> float:
   """How far the car's nearer edge is OUTSIDE the ego lane, metres. v3.6.4.
 
-  `y_*` are the model's lane lines at the car, in its own frame (+y left);
+  `y_*` are the model's lane lines at the car, in openpilot's device frame,
+  which is **+y to the RIGHT** — so `y_left` is normally NEGATIVE and
+  `y_right` positive. v3.6.5 corrected this; see the block above HALF_TRACK_M
+  for how the previous sign convention failed and why it failed silently.
+
   `p_*` are the matching `laneLineProbs`. Returns 0.0 for "inside the lane"
   AND for "cannot tell", and those are deliberately the same answer: an
   unreadable lane must contribute no stress, so a model that has lost the
@@ -244,10 +314,10 @@ def lane_departure_m(y_left: float, y_right: float,
     return 0.0
   if p_left < LANE_PROB_MIN or p_right < LANE_PROB_MIN:
     return 0.0
-  width = float(y_left) - float(y_right)
+  width = float(y_right) - float(y_left)
   if not (LANE_W_MIN_M <= width <= LANE_W_MAX_M):
     return 0.0
-  out = max(0.0, HALF_TRACK_M - float(y_left), HALF_TRACK_M + float(y_right))
+  out = max(0.0, float(y_left) + HALF_TRACK_M, HALF_TRACK_M - float(y_right))
   return min(out, MAX_DEPART_M)
 
 
@@ -273,13 +343,22 @@ class LateralEffort:
     self.disturbed = False     # the road is hitting the car; see DISTURB_DEG_S
     self.departure = 0.0       # metres our nearer edge is outside the lane
     self.engaged = False       # openpilot was steering this frame
+    self.override = False      # the human has taken some control this frame
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
              eps_limited: bool = False, pitch_rate_deg_s: float = 0.0,
-             departure_m: float = 0.0, lane_change: bool = False) -> None:
+             departure_m: float = 0.0, lane_change: bool = False,
+             long_active: bool = True, brake_pressed: bool = False) -> None:
     self.reversal = False
     self.engaged = bool(lat_active)
+
+    # v3.6.5 — IS A HUMAN IN CHARGE OF ANY AXIS RIGHT NOW? Three facts, no
+    # inference: lateral handed back, longitudinal handed back, or the brake
+    # pedal down. `gasPressed` is deliberately ABSENT — see TAKEOVER_SEVERITY.
+    # `long_active` defaults True and `brake_pressed` False so every caller
+    # predating this gets exactly the pre-v3.6.5 answer.
+    self.override = (not bool(lat_active)) or (not bool(long_active)) or bool(brake_pressed)
 
     # A LANE CHANGE IS NOT A LANE DEPARTURE. Crossing a line on purpose says
     # nothing about the corner, so the signal is suppressed outright rather
@@ -364,15 +443,61 @@ class CornerPass:
     self.limit_time = 0.0
     self.v_min = 1e9
     self.blocked = False       # something happened that makes this pass unusable
+    self.engaged_at_start = False  # openpilot had both axes when the bend began
+    self.took_over = False     # ...and the human then intervened; see TAKEOVER_SEVERITY
+    self._started = False
+    self._ended = False        # the human is driving now; stop measuring
+    self._override_t = 0.0     # how long they have held an axis; TAKEOVER_DWELL_S
 
   def begin(self) -> None:
     self.reset()
     self.open = True
 
   def add(self, effort: LateralEffort, dt: float, v_ego: float,
-          blocked: bool = False) -> None:
+          blocked: bool = False, lead: bool = False) -> None:
     if not self.open or not _finite(dt) or dt <= 0.0:
       return
+
+    # v3.6.5 — THE MEASUREMENT ENDS AT THE TAKEOVER. Whatever happens after a
+    # driver intervenes is the driver driving, which is precisely what
+    # MIN_ENGAGED_FRAC exists to keep out of the store. Latching here rather
+    # than filtering later is also what keeps `engaged_fraction` honest: the
+    # pass IS the engaged part, so a takeover cannot make its own pass fail the
+    # engagement gate it just triggered.
+    #
+    # A LEAD DISARMS THE VERDICT WITHOUT DISARMING THE TRUNCATION, and this is
+    # the ONE exclusion the v3.6.2 design deliberately did not need. That
+    # argument was "the interval cannot be poisoned by something that did not
+    # happen laterally", and a lead produces no lateral acceleration — true of
+    # the other four signals, and NOT true of this one, because a takeover is a
+    # discrete event rather than a measurement of the bend. Braking for a car
+    # that slowed in front of us mid-corner would otherwise condemn the corner,
+    # and on a first visit `seed=True` would adopt that outright. So with a lead
+    # present the pass still ENDS here — the human is driving and none of what
+    # follows is ours — but it does not carry a verdict.
+    if self._ended:
+      return
+    if not self._started:
+      self._started = True
+      self.engaged_at_start = bool(effort.engaged) and not bool(effort.override)
+
+    # THE SKIP IS CONDITIONAL ON THE PASS HAVING BEEN OURS, and that is not
+    # tidiness. Frames where the human has an axis are not a measurement of the
+    # road, so once a pass is ours they are dropped whole — which is also what
+    # keeps `engaged_fraction` from being dragged under MIN_ENGAGED_FRAC by the
+    # dwell window itself. But a pass that was NEVER ours must keep
+    # accumulating, or it would be rejected for being empty and MIN_ENGAGED_FRAC
+    # would stop being the thing that rejects it — a guard nothing can reach is
+    # not a guard.
+    if self.engaged_at_start:
+      if effort.override:
+        self._override_t += dt
+        if self._override_t >= TAKEOVER_DWELL_S:
+          self._ended = True
+          self.took_over = not bool(lead)
+        return
+      self._override_t = 0.0
+
     self.duration += dt
     self.a_peak = max(self.a_peak, effort.a_lat)
     self.v_min = min(self.v_min, float(v_ego) if _finite(v_ego) else 0.0)
@@ -418,31 +543,48 @@ class CornerPass:
     """The clean part has to be long enough on its own. A four-second bend of
     which three seconds were a level crossing is not a four-second
     measurement — the rate statistics would be computed over the remaining
-    sliver and would mean nothing."""
-    return (self.open and not self.blocked and self.duration >= MIN_PASS_S
-            and self.clean_duration >= MIN_PASS_S
-            and self.clean_fraction() >= MIN_CLEAN_FRAC
-            and self.engaged_fraction() >= MIN_ENGAGED_FRAC
-            and self.v_min >= MIN_PASS_V and self.a_peak > 0.0)
+    sliver and would mean nothing.
+
+    v3.6.5 — A TAKEOVER IS EXEMPT FROM THE RATE WINDOWS AND ONLY FROM THOSE.
+    It is an event, not a rate, so MIN_PASS_S / MIN_CLEAN_FRAC do not apply to
+    it; every other gate (engaged at the start, openpilot steering up to the
+    intervention, fast enough to be informative, a real corner behind it) still
+    does. `verdict()` correspondingly drops the rate terms when there is no
+    window to compute them over, so an exempted pass reports the takeover and
+    nothing invented.
+    """
+    if not self.open or self.blocked or self.v_min < MIN_PASS_V or self.a_peak <= 0.0:
+      return False
+    if not self.engaged_at_start or self.engaged_fraction() < MIN_ENGAGED_FRAC:
+      return False
+    if self.took_over:
+      return self.duration >= MIN_TAKEOVER_S
+    return (self.duration >= MIN_PASS_S and self.clean_duration >= MIN_PASS_S
+            and self.clean_fraction() >= MIN_CLEAN_FRAC)
 
   def verdict(self) -> tuple[float, float]:
     """(a_peak, severity). severity 1.0 means exactly at the limit.
 
-    The two components are compared, not summed: either one being over is
+    The components are compared, not summed: any one of them being over is
     enough to condemn the pass, and adding them would let two half-breaches
     manufacture a full one.
 
-    Rates are over `clean_duration`, not `duration` — see add().
+    Rates are over `clean_duration`, not `duration` — see add() — and are
+    DROPPED ENTIRELY below MIN_PASS_S of clean window. That is not the same as
+    computing them anyway: one reversal in a fifth of a second is a rate of
+    5/s, three times the limit, off a sample far too short to mean it. Only the
+    takeover path can reach here with such a window, and it carries its own
+    verdict.
     """
-    if self.clean_duration <= 0.0:
-      return 0.0, 0.0
-    osc_rate = self.reversals / self.clean_duration
-    limit_frac = self.limit_time / self.clean_duration
-    # v3.6.4: leaving the lane is the third way a pass can be over the limit,
-    # and it is a PEAK rather than a rate — one wheel a quarter of a metre
-    # outside the line is a fact about the corner, not something that has to
-    # persist to count.
-    sev = max(osc_rate / OSC_RATE_LIMIT,
-              limit_frac / LIMIT_FRAC_LIMIT,
-              self.depart_peak / DEPART_LIMIT_M)
+    sev = 0.0
+    if self.clean_duration >= MIN_PASS_S:
+      sev = max(self.reversals / self.clean_duration / OSC_RATE_LIMIT,
+                (self.limit_time / self.clean_duration) / LIMIT_FRAC_LIMIT)
+    # v3.6.4: leaving the lane is a PEAK rather than a rate — one wheel a
+    # quarter of a metre outside the line is a fact about the corner, not
+    # something that has to persist to count.
+    sev = max(sev, self.depart_peak / DEPART_LIMIT_M)
+    # v3.6.5: and so is a human deciding to intervene.
+    if self.took_over:
+      sev = max(sev, TAKEOVER_SEVERITY)
     return self.a_peak, min(sev, MAX_SEVERITY)

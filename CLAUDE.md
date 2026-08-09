@@ -119,6 +119,157 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.5 Changes (based on funnypilot-3.6.4)
+
+Four on-road reports, all SCC-M v2. Two were defects with a specific broken
+line; one was two constants in different files that were each defensible and
+wrong TOGETHER; one is a new signal.
+
+- `long_v2/corner_effort.py` — **THE LANE SIGNAL READ A CONSTANT 0 FOR A WHOLE
+  RELEASE BECAUSE I HAD THE FRAME UPSIDE DOWN.** openpilot's device frame is
+  x forward, **y POSITIVE RIGHT**, z down (`common/transformations/camera.py:73`),
+  and `ldw.py` says the same thing independently — it tests the LEFT line
+  against a NEGATIVE bound (`laneLines[1].y[0] > -(1.08 + CAMERA_OFFSET)`) and
+  the right against a positive one. v3.6.4's `lane_departure_m` assumed
+  y-positive-LEFT, so `width = y_left - y_right` came out at **-3.7 m**, failed
+  the `LANE_W_MIN_M..LANE_W_MAX_M` gate on every frame, and returned 0.0.
+  **THE WAY IT FAILED IS THE PART WORTH KEEPING**: had that sanity gate not
+  existed, `max(0, HALF_TRACK - y_left, HALF_TRACK + y_right)` on a perfectly
+  centred car would have reported **2.78 m of departure**, pinning severity at
+  MAX on every pass and learning every corner as far too fast. The gate turned
+  a dangerous wrong answer into a visibly dead one — which is the whole reason
+  to write gates that fail toward "measured nothing".
+  **AND IT IS WHY A ZERO-ONLY TEST SUITE COULD NOT SEE IT**: 0.0 is also the
+  honest answer for "inside the lane" and for "cannot tell", so every passing
+  case stayed passing. `test_the_signal_is_not_silently_dead` MEASURES a real
+  departure; `test_crossing_the_right_line_is_symmetric` was VACUOUS before
+  (both sides returned 0.0 and were trivially equal) and now asserts both are
+  non-zero first. Indices confirmed from `fill_model_msg.fill_lane_line_meta`,
+  which builds `leftY`/`rightY` from `laneLines[1]`/`[2]` exactly.
+- `long_v2/corner_speed.py` — NEW `corner_cap(v, distance, half_len)`. **A
+  CORNER HAS AN EXIT AND THE CAP DID NOT KNOW IT.** `_raw_cap` used
+  `approach_cap(v, max(distance, 0))`, so a corner already behind us evaluated
+  to a FLAT `v_corner` until `_refresh_corners` dropped it at `BEHIND_KEEP_M`
+  past the exit, and only then did the constraint vanish. Measured on a 40 m
+  bend at 13 m/s: 25 m of dead hold plus up to 13 m of refresh staleness,
+  **about 2.9 s of sitting at corner speed on straightening road** before any
+  throttle came back. Three regimes now: the approach envelope ahead of the
+  entry, exactly `v_corner` across the arc (the measured radius applies to all
+  of it — releasing at the apex would ask the car to accelerate while still
+  turning), and `sqrt(v^2 + 2*RELEASE_RATE*s_past)` beyond the exit.
+  `RELEASE_RATE` is **IMPORTED from curve_cap, not mirrored**: CurveSpeedCap
+  will throttle the cap to that rate anyway, so a raw envelope climbing faster
+  is silently clipped and one climbing slower is the binding constraint without
+  saying so. `BEHIND_KEEP_M` is unchanged and still needed — this changes what
+  the corner ASKS FOR while it is kept, not how long it is kept.
+- `long_v2/scc_map_v2.py` — the gas gate takes the same `corner_cap`. It is a
+  THROTTLE clip, so a gate still holding on the exit would undo the fix above
+  and the car would coast out of every bend.
+- `long_v2/scc_map_v2.py` — NEW `_dead_reckon`. **THE GEOMETRY IS THROTTLED TO
+  0.5 s AND THE CAP IS NOT**, and nothing moved `distance` in between: the
+  envelope was fed a distance correct at the refresh and up to `v_ego * 0.5`
+  metres **TOO LARGE** by the end of the interval — 13.4 m at 26.8 m/s, and
+  ALWAYS loose, because the number only ever ages toward "further away than it
+  is". Worth 0.9 m/s (2 mph) at the steep part (`d(cap)/dd = a/cap = 1.2/17.7`),
+  delivered as a 0.5 s STAIRCASE. `_refresh_corners` re-stamps `_dr_at` so a
+  refresh frame advances nothing; an implausible dt is rejected rather than
+  applied, because over-closing tightens the cap on evidence we do not have.
+- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` —
+  **`CRUISE_MIN_ACCEL` -1.2 -> -1.6, AND THIS IS THE ONE THAT ANSWERS "NOT
+  ENOUGH AUTHORITY".** Line ~395 clips the cruise target to
+  `v_ego + T_IDXS * CRUISE_MIN_ACCEL * 1.05` BEFORE the obstacle is built, so
+  the MPC never sees a cruise target falling faster than 1.26 m/s^2 however far
+  under the governors put it — while SCC-M v2's envelope asks for **1.20** in
+  its last 60 m. **95% of the ceiling**, i.e. no ability to catch up once
+  behind, for any reason, ever. Two constants in two files, each defensible
+  alone. The old note in corner_speed.py said "do not raise one without the
+  other" and was right; the mistake was setting them EQUAL.
+  **THE FIX IS HEADROOM, NOT A STEEPER ASK** — the `_J_BP`/`_J_V` table is
+  UNCHANGED and still validated; the MPC now has ~40% margin to FOLLOW it. The
+  clip is PERMISSIVE (it bounds what the MPC may be told, the solver's cost
+  still decides the shape), so this removes an artificial ceiling rather than
+  commanding harder braking. SLA is unaffected: its `RATE_MAX` is 1.2 m/s per
+  second in its own right and simply stops being co-limited.
+  **PINNED AS A RELATIONSHIP, NOT A VALUE** — `TestTheEnvelopeHasRoomToBeFollowed`
+  parses `CRUISE_MIN_ACCEL` out of long_mpc.py with `ast` (that module imports
+  acados and cannot be constructed off-device) and asserts the steepest budget
+  is at most 85% of what the MPC can deliver. Mutation-tested from both sides:
+  putting the constant back OR steepening the table past ~1.35 fails it.
+  If a corner is still entered too fast, the table is now the next knob.
+- `long_v2/corner_effort.py` — **A FIFTH SIGNAL: THE DRIVER TOOK OVER.**
+  Owner-requested, and it does NOT reopen what v3.6.4 closed — the distinction
+  is the whole design. v3.6.4 throws out passes the driver DROVE, because the
+  signals then measure how well the human steered. v3.6.5 keeps passes
+  OPENPILOT drove and the human INTERRUPTED: that is not a measurement of the
+  human at all, it is their judgement of OUR speed, and it is the most direct
+  statement of "too fast for this bend" available anywhere in the car.
+  So a takeover is only evidence on a pass that STARTED engaged, and **the
+  measurement ENDS at the takeover** — everything after is the human driving,
+  which is exactly what v3.6.4 rules out. `TAKEOVER_SEVERITY` 2.0 = "this
+  corner supports about half what we just pulled": stronger than being at the
+  limit, short of `MAX_SEVERITY`, and through the same `max()` as the other
+  four so a pass that ALSO sawed reports whichever verdict is worse.
+  **WHAT COUNTS**: lateral off, longitudinal off, brake pedal. **NOT THE
+  ACCELERATOR** — a driver adding throttle mid-bend is evidence we were too
+  SLOW, and folding it in would let the one signal arguing for more speed lower
+  the ceiling. Pinned on the signature, the way v3.4.0's status dot pinned the
+  absence of a pitch term.
+  `TAKEOVER_DWELL_S` 0.25: `latActive` drops for a frame at plenty of
+  boundaries that are not interventions, and one frame must not condemn a
+  corner. `MIN_TAKEOVER_S` 0.3 replaces `MIN_PASS_S` for a takeover — it is an
+  EVENT, not a rate, and requiring a full window would discard exactly the case
+  that matters most, a grab in the first half second because the car entered
+  far too fast. **THE TRAP IN EXEMPTING THE WINDOW**, and `verdict()` now
+  handles it: one reversal in 0.4 s is a rate of 2.5/s, over the limit, off a
+  sample far too short to mean it. The rate terms are DROPPED below
+  `MIN_PASS_S` of clean window rather than computed anyway.
+  **A LEAD DISARMS THE VERDICT WITHOUT DISARMING THE TRUNCATION, AND IT IS THE
+  ONE EXCLUSION THIS DESIGN NEEDS.** v3.6.2's argument for having none was "the
+  interval cannot be poisoned by something that did not happen laterally" —
+  true of the other four, NOT true of this one, because a takeover is a
+  discrete event rather than a measurement of the bend. Braking for a car that
+  slowed in front of us would otherwise condemn the corner, and on a first
+  visit `seed=True` adopts that outright.
+  The override frames are skipped ONLY when the pass was ours; a pass that was
+  never ours keeps accumulating so `MIN_ENGAGED_FRAC` is still what rejects it
+  — **a guard nothing can reach is not a guard.**
+- `long_v2/scc_map_v2.py`, `longitudinal_planner.py` (SP) — `observe_frame`
+  gains `long_active`, `brake_pressed`, `lead`; the planner reads them off
+  carControl/carState/radarState. NO new dev-UI row: a takeover shows in the
+  existing PASS readout as a severity of 2.0+, already red.
+- `hud/route_map.py` — the ribbon calls the controller's own `corner_cap`
+  instead of mirroring its release rate, so the two cannot disagree about where
+  authority comes back. The corner's whole arc is now solid and the fade starts
+  at the EXIT; `corners_fwd` carries `half_len` and `corner_plan_at` reads its
+  entries POSITIONALLY (this tuple has grown twice — the v3.6.3 outage).
+- TESTS: **930 green** across the import-light suites, ruff clean. NEW
+  `TestTheDriversVerdict` (12), `TestTheRunOut` (9),
+  `TestTheEnvelopeHasRoomToBeFollowed` (3), `TestTheDistancesDoNotGoStale` (6),
+  `TestTheExitHandsAuthorityBack` (3), plus `test_the_signal_is_not_silently_dead`
+  and `test_the_whole_arc_is_solid`. `TestLaneDepartureGeometry` rewritten for
+  the correct frame. `test_a_takeover_mid_corner_discards_the_pass` DELETED —
+  it pinned exactly the behaviour this release reverses.
+  FOURTEEN guards mutation-tested. **ONE SURVIVED THE FIRST PASS AND IT WAS THE
+  FAMILIAR SHAPE**: my dead-reckoning tests called `_dead_reckon` directly, so
+  deleting the call from `update()` left the suite green — a test that reaches
+  past the call site cannot see the call site. Rewritten to drive `update()`
+  with the geometry throttle engaged, as it is between any two real refreshes.
+- `sunnypilot/navd/nav_webserver.py` — `EXPECTED_VERSION` -> "3.6.5", eight new
+  `_CODE_MARKERS` rows (three for v3.6.4, which never got any). ALSO FIXES A
+  PRE-EXISTING BREAK: the SLA row grepped "INACTIVE WAS A TRAP", text v3.6.3
+  deleted when it reversed v3.5.5's escape hatch, so the Verify page has been
+  reporting MISSING since then. All 110 markers now resolve — verified by
+  parsing the table and grepping each one, which is worth doing on every bump.
+- `FUNNYPILOT_VERSION` -> 3.6.5, branch `funnypilot-3.6.5`.
+- ON-ROAD VERIFICATION REQUIRED / FALSIFIABLE: (1) **LANE must be seen non-zero
+  at least once** on a drive with a wide line — a signal whose failure mode is
+  its own healthy reading needs positive confirmation, and that is exactly how
+  v3.6.4 shipped it dead. (2) if the exit still feels slow, the corner is being
+  kept too long rather than asking too much — check `half_len` from the
+  geometry before touching `RELEASE_RATE`. (3) if entry is still late, the
+  `_J_V` table is now the knob and may be steepened to ~1.35 before the
+  headroom guard fires.
+
 ### v3.6.4 Changes (based on funnypilot-3.6.3)
 
 Two on-road reports: SCC-M v2 missing the second half of an S-bend (and taking

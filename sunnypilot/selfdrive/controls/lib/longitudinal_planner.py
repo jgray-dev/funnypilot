@@ -120,6 +120,14 @@ class LongitudinalPlannerSP:
       # is the same answer as "cannot tell" on purpose: an unreadable lane must
       # contribute NO stress, so a model that has lost the lines can only ever
       # make a pass look cleaner than it was.
+      #
+      # THE INDICES AND THE SIGNS. `laneLines[1]` is the LEFT line of the ego
+      # lane and `[2]` the right — pinned by `fill_model_msg.fill_lane_line_meta`,
+      # which builds `leftY`/`rightY` from exactly those two. The frame is
+      # openpilot's device frame, x forward and **y positive RIGHT**
+      # (common/transformations/camera.py:73), so left is negative here; v3.6.5
+      # corrected `lane_departure_m` for that after it read a constant zero for
+      # a release. `.y[0]` is at X_IDXS[0] = 0 m, i.e. beside the car.
       departure, lane_change = 0.0, False
       try:
         md = sm['modelV2']
@@ -132,12 +140,25 @@ class LongitudinalPlannerSP:
       except Exception:
         departure, lane_change = 0.0, False
 
+      # v3.6.5 — DID THE HUMAN TAKE AN AXIS BACK? Both facts are read straight
+      # off carControl/carState; corner_effort decides what they mean. Note
+      # `gasPressed` is deliberately not among them — see TAKEOVER_SEVERITY.
+      CC = sm['carControl']
+      # A lead disarms the takeover VERDICT (not the truncation): braking for a
+      # car that slowed in front of us mid-bend says nothing about the bend.
+      # See CornerPass.add.
+      lead = False
+      try:
+        lead = bool(sm['radarState'].leadOne.status)
+      except Exception:
+        lead = False
       _lat, _lon, _brg, acc, _ok = read_gps(sm)
       self._scc_map_v2.observe_frame(
         now, float(CS.vEgo), float(cst.curvature), float(CS.steeringAngleDeg),
-        float(CS.steeringTorque), bool(sm['carControl'].latActive), saturated,
+        float(CS.steeringTorque), bool(CC.latActive), saturated,
         _read_eps_limited(), bool(CS.leftBlinker or CS.rightBlinker),
-        bool(CS.standstill), acc, _read_pitch_rate(), departure, lane_change)
+        bool(CS.standstill), acc, _read_pitch_rate(), departure, lane_change,
+        bool(CC.longActive), bool(CS.brakePressed), lead)
     except Exception:
       pass
 

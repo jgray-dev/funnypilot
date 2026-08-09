@@ -233,6 +233,7 @@ class SCCMapV2:
     self._pass = CornerPass()
     self._pass_key = None       # (lat, lon, bearing, radius) of the corner being driven
     self._geom_at = 0.0
+    self._dr_at = 0.0        # v3.6.5: when the distances were last advanced
     self._last_sample_t = 0.0
     self._gate_frames = 0
 
@@ -316,6 +317,7 @@ class SCCMapV2:
     if now - self._geom_at < _GEOM_PERIOD_S:
       return
     self._geom_at = now
+    self._dr_at = now
 
     corners, s_ego = RG.corners_from_route(self._read_route(), lat, lon, bearing)
     out = []
@@ -336,6 +338,36 @@ class SCCMapV2:
     s = self.store()
     if s is not None:
       self.learned_count = s.count
+
+  def _dead_reckon(self, now: float, v_ego: float) -> None:
+    """Close the corner distances by how far we have driven since the refresh.
+
+    v3.6.5 — THE GEOMETRY IS THROTTLED TO _GEOM_PERIOD_S BUT THE CAP IS NOT,
+    and nothing used to move `distance` in between. So the envelope was fed a
+    distance that was correct at the refresh and then up to
+    `v_ego * _GEOM_PERIOD_S` metres TOO LARGE by the end of the interval —
+    13.4 m at 26.8 m/s, and ALWAYS in the loose direction, because the number
+    only ever ages toward "the corner is further away than it is".
+
+    What that is worth: on the steep part of the envelope the cap moves at
+    a/cap = 1.2/17.7 = 0.068 m/s per metre, so 13.4 m of staleness is 0.9 m/s
+    (2 mph) of extra speed carried into the bend — arriving as a 0.5 s
+    STAIRCASE rather than a smooth descent, which is felt as well as measured.
+    Together with the 5% headroom the MPC had over the envelope before this
+    release, that on its own is enough to explain a corner entered too fast.
+
+    Position still comes from the GPS at the refresh; this removes only the
+    part of the error that is pure bookkeeping. A bad `dt` (clock jump, first
+    frame, a stalled planner) is rejected rather than applied — over-closing
+    the distance would tighten the cap on evidence we do not have.
+    """
+    dt = now - self._dr_at
+    self._dr_at = now
+    if not (0.0 < dt <= _GEOM_PERIOD_S) or not (0.0 <= v_ego < 100.0):
+      return
+    ds = v_ego * dt
+    for c in self.corners:
+      c.distance -= ds
 
   @staticmethod
   def _to_geodetic(fwd: float, right: float, lat0: float, lon0: float, bearing_deg: float):
@@ -358,7 +390,8 @@ class SCCMapV2:
                     lat_active: bool, saturated: bool, eps_limited: bool,
                     blinker: bool, standstill: bool, gps_acc: float,
                     pitch_rate_deg_s: float = 0.0, departure_m: float = 0.0,
-                    lane_change: bool = False) -> None:
+                    lane_change: bool = False, long_active: bool = True,
+                    brake_pressed: bool = False, lead: bool = False) -> None:
     """Watch the car drive. Called at the carState rate; never raises.
 
     A pass opens when the car enters the extent of the nearest corner ahead and
@@ -386,7 +419,8 @@ class SCCMapV2:
 
       self._effort.update(dt, v_ego, curvature, steering_angle_deg,
                           steer_torque, lat_active, saturated, eps_limited,
-                          pitch_rate_deg_s, departure_m, lane_change)
+                          pitch_rate_deg_s, departure_m, lane_change,
+                          long_active, brake_pressed)
 
       inside = None
       for c in self.corners:
@@ -396,7 +430,7 @@ class SCCMapV2:
 
       blocked = bool(blinker or standstill or gps_acc > MAX_GPS_ACC_M)
       if self._pass.open:
-        self._pass.add(self._effort, dt, v_ego, blocked=blocked)
+        self._pass.add(self._effort, dt, v_ego, blocked=blocked, lead=lead)
         # Still the SAME corner? Each refresh re-projects from a moved ego pose,
         # so the coordinates shift by metres between refreshes; matching on
         # separation rather than equality is what stops the pass being closed
@@ -411,7 +445,7 @@ class SCCMapV2:
       if inside is not None and v_ego >= _V_MIN_ACTIVE and gps_acc <= MAX_GPS_ACC_M:
         self._pass.begin()
         self._pass_key = (inside.lat, inside.lon, inside.bearing, inside.radius)
-        self._pass.add(self._effort, dt, v_ego, blocked=blocked)
+        self._pass.add(self._effort, dt, v_ego, blocked=blocked, lead=lead)
     except Exception:
       pass
 
@@ -468,11 +502,7 @@ class SCCMapV2:
     for c in self.corners:
       if c.v_target >= v_cruise - 0.5:
         continue          # this corner does not constrain us at this speed
-      # A corner we are INSIDE has distance <= 0 and its cap is simply the
-      # corner speed — clamping the distance at zero is what holds the car
-      # down through the bend instead of releasing at the apex. Once the exit
-      # passes, _refresh_corners drops it and CurveSpeedCap ramps back up.
-      allowed = CS_.approach_cap(c.v_target, max(c.distance, 0.0))
+      allowed = CS_.corner_cap(c.v_target, c.distance, c.half_len)
       if allowed < best:
         best, best_c = allowed, c
     if best_c is not None:
@@ -509,9 +539,13 @@ class SCCMapV2:
       for c in self.corners:
         if c.v_target >= v_cruise - 0.5:
           continue          # does not constrain us; same test the cap applies
-        # where we will be in GATE_LEAD_T seconds, at the speed we hold now
-        d = max(0.0, max(c.distance, 0.0) - v_ego * GATE_LEAD_T)
-        if CS_.approach_cap(c.v_target, d) < v_ego - margin:
+        # where we will be in GATE_LEAD_T seconds, at the speed we hold now.
+        # Through the same `corner_cap` the speed cap uses, so a corner already
+        # behind us cannot gate the throttle off while its run-out is handing
+        # authority back — the v3.6.5 exit fix would otherwise be undone by the
+        # gate, which is a THROTTLE clip and would keep the car coasting.
+        d = c.distance - v_ego * GATE_LEAD_T
+        if CS_.corner_cap(c.v_target, d, c.half_len) < v_ego - margin:
           gate = True
           break
 
@@ -542,7 +576,13 @@ class SCCMapV2:
       self.corners = []
     else:
       try:
-        self._refresh_corners(time.monotonic(), lat, lon, bearing)
+        now = time.monotonic()
+        self._refresh_corners(now, lat, lon, bearing)
+        # AFTER the refresh, which re-stamps `_dr_at`, so a frame that
+        # refreshed advances nothing and a frame that did not advances exactly
+        # its own dt. Without this the distances are a 0.5 s staircase that is
+        # always loose — see _dead_reckon.
+        self._dead_reckon(now, v_ego)
       except Exception:
         self.corners = []
 

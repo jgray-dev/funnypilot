@@ -269,32 +269,39 @@ def learned_corners_from(corners) -> list[tuple[float, float, float]]:
 # corner's exit.
 #
 # THE TWO ENDS ARE ASYMMETRIC BY CONSTRUCTION and that is information: entry
-# uses a budget capped at 1.20 m/s^2 (long_mpc.CRUISE_MIN_ACCEL), the exit uses
-# 2.5 m/s^2, so the run-out is about half the length of the run-in — which is
-# what "brake early, accelerate out" looks like drawn on a road.
-RELEASE_RATE = 2.5      # mirrors curve_cap.RELEASE_RATE; pinned by test
+# uses a budget capped at 1.20 m/s^2, the exit uses 2.5 m/s^2, so the run-out
+# is about half the length of the run-in — which is what "brake early,
+# accelerate out" looks like drawn on a road.
+#
+# v3.6.5 — THE RUN-OUT NOW STARTS AT THE CORNER'S EXIT, NOT AT ITS APEX, and
+# the whole extent in between is solid. That is not a drawing change; the
+# CONTROLLER changed to match (corner_speed.corner_cap), because holding the
+# corner speed across the arc and releasing from the exit is what the geometry
+# actually says. The ribbon takes the SAME function the cap does, so the two
+# cannot disagree about where authority comes back.
 
 
-def corner_plan_at(s: float, corners_s, approach_cap):
+def corner_plan_at(s: float, corners_s, corner_cap):
     """(v_gov, cap) at arc position `s` along the route.
 
-    `corners_s` is [(s_apex, v_target), ...] in the same arc frame. The
-    governing corner is the one whose envelope is LOWEST here — the same
+    `corners_s` is [(s_apex, half_len, v_target), ...] in the same arc frame.
+    The governing corner is the one whose envelope is LOWEST here — the same
     min() the controller takes, so the ribbon cannot disagree with the cap.
+
+    Entries are read POSITIONALLY and tolerate extra fields: this tuple has
+    already grown once, and a consumer that spells out every name breaks the
+    next time one is added (the v3.6.3 minimap outage).
 
     (0.0, 0.0) means no corner has any say at this point.
     """
     best, gov = float('inf'), 0.0
-    for s_apex, v in corners_s:
+    for c in corners_s:
+      if len(c) < 3:
+        continue
+      s_apex, half, v = c[0], c[1], c[2]
       if v <= 0.0:
         continue
-      d = s_apex - s
-      if d >= 0.0:
-        cap = approach_cap(v, d)
-      else:
-        # past it: CurveSpeedCap ramps the cap back up at RELEASE_RATE, so the
-        # speed permitted `ds` beyond the apex is sqrt(v^2 + 2*a*ds).
-        cap = math.sqrt(v * v + 2.0 * RELEASE_RATE * (-d))
+      cap = corner_cap(v, s_apex - s, half)
       if cap < best:
         best, gov = cap, v
     if gov <= 0.0 or not T.finite(best):
@@ -696,8 +703,8 @@ class RouteMap:
     # the pre-v3.6.4 look (full opacity over each corner's own extent).
     if self._approach_cap is None:
       try:
-        from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import approach_cap
-        self._approach_cap = approach_cap
+        from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import corner_cap
+        self._approach_cap = corner_cap
       except Exception:
         self._approach_cap = False
 
@@ -717,8 +724,11 @@ class RouteMap:
           continue
         _n = (c[0] - lat0) * _M_PER_DEG
         _e = (c[1] - lon0) * _M_PER_DEG * _cl
+        # (s_apex, half_len, v_target). v3.6.5 carries the half-length so the
+        # ribbon holds the corner's colour across its whole arc and fades from
+        # the EXIT, which is what the cap now does.
         corners_fwd.append((_n * math.cos(math.radians(bearing)) +
-                            _e * math.sin(math.radians(bearing)), c[3]))
+                            _e * math.sin(math.radians(bearing)), c[2], c[3]))
       except Exception:
         continue
 

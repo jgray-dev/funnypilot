@@ -63,7 +63,29 @@ COMFORT_BRAKE = 2.2
 # Standstill gap to a stopped lead. 7.5 m is roomier than stock (6.0) without
 # the cut-in-inviting 11 m gap of 3.2.5st.
 STOP_DISTANCE = 7.5
-CRUISE_MIN_ACCEL = -1.2
+# FunnyPilot v3.6.5 — -1.2 -> -1.6. THE CEILING ON WHAT A FALLING CRUISE TARGET
+# CAN COMMAND, and it was set exactly where it could not work.
+#
+# It is used on line ~395 to clip `v_cruise` to `v_ego + T_IDXS * CRUISE_MIN_ACCEL
+# * 1.05` before the cruise obstacle is built, so the MPC NEVER SEES a cruise
+# target falling faster than 1.26 m/s^2 however far under the governors put it.
+# SCC-M v2's approach envelope asks for 1.20 m/s^2 in its last 60 m — 95% of
+# that ceiling. So the car had ~5% headroom and therefore NO ABILITY TO CATCH UP
+# once it fell behind the envelope for any reason (a stale corner distance, the
+# cap's own EMA, a radius read slightly loose). It never recovered, and arrived
+# at the bend above the speed the cap had been asking for since 400 m out. That
+# is the reported "doesn't have enough authority to slow down enough".
+#
+# -1.6 restores ~40% headroom over the same, UNCHANGED envelope. Note what this
+# is and is not: the clip is PERMISSIVE, not a demand — it bounds what the MPC
+# is allowed to be told, and the solver's own cost still decides the shape. So
+# this removes an artificial ceiling rather than commanding harder braking, and
+# nothing that was not already asking to slow down slows down differently.
+#
+# STILL WELL INSIDE COMFORT: COMFORT_BRAKE above is 2.2 and ACCEL_MIN far lower.
+# SLA is UNAFFECTED — its RATE_MAX is 1.2 m/s per second in its own right, so
+# this simply stops being the binding constraint on a ramp that never used it.
+CRUISE_MIN_ACCEL = -1.6
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
 

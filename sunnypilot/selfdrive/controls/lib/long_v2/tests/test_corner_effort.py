@@ -422,51 +422,75 @@ class TestLaneDepartureGeometry:
 
   The other three ask how hard the CONTROLLER worked. This one asks whether the
   car stayed where it belonged, which is what "too fast for the bend" means
-  physically. Exact values throughout: the model frame is y-positive-left, the
-  car's edges are at +/- HALF_TRACK_M, and the arithmetic is one max().
+  physically.
+
+  EVERY VALUE HERE IS IN openpilot's DEVICE FRAME: x forward, **y positive
+  RIGHT** (common/transformations/camera.py:73), so `y_left` is NEGATIVE and
+  `y_right` positive. v3.6.4 wrote this class with the signs the other way
+  round; the result was that `width` came out negative, the plausibility gate
+  rejected every frame, and the whole signal read a constant zero for a
+  release. See test_the_signal_is_not_silently_dead.
   """
-  L, R = 1.85, -1.85          # a centred car in a 3.7 m lane
+  L, R = -1.85, 1.85          # a centred car in a 3.7 m lane
   P = 0.9                     # confident lane lines
 
   def test_centred_is_zero(self):
     assert CE.lane_departure_m(self.L, self.R, self.P, self.P) == 0.0
 
+  def test_the_signal_is_not_silently_dead(self):
+    """THE v3.6.5 REGRESSION GUARD, and the one that pins the frame convention.
+
+    MUTATION: swap the signs back (width = y_left - y_right, and the max()
+    terms with them). Every case below then falls through the width gate to
+    0.0 — which is exactly how the bug hid, because 0.0 is also the honest
+    answer for 'inside the lane' and for 'cannot tell'. So a test that only
+    checks the zero cases cannot see it; the departure has to be MEASURED.
+    """
+    real = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
+    assert real > 0.0
+    assert real == pytest.approx(0.33, abs=0.01)
+
   def test_inside_the_lines_is_still_zero(self):
     """Drifting within the lane is not a departure. MUTATION: drop the max(0,
     ...) and every ordinary corner would report a 'departure'."""
-    assert CE.lane_departure_m(1.4, -2.3, self.P, self.P) == 0.0
+    assert CE.lane_departure_m(-2.3, 1.4, self.P, self.P) == 0.0
 
   def test_crossing_the_left_line_measures_the_overhang(self):
     """Left line 0.60 m from the centreline means our left edge (0.93 m out)
     is 0.33 m past it."""
-    d = CE.lane_departure_m(0.60, -3.10, self.P, self.P)
+    d = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
     assert d == pytest.approx(CE.HALF_TRACK_M - 0.60)
     assert d == pytest.approx(0.33, abs=0.01)
 
   def test_crossing_the_right_line_is_symmetric(self):
-    """Which way we fell out of the lane says nothing about the corner."""
-    left = CE.lane_departure_m(0.60, -3.10, self.P, self.P)
-    right = CE.lane_departure_m(3.10, -0.60, self.P, self.P)
+    """Which way we fell out of the lane says nothing about the corner.
+
+    NOTE this assertion was VACUOUS in v3.6.4 — with the signs inverted both
+    sides returned 0.0 and were trivially equal. Both sides are non-zero now,
+    which is asserted so it cannot go quiet again."""
+    left = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
+    right = CE.lane_departure_m(-3.10, 0.60, self.P, self.P)
+    assert left > 0.0 and right > 0.0
     assert left == pytest.approx(right)
 
   def test_an_unconfident_line_measures_nothing(self):
     """A guessed line is a reason to measure NOTHING, not to measure something
     wrong. MUTATION: drop the probability gate."""
-    assert CE.lane_departure_m(0.60, -3.10, 0.1, self.P) == 0.0
-    assert CE.lane_departure_m(0.60, -3.10, self.P, 0.1) == 0.0
+    assert CE.lane_departure_m(-0.60, 3.10, 0.1, self.P) == 0.0
+    assert CE.lane_departure_m(-0.60, 3.10, self.P, 0.1) == 0.0
 
   def test_an_implausible_lane_width_measures_nothing(self):
     """Outside LANE_W_MIN/MAX the model has latched a road edge or the far
     side of a junction, and a departure computed from that is fiction."""
-    assert CE.lane_departure_m(0.60, -0.90, self.P, self.P) == 0.0     # 1.5 m
-    assert CE.lane_departure_m(4.0, -4.0, self.P, self.P) == 0.0       # 8 m
+    assert CE.lane_departure_m(-0.90, 0.60, self.P, self.P) == 0.0     # 1.5 m
+    assert CE.lane_departure_m(-4.0, 4.0, self.P, self.P) == 0.0       # 8 m
 
   def test_it_is_bounded(self):
     """One swerve is not a measurement of the corner."""
-    assert CE.lane_departure_m(-1.0, -4.5, self.P, self.P) == CE.MAX_DEPART_M
+    assert CE.lane_departure_m(1.0, 4.7, self.P, self.P) == CE.MAX_DEPART_M
 
   def test_garbage_measures_nothing(self):
-    for a, b in ((float('nan'), -1.85), (1.85, float('inf')), (None, -1.85)):
+    for a, b in ((float('nan'), 1.85), (-1.85, float('inf')), (None, 1.85)):
       assert CE.lane_departure_m(a, b, self.P, self.P) == 0.0
 
 
@@ -563,14 +587,144 @@ class TestOnlyOpenpilotsOwnPassesCount:
     assert p.engaged_fraction() == 0.0
     assert not p.usable()
 
-  def test_a_takeover_mid_corner_discards_the_pass(self):
-    """Half-driven is not half-evidence: the severity signals cannot be
-    attributed once control changed hands inside the bend."""
-    assert not self._pass(0.5).usable()
-
   def test_a_single_dropped_frame_does_not_discard_it(self):
     """MIN_ENGAGED_FRAC is a fraction rather than an all-or-nothing flag so
     one late frame at a boundary cannot throw away a real measurement."""
     p = self._pass(0.99)
     assert p.engaged_fraction() > CE.MIN_ENGAGED_FRAC
     assert p.usable()
+
+
+class TestTheDriversVerdict:
+  """FunnyPilot v3.6.5 — a takeover is the fifth signal.
+
+  THIS DOES NOT REOPEN WHAT v3.6.4 CLOSED, and the class above pins the half
+  that still stands. v3.6.4 throws out passes the driver DROVE, because the
+  severity signals then measure the human. v3.6.5 keeps passes openpilot drove
+  and the human INTERRUPTED — which is not a measurement of the human at all,
+  it is their judgement of OUR speed.
+
+  The predecessor of the first test here asserted that a mid-corner takeover
+  DISCARDED the pass. It pinned exactly the behaviour this release reverses,
+  so keeping it would have been keeping the defect.
+  """
+  DT = 0.01
+
+  def _pass(self, seconds=4.0, take_at=None, start_engaged=True, lead=False,
+            brake=False, reversals=False, release_at=None):
+    """Drive a bend, optionally handing an axis back at `take_at` seconds."""
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    n = int(seconds / self.DT)
+    for i in range(n):
+      t = i * self.DT
+      taken = take_at is not None and t >= take_at
+      if release_at is not None and t >= release_at:
+        taken = False
+      lat = start_engaged and not (taken and not brake)
+      e.update(self.DT, 20.0, 0.005,
+               (10.0 if (i // 5) % 2 else -10.0) if reversals else 0.0,
+               0.0, lat, brake_pressed=bool(taken and brake))
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0, lead=lead)
+    return p
+
+  def test_a_takeover_is_the_drivers_verdict_not_a_discard(self):
+    """MUTATION: drop the takeover term from verdict(). The pass then reports
+    a clean 0.0 severity and the corner it was too fast for gets RAISED."""
+    p = self._pass(take_at=2.0)
+    assert p.took_over
+    assert p.usable()
+    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+
+  def test_the_brake_pedal_counts_too(self):
+    """'any portion, longitudinal or lateral'. Lateral stays active here, so
+    only the pedal can produce the verdict."""
+    p = self._pass(take_at=2.0, brake=True)
+    assert p.took_over
+    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+
+  def test_the_accelerator_is_deliberately_absent(self):
+    """A driver adding throttle mid-bend is evidence we were too SLOW. Folding
+    it in here would let the one signal arguing for more speed lower the
+    ceiling. Pinned on the signature, the way the v3.4.0 status dot pinned the
+    absence of a pitch term."""
+    import inspect
+    names = set(inspect.signature(CE.LateralEffort.update).parameters)
+    assert 'brake_pressed' in names and 'long_active' in names
+    assert not any('gas' in n for n in names)
+
+  def test_a_pass_that_was_never_ours_is_not_a_takeover(self):
+    """v3.6.4's rule, unchanged: the human driving the whole bend teaches
+    nothing. MUTATION: drop `engaged_at_start` and a hand-driven pass becomes
+    a maximum-severity condemnation of the corner on its first frame."""
+    p = self._pass(seconds=4.0, start_engaged=False)
+    assert not p.took_over
+    assert not p.usable()
+
+  def test_a_lead_disarms_the_verdict_but_still_ends_the_pass(self):
+    """The ONE exclusion this design needs. Braking for a car that slowed in
+    front of us says nothing about the bend, and on a first visit `seed=True`
+    would adopt that outright. MUTATION: drop the `lead` term."""
+    p = self._pass(take_at=2.0, lead=True)
+    assert not p.took_over
+    assert p.verdict()[1] == pytest.approx(0.0)
+    # ...but nothing after the handover was measured
+    assert p.duration == pytest.approx(2.0, abs=0.05)
+
+  def test_one_dropped_frame_is_not_a_takeover(self):
+    """`latActive` drops for a frame at plenty of boundaries that are not
+    interventions. MUTATION: remove TAKEOVER_DWELL_S and every one of them
+    condemns the corner it happened in."""
+    p = self._pass(take_at=2.0, release_at=2.0 + self.DT * 3)
+    assert not p.took_over
+    assert p.usable()
+    assert p.verdict()[1] == pytest.approx(0.0)
+
+  def test_the_dwell_is_shorter_than_a_real_grab(self):
+    """Held for longer than the dwell, it latches. The pair of tests is the
+    point: one frame must not, a real intervention must."""
+    p = self._pass(take_at=2.0, release_at=2.0 + CE.TAKEOVER_DWELL_S + 0.1)
+    assert p.took_over
+
+  def test_an_early_takeover_still_counts(self):
+    """A takeover is an EVENT, not a rate, so MIN_PASS_S does not apply to it —
+    and requiring it would discard exactly the case that matters most, a driver
+    grabbing the wheel because the car entered far too fast. MUTATION: keep the
+    MIN_PASS_S branch for takeovers."""
+    p = self._pass(seconds=2.0, take_at=0.5)
+    assert p.duration < CE.MIN_PASS_S
+    assert p.usable()
+    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+
+  def test_an_instant_takeover_is_still_too_little(self):
+    """MIN_TAKEOVER_S: the car has to have actually been in the bend."""
+    p = self._pass(seconds=2.0, take_at=0.1)
+    assert p.took_over
+    assert not p.usable()
+
+  def test_a_short_pass_does_not_invent_a_rate(self):
+    """THE TRAP IN EXEMPTING THE WINDOW. One reversal in 0.4 s is a rate of
+    2.5/s — over the limit — off a sample far too short to mean it. The rate
+    terms are DROPPED below MIN_PASS_S of clean window rather than computed
+    anyway, so a takeover reports the takeover and nothing invented.
+    MUTATION: compute the rates unconditionally; severity leaves 2.0."""
+    p = self._pass(seconds=2.0, take_at=0.5, reversals=True)
+    assert p.reversals > 0
+    assert p.clean_duration < CE.MIN_PASS_S
+    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+
+  def test_nothing_after_the_takeover_is_measured(self):
+    """Everything past the intervention is the human driving, which is what
+    v3.6.4 rules out. MUTATION: keep accumulating; `engaged_fraction` then
+    collapses and the pass this signal exists to commit is rejected."""
+    p = self._pass(seconds=6.0, take_at=2.0)
+    assert p.duration == pytest.approx(2.0, abs=0.05)
+    assert p.engaged_fraction() == pytest.approx(1.0)
+
+  def test_a_takeover_beats_a_clean_reading(self):
+    """It enters through the same max() as the other four, so a pass that
+    looked clean right up to the intervention still reports the verdict."""
+    clean = self._pass(seconds=4.0)
+    assert clean.verdict()[1] == pytest.approx(0.0)
+    assert self._pass(seconds=4.0, take_at=2.0).verdict()[1] > clean.verdict()[1]

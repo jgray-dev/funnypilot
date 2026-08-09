@@ -1081,9 +1081,11 @@ class TestTheSlowdownGradient:
   """
   MPH = 2.23694
 
+  HALF = 20.0     # a 40 m-long bend, so entry/exit are 20 m either side
+
   def _cap(self):
-    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import approach_cap
-    return approach_cap
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import corner_cap
+    return corner_cap
 
   def test_alpha_is_exactly_one_at_the_apex(self):
     """THE PROPERTY THAT MAKES OPACITY SAFE TO USE AT ALL: at the apex the
@@ -1091,10 +1093,21 @@ class TestTheSlowdownGradient:
     exactly 1. No bend can fade to invisible however far away it is — only its
     run-in and run-out fade."""
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
-    gov, cap = _rm.corner_plan_at(0.0, [(0.0, v_corner)], self._cap())
+    gov, cap = _rm.corner_plan_at(0.0, [(0.0, self.HALF, v_corner)], self._cap())
     assert gov == pytest.approx(v_corner)
     assert cap == pytest.approx(v_corner)
     assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0)
+
+  def test_the_whole_arc_is_solid(self):
+    """v3.6.5 — the corner's own extent is FULL opacity end to end, because the
+    cap holds the corner speed across it. MUTATION: release from the apex
+    (drop half_len) and the exit half of every bend goes translucent while the
+    car is still turning."""
+    v_set, v_corner = 60 / self.MPH, 29 / self.MPH
+    ac = self._cap()
+    for m in (-self.HALF, -10.0, 0.0, 10.0, self.HALF):
+      gov, cap = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
+      assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0), m
 
   def test_it_builds_monotonically_through_the_approach(self):
     """MUTATION: evaluate the envelope at a fixed distance, or drop the
@@ -1103,7 +1116,7 @@ class TestTheSlowdownGradient:
     ac = self._cap()
     alphas = []
     for ft in (700, 600, 500, 400, 300, 200, 100, 0):
-      gov, cap = _rm.corner_plan_at(-ft * 0.3048, [(0.0, v_corner)], ac)
+      gov, cap = _rm.corner_plan_at(-ft * 0.3048, [(0.0, self.HALF, v_corner)], ac)
       alphas.append(_rm.plan_alpha(v_set, gov, cap))
     assert alphas == sorted(alphas)
     assert alphas[-1] == pytest.approx(1.0)
@@ -1111,12 +1124,13 @@ class TestTheSlowdownGradient:
 
   def test_it_fades_back_to_nothing_after_the_corner(self):
     """The exit is CurveSpeedCap's own release, so the tint ends where the set
-    speed genuinely takes over again rather than stopping at the apex."""
+    speed genuinely takes over again rather than stopping at the corner."""
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
     ac = self._cap()
     alphas = []
-    for ft in (0, 100, 200, 300, 450):
-      gov, cap = _rm.corner_plan_at(ft * 0.3048, [(0.0, v_corner)], ac)
+    # measured from the EXIT, which is HALF beyond the apex
+    for m in (0.0, 30.0, 60.0, 90.0, 140.0):
+      gov, cap = _rm.corner_plan_at(self.HALF + m, [(0.0, self.HALF, v_corner)], ac)
       alphas.append(_rm.plan_alpha(v_set, gov, cap))
     assert alphas == sorted(alphas, reverse=True)
     assert alphas[0] == pytest.approx(1.0)
@@ -1134,26 +1148,34 @@ class TestTheSlowdownGradient:
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
     ac = self._cap()
     def alpha_at(m):
-      gov, cap = _rm.corner_plan_at(m, [(0.0, v_corner)], ac)
+      gov, cap = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
       return _rm.plan_alpha(v_set, gov, cap)
-    assert alpha_at(100.0) < alpha_at(-100.0)
+    assert alpha_at(self.HALF + 100.0) < alpha_at(-self.HALF - 100.0)
 
   def test_a_corner_that_does_not_constrain_us_is_invisible(self):
     """0% opacity means 'the set speed decides here'. A bend we would take at
     or above the set speed has nothing to say and must not tint the road."""
     v_set = 30 / self.MPH
-    gov, cap = _rm.corner_plan_at(-50.0, [(0.0, 45 / self.MPH)], self._cap())
+    gov, cap = _rm.corner_plan_at(-50.0, [(0.0, self.HALF, 45 / self.MPH)], self._cap())
     assert _rm.plan_alpha(v_set, gov, cap) == 0.0
 
   def test_no_corners_is_no_plan(self):
     assert _rm.corner_plan_at(0.0, [], self._cap()) == (0.0, 0.0)
     assert _rm.plan_alpha(25.0, 0.0, 0.0) == 0.0
 
+  def test_a_short_entry_is_skipped_not_fatal(self):
+    """The corner tuple has grown twice now. A consumer that cannot survive a
+    row it does not recognise is how the minimap vanished in v3.6.3."""
+    ac = self._cap()
+    gov, _c = _rm.corner_plan_at(-40.0, [(0.0, 9.0), (0.0, self.HALF, 12.0)], ac)
+    assert gov == pytest.approx(12.0)
+
   def test_the_slower_of_two_corners_governs(self):
     """The same min() the controller takes, so the ribbon cannot disagree with
     the cap the car is actually holding."""
     ac = self._cap()
-    gov, _cap = _rm.corner_plan_at(-80.0, [(0.0, 20.0), (40.0, 9.0)], ac)
+    gov, _cap = _rm.corner_plan_at(-80.0, [(0.0, self.HALF, 20.0),
+                                           (40.0, self.HALF, 9.0)], ac)
     assert gov == pytest.approx(9.0)
 
   def test_garbage_never_paints(self):
@@ -1170,7 +1192,13 @@ class TestTheSlowdownGradient:
     mid = _rm.blend(grey, red, 0.5)
     assert all(min(grey[i], red[i]) <= mid[i] <= max(grey[i], red[i]) for i in range(3))
 
-  def test_the_release_rate_matches_the_controller(self):
-    """Two copies of one constant drift. MUTATION: change either side."""
+  def test_the_ribbon_and_the_cap_are_one_function(self):
+    """v3.6.5 — the widget no longer mirrors the controller's release rate, it
+    calls the controller's own `corner_cap`. Pinned because "the ribbon cannot
+    disagree with the cap" is the whole justification for drawing it."""
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import corner_speed as CS
     from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import RELEASE_RATE
-    assert _rm.RELEASE_RATE == RELEASE_RATE
+    assert CS.RELEASE_RATE is RELEASE_RATE
+    # and the widget's own value comes from that function, not a local copy
+    _gov, cap = _rm.corner_plan_at(45.0, [(0.0, 20.0, 12.0)], self._cap())
+    assert cap == pytest.approx(CS.corner_cap(12.0, -45.0, 20.0))

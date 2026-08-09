@@ -310,3 +310,139 @@ class TestDriftCannotDelayASlowdown:
   def test_a_settled_corner_does_buy_speed(self):
     fast = CS.effective_a_lat(2.6, 3.0, visits=3, drift=0.0)
     assert fast > CS.A_LAT_DEFAULT
+
+
+class TestTheRunOut:
+  """FunnyPilot v3.6.5 — a corner has an EXIT, and the cap has to know it.
+
+  Before this, the cap for a corner already behind us was
+  `approach_cap(v, max(distance, 0))` — a FLAT `v_corner` right up until
+  `_refresh_corners` dropped the corner at BEHIND_KEEP_M past its exit, at
+  which point the constraint vanished. So the car sat at corner speed on
+  straightening road and then got its throttle back all at once, which is the
+  reported "noticeable delay in reapplying throttle to accelerate out".
+  """
+  V, HALF = 13.0, 20.0        # a 29 mph bend, 40 m long
+
+  def test_the_apex_is_the_corner_speed(self):
+    assert CS.corner_cap(self.V, 0.0, self.HALF) == pytest.approx(self.V)
+
+  def test_the_whole_arc_holds_the_corner_speed(self):
+    """The measured radius applies across the detected run, so the speed limit
+    does too. MUTATION: release from the apex (ignore half_len) and the car is
+    asked to accelerate while it is still turning."""
+    for d in (self.HALF, 5.0, 0.0, -5.0, -self.HALF):
+      assert CS.corner_cap(self.V, d, self.HALF) == pytest.approx(self.V), d
+
+  def test_authority_returns_progressively_past_the_exit(self):
+    """THE FIX. MUTATION: clamp the distance at zero again, i.e.
+    `approach_cap(v, max(d, 0))`. Every value below collapses to V and the
+    assertion that they are strictly increasing fails."""
+    caps = [CS.corner_cap(self.V, -(self.HALF + s), self.HALF)
+            for s in (0.0, 10.0, 20.0, 40.0, 80.0)]
+    assert caps[0] == pytest.approx(self.V)
+    assert caps == sorted(caps)
+    assert all(b > a for a, b in zip(caps, caps[1:], strict=False))
+    # and it is the release ramp, not something invented
+    assert caps[2] == pytest.approx(math.sqrt(self.V ** 2 + 2 * CS.RELEASE_RATE * 20.0))
+
+  def test_the_flat_hold_that_was_measured_is_gone(self):
+    """The specific number from the report: a 40 m bend used to hold corner
+    speed for BEHIND_KEEP_M = 25 m past its exit. It now hands back 2.2 m/s
+    (5 mph) over that same stretch."""
+    at_exit = CS.corner_cap(self.V, -self.HALF, self.HALF)
+    at_keep = CS.corner_cap(self.V, -(self.HALF + 25.0), self.HALF)
+    assert at_keep - at_exit > 2.0
+
+  def test_the_run_out_is_briskerthan_the_run_in(self):
+    """2.5 m/s^2 out against a budget capped at 1.20 in: 'brake early,
+    accelerate out'. MUTATION: use the approach budget for the exit."""
+    out = CS.corner_cap(self.V, -(self.HALF + 60.0), self.HALF)
+    in_ = CS.corner_cap(self.V, self.HALF + 60.0, self.HALF)
+    assert out > in_
+
+  def test_it_matches_approach_cap_ahead_of_the_bend(self):
+    """Nothing about the approach changed; only the far side did."""
+    for d in (50.0, 150.0, 400.0):
+      assert CS.corner_cap(self.V, d + self.HALF, self.HALF) == \
+             pytest.approx(CS.approach_cap(self.V, d + self.HALF))
+
+  def test_garbage_never_constrains(self):
+    for v, d, h in ((0.0, 10.0, 5.0), (float('nan'), 10.0, 5.0),
+                    (12.0, float('inf'), 5.0)):
+      assert CS.corner_cap(v, d, h) == float('inf')
+
+  def test_a_missing_half_length_degrades_to_the_apex(self):
+    """An unknown extent must not invent one. Releasing from the apex is the
+    conservative reading of 'we do not know how long this bend is'... in the
+    sense that it matches the pre-v3.6.5 geometry rather than extending the
+    hold on a number we do not have."""
+    assert CS.corner_cap(self.V, -10.0, 0.0) == \
+           pytest.approx(math.sqrt(self.V ** 2 + 2 * CS.RELEASE_RATE * 10.0))
+
+  def test_the_release_rate_is_the_smoothers_own(self):
+    """Imported, not mirrored: CurveSpeedCap will throttle the cap to this rate
+    anyway, so a raw envelope climbing faster would be silently clipped and one
+    climbing slower would be the binding constraint without saying so."""
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import curve_cap
+    assert CS.RELEASE_RATE is curve_cap.RELEASE_RATE
+
+
+class TestTheEnvelopeHasRoomToBeFollowed:
+  """FunnyPilot v3.6.5 — THE INVARIANT THAT WAS BROKEN, pinned on the source.
+
+  `long_mpc` clips the cruise target to `v_ego + T_IDXS * CRUISE_MIN_ACCEL *
+  1.05` before it ever solves, so that product is a hard ceiling on how fast
+  ANY falling cruise target — including SCC-M v2's cap — can slow the car.
+
+  v3.6.4 set the envelope's steepest segment to 1.20 and CRUISE_MIN_ACCEL to
+  -1.2, i.e. the envelope asked for 95% of what the MPC was allowed to deliver.
+  With that little margin the car could not catch up once it fell behind for
+  any reason, so it never got back on schedule and arrived at the bend above
+  the cap the envelope had been asking for since 400 m out. Two constants that
+  each looked right and were wrong TOGETHER, in different files.
+
+  AST, NOT A RUNTIME CHECK: long_mpc imports acados and cannot be constructed
+  off-device, which is the same reason the gas-gate wiring is pinned this way.
+  """
+  MPC_FACTOR = 1.05      # long_mpc's own multiplier on the clip
+  # The envelope may ask for at most this share of what the MPC can deliver.
+  # 1.20 / (1.6 * 1.05) = 0.71 today; the defect was 1.20 / (1.2 * 1.05) = 0.95.
+  MAX_SHARE = 0.85
+
+  def _cruise_min_accel(self):
+    import ast
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[6] / \
+        "selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py"
+    tree = ast.parse(src.read_text())
+    for node in ast.walk(tree):
+      if isinstance(node, ast.Assign) and any(
+          isinstance(t, ast.Name) and t.id == "CRUISE_MIN_ACCEL" for t in node.targets):
+        return float(ast.literal_eval(node.value))
+    raise AssertionError("CRUISE_MIN_ACCEL not found — this scan is vacuous")
+
+  def _steepest_budget(self):
+    return max((CS._J_V[i] - CS._J_V[i - 1]) / (CS._J_BP[i] - CS._J_BP[i - 1])
+               for i in range(1, len(CS._J_BP)))
+
+  def test_the_scan_actually_found_the_constant(self):
+    """Anti-vacuous: a scan that silently finds nothing passes everything."""
+    a = self._cruise_min_accel()
+    assert a < 0.0 and math.isfinite(a)
+
+  def test_the_envelope_is_steepest_nearest_the_corner(self):
+    """Brake hardest last. A non-monotone budget would make the cap loosen as
+    the bend closes, which is the v3.5.6 defect this table exists to avoid."""
+    slopes = [(CS._J_V[i] - CS._J_V[i - 1]) / (CS._J_BP[i] - CS._J_BP[i - 1])
+              for i in range(1, len(CS._J_BP))]
+    assert slopes == sorted(slopes, reverse=True)
+
+  def test_the_mpc_can_actually_follow_the_envelope(self):
+    """MUTATION: put CRUISE_MIN_ACCEL back to -1.2, or steepen _J_V's first
+    segment past ~1.35. Either alone reproduces the defect."""
+    available = abs(self._cruise_min_accel()) * self.MPC_FACTOR
+    asked = self._steepest_budget()
+    assert asked < available, "the envelope asks for more than the MPC may give"
+    assert asked / available <= self.MAX_SHARE, \
+        f"only {100 * (1 - asked / available):.0f}% headroom; the car cannot catch up"
