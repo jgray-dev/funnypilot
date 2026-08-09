@@ -177,6 +177,15 @@ MIN_ENGAGED_FRAC = 0.95   # of the pass, with openpilot steering
 # were too SLOW, and folding it in here would let the one signal that argues
 # for more speed lower the ceiling instead.
 #
+# v3.6.5 — AND EXCLUDING IT TAKES AN EXPLICIT `gas_pressed`, WHICH v3.6.5 DID
+# NOT HAVE. `controlsd.py:139` clears `CC.longActive` for ANY event carrying
+# `overrideLongitudinal`, and `pedalPressed` / `gasPressedOverride` are exactly
+# that — so on this stack a gas press LOOKS IDENTICAL to the driver switching
+# longitudinal off. v3.6.5 therefore scored every mid-corner throttle input as
+# a takeover at severity 2.0: the one input that argues the corner is too SLOW
+# was lowering its ceiling. `long_active` is now only believed when the pedal
+# is up.
+#
 # 2.0 means "this corner supports about half the lateral acceleration we just
 # pulled". Stronger than being at the limit (1.0), because a person physically
 # intervened; short of MAX_SEVERITY (3.0), because a takeover says the speed
@@ -196,6 +205,30 @@ MIN_TAKEOVER_S = 0.3
 # of an engage transition — and a single frame must not be able to condemn a
 # corner. Short enough that a real grab is caught well before the apex.
 TAKEOVER_DWELL_S = 0.25
+
+# ── the driver's demonstration (v3.6.5) ────────────────────────────────────
+#
+# THE MIRROR OF THE TAKEOVER, AND THE ONLY SIGNAL IN THIS FILE THAT CAN MAKE A
+# CORNER FASTER ON ONE PASS. Owner-requested, and the argument is airtight in a
+# way none of the others are:
+#
+#   openpilot is STEERING the bend. Nothing is oscillating, nothing is clamped,
+#   nothing is saturated, the car is inside its lane. The driver holds the
+#   accelerator. Whatever lateral acceleration the car reaches under those
+#   conditions is not an estimate of what the corner supports — it is a
+#   DEMONSTRATION that it supports it, made by the two parties who would know.
+#
+# So a demonstrated pass adopts `a_peak` outright (`seed`) instead of easing
+# toward it at ALPHA_FLOOR, which is what "learn quicker" has to mean when the
+# quantity is a floor: not a bigger step, but no discount on evidence that is
+# not actually uncertain.
+#
+# EVERY GUARD STAYS ON, AND THEY ARE WHAT MAKE THIS SAFE. The pass must be
+# CLEAN (severity below CLEAN_TH — the same bar any floor-raising pass has to
+# clear), openpilot must have steered essentially all of it (MIN_ENGAGED_FRAC),
+# the road must not have been hitting us (MIN_CLEAN_FRAC), and A_LAT_MAX still
+# bounds the result. What is removed is the EMA discount, not a safety check.
+MIN_DEMO_S = 0.5      # of held throttle with lateral active; one tap is not a demonstration
 
 # ── running out of lane ────────────────────────────────────────────────────
 #
@@ -236,9 +269,28 @@ TAKEOVER_DWELL_S = 0.25
 # the model measures against to the outside of a tyre. Mirrors are excluded on
 # purpose — a mirror overhanging a line is not a lane departure.
 HALF_TRACK_M = 0.93
+# The camera is not on the car's centreline, and `laneLines.y` is in the
+# DEVICE frame, so the car's centreline sits at y = -CAMERA_OFFSET. ldw.py
+# carries the same asymmetry (`-(1.08 + CAMERA_OFFSET)` on the left,
+# `(1.08 - CAMERA_OFFSET)` on the right) and it is 4 cm — the same order as the
+# false readings v3.6.5 produced, so it is not worth leaving out.
+CAMERA_OFFSET_M = 0.04
 # Below this the model is guessing where the line is, and a guessed line is a
 # reason to measure NOTHING rather than to measure something wrong.
 LANE_PROB_MIN = 0.5
+# v3.6.5 — THE MODEL EXTRAPOLATES THE LINES AT x = 0 AND THAT IS THE NOISIEST
+# POINT ON THE POLYLINE. `laneLines[i].y[0]` is beside the car, which the
+# forward camera cannot see; the model infers it. Reported symptom: 5-6 cm of
+# "departure" with the car dead centre in its lane. Anything under this is
+# the extrapolation, not a wheel over a line.
+DEPART_DEADBAND_M = 0.10
+# ...and a PEAK over a four-second pass of a noisy signal is the noise floor,
+# not the signal, so the departure is low-passed before it is peaked. v3.6.4
+# argued "it is a peak, not a rate — one wheel over the line does not have to
+# persist to count", which is right about the ROAD and wrong about the SENSOR:
+# a single frame of a guessed line is not a wheel anywhere. 0.20 s still counts
+# a genuine clip of a line and rejects a one-frame excursion outright.
+DEPART_TAU_S = 0.20
 # Sanity on the lane the model reports. Outside this it has probably latched a
 # road edge, a kerb or the far side of a junction, and the departure computed
 # from it would be fiction.
@@ -317,7 +369,15 @@ def lane_departure_m(y_left: float, y_right: float,
   width = float(y_right) - float(y_left)
   if not (LANE_W_MIN_M <= width <= LANE_W_MAX_M):
     return 0.0
-  out = max(0.0, float(y_left) + HALF_TRACK_M, HALF_TRACK_M - float(y_right))
+  # The car's edges in the DEVICE frame: centreline at -CAMERA_OFFSET_M.
+  left_edge = -CAMERA_OFFSET_M - HALF_TRACK_M
+  right_edge = -CAMERA_OFFSET_M + HALF_TRACK_M
+  out = max(0.0, float(y_left) - left_edge, right_edge - float(y_right))
+  # v3.6.5 deadband: under this it is the model's x=0 extrapolation, not a
+  # wheel. Subtracted rather than thresholded so the signal stays continuous —
+  # a step at the deadband would make DEPART_LIMIT_M mean something different
+  # either side of it.
+  out = max(0.0, out - DEPART_DEADBAND_M)
   return min(out, MAX_DEPART_M)
 
 
@@ -337,6 +397,7 @@ class LateralEffort:
     self._sign = 0
     self._peak = 0.0
     self._disturb_hold = 0.0
+    self._dep_lp = 0.0         # low-passed lane departure; see DEPART_TAU_S
     self.reversal = False      # a qualified steering reversal happened this frame
     self.a_lat = 0.0           # measured lateral acceleration, m/s^2
     self.limited = False       # a hard lateral limit is being hit this frame
@@ -344,28 +405,53 @@ class LateralEffort:
     self.departure = 0.0       # metres our nearer edge is outside the lane
     self.engaged = False       # openpilot was steering this frame
     self.override = False      # the human has taken some control this frame
+    self.demo = False          # ...or is DEMONSTRATING a speed; see MIN_DEMO_S
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
              eps_limited: bool = False, pitch_rate_deg_s: float = 0.0,
              departure_m: float = 0.0, lane_change: bool = False,
-             long_active: bool = True, brake_pressed: bool = False) -> None:
+             long_active: bool = True, brake_pressed: bool = False,
+             gas_pressed: bool = False) -> None:
     self.reversal = False
     self.engaged = bool(lat_active)
 
     # v3.6.5 — IS A HUMAN IN CHARGE OF ANY AXIS RIGHT NOW? Three facts, no
     # inference: lateral handed back, longitudinal handed back, or the brake
-    # pedal down. `gasPressed` is deliberately ABSENT — see TAKEOVER_SEVERITY.
-    # `long_active` defaults True and `brake_pressed` False so every caller
-    # predating this gets exactly the pre-v3.6.5 answer.
-    self.override = (not bool(lat_active)) or (not bool(long_active)) or bool(brake_pressed)
+    # pedal down.
+    #
+    # v3.6.5 — `long_active` IS ONLY BELIEVED WITH THE ACCELERATOR UP, because
+    # on this stack a gas press CLEARS it (controlsd raises `pedalPressed`,
+    # which carries `overrideLongitudinal`). Without that term the one input
+    # arguing the corner is too slow scored as a takeover at severity 2.0.
+    # `gas_pressed` defaults False so a caller that does not know about the
+    # pedal gets the v3.6.5 answer rather than a silently different one.
+    gas = bool(gas_pressed)
+    self.override = (not bool(lat_active)) or bool(brake_pressed) or \
+                    (not bool(long_active) and not gas)
+
+    # THE DEMONSTRATION. Only while openpilot still has the wheel: with the
+    # driver steering, the speed they choose says nothing about what the
+    # CONTROLLER can do through the bend, which is the whole v3.6.4 argument.
+    self.demo = gas and bool(lat_active)
 
     # A LANE CHANGE IS NOT A LANE DEPARTURE. Crossing a line on purpose says
     # nothing about the corner, so the signal is suppressed outright rather
     # than merely damped — this is the one case where the measurement is not
     # noisy, it is about something else entirely.
-    self.departure = 0.0 if lane_change else (
+    raw_dep = 0.0 if lane_change else (
       float(departure_m) if (_finite(departure_m) and departure_m > 0.0) else 0.0)
+    # ...and v3.6.5 low-passes what is left, because the geometry it comes from
+    # is an extrapolation at x = 0. See DEPART_TAU_S. A lane change resets the
+    # filter rather than decaying through it, or the tail of a deliberate line
+    # crossing would land on the corner that follows it.
+    if lane_change:
+      self._dep_lp = 0.0
+    else:
+      step = float(dt) if (_finite(dt) and dt > 0.0) else 0.0
+      a = 1.0 - math.exp(-step / DEPART_TAU_S) if step > 0.0 else 0.0
+      self._dep_lp += (raw_dep - self._dep_lp) * a
+    self.departure = max(0.0, self._dep_lp)
 
     # Road disturbance. Held past the event because the correction it provokes
     # ARRIVES LATE — see DISTURB_HOLD_S. Failure defaults to NOT disturbed, so
@@ -448,6 +534,7 @@ class CornerPass:
     self._started = False
     self._ended = False        # the human is driving now; stop measuring
     self._override_t = 0.0     # how long they have held an axis; TAKEOVER_DWELL_S
+    self.demo_time = 0.0       # held throttle with lateral active; MIN_DEMO_S
 
   def begin(self) -> None:
     self.reset()
@@ -522,6 +609,8 @@ class CornerPass:
       return
     self.clean_duration += dt
     self.reversals += int(effort.reversal)
+    if effort.demo:
+      self.demo_time += dt
     if effort.departure > self.depart_peak:
       self.depart_peak = min(effort.departure, MAX_DEPART_M)
     if effort.limited:
@@ -532,6 +621,17 @@ class CornerPass:
     if self.duration <= 0.0:
       return 0.0
     return self.engaged_duration / self.duration
+
+  def demonstrated(self) -> bool:
+    """The driver held the throttle through a bend openpilot steered cleanly.
+
+    v3.6.5 — see MIN_DEMO_S. The CLEAN_TH term is what keeps this from being a
+    licence: a pass that oscillated or left the lane is not a demonstration of
+    anything however much throttle was applied, and it takes the ceiling down
+    through `verdict()` as usual.
+    """
+    return (self.demo_time >= MIN_DEMO_S and not self.took_over
+            and self.verdict()[1] < CLEAN_TH)
 
   def clean_fraction(self) -> float:
     """How much of the pass was measurable. 1.0 = nothing hit the car."""

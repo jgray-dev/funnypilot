@@ -211,8 +211,10 @@ class TestTheDevUiChannel:
   a dev readout showing a dead planner's last numbers as if they were live is
   worse than one showing zeros, because it looks exactly like a working one."""
 
-  # v3.6.4 adds field 15: the last pass's worst lane departure, metres.
-  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7, 0.31)
+  # v3.6.4 adds field 15 (the last pass's worst lane departure, metres);
+  # v3.6.5 adds field 16, the count of bends recorded that the route geometry
+  # never listed.
+  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7, 0.31, 5)
 
   def test_round_trip(self, paths):
     scc_shm.write_scc_debug_shm(self.ROW)
@@ -222,6 +224,7 @@ class TestTheDevUiChannel:
     assert out[1] == pytest.approx(118.0, abs=0.01)
     assert out[8] == pytest.approx(0.75, abs=0.01)
     assert out[14] == pytest.approx(0.31, abs=0.01)
+    assert out[15] == 5
 
   def test_a_short_row_reads_inactive(self, paths):
     """A writer that has not been upgraded yet must read as "no data", not as
@@ -294,3 +297,45 @@ class TestThePitchRateReader:
     (paths / "lat_interp").write_text("5,1.00,0.4,0.00,0.012")
     assert scc_shm.read_pitch_rate() == pytest.approx(0.4)
     assert scc_shm.read_eps_limited() is False
+
+
+class TestTheCornerWarningChannel:
+  """FunnyPilot v3.6.5 — "an unmanageable bend is coming up", read by
+  selfdrived, which is the most schedule-sensitive process on the device."""
+
+  def test_it_round_trips(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(scc_shm, "WARN_SHM_PATH", str(tmp_path / "warn"))
+    scc_shm.write_corner_warning_shm(True)
+    assert scc_shm.read_corner_warning_shm() is True
+    scc_shm.write_corner_warning_shm(False)
+    assert scc_shm.read_corner_warning_shm() is False
+
+  def test_a_missing_file_is_silence(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(scc_shm, "WARN_SHM_PATH", str(tmp_path / "nope"))
+    assert scc_shm.read_corner_warning_shm() is False
+
+  def test_garbage_is_silence(self, tmp_path, monkeypatch):
+    p = tmp_path / "warn"
+    monkeypatch.setattr(scc_shm, "WARN_SHM_PATH", str(p))
+    for junk in ("", "1", "x,y", "1,"):
+      p.write_text(junk)
+      assert scc_shm.read_corner_warning_shm() is False
+
+  def test_a_dead_publisher_stops_warning(self, tmp_path, monkeypatch):
+    """THE FAILURE DIRECTION IS THE OPPOSITE OF THE USUAL ONE HERE, and
+    deliberately: this drives a banner, not a control output. A warning latched
+    on by a wedged plannerd would train the driver to ignore it. Silence is the
+    safe failure for an alert; the speed cap is what fails safe for the car.
+    MUTATION: drop the staleness check."""
+    p = tmp_path / "warn"
+    monkeypatch.setattr(scc_shm, "WARN_SHM_PATH", str(p))
+    p.write_text(f"1,{time.monotonic() - scc_shm.STALE_S - 1.0:.3f}")
+    assert scc_shm.read_corner_warning_shm() is False
+
+  def test_it_is_its_own_file(self):
+    """A SEPARATE CHANNEL RATHER THAN A FIELD ON fp_scc — that reader unpacks
+    positionally and its contract is pinned by tests, and widening a working
+    channel for an unrelated consumer is how a reader that indexes [4] starts
+    reading a different quantity (the v3.5.0 rule)."""
+    assert scc_shm.WARN_SHM_PATH not in (scc_shm.SHM_PATH, scc_shm.CORNERS_SHM_PATH,
+                                   scc_shm.DEBUG_SHM_PATH, scc_shm.LEARN_SHM_PATH)

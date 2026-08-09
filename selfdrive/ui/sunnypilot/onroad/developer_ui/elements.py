@@ -71,12 +71,12 @@ def _scc_debug():
       from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_scc_debug_shm
       _SCC_CACHE = read_scc_debug_shm()
     except Exception:
-      _SCC_CACHE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0)
+      _SCC_CACHE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0)
     _SCC_CACHE_T = now
   return _SCC_CACHE
 
 
-_SCC_CACHE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0)
+_SCC_CACHE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0)
 _SCC_CACHE_T = 0.0
 
 _GREY = rl.Color(0x9A, 0xA6, 0xB2, 255)
@@ -235,6 +235,21 @@ class SccLaneDepartElement:
       return UiElement("0", "LANE", "cm", _GREEN)
     col = _RED if d >= 0.25 else _AMBER
     return UiElement(f"{d * 100:.0f}", "LANE", "cm", col)
+
+
+class SccOrphanElement:
+  """FunnyPilot v3.6.5 — bends recorded that the ROUTE GEOMETRY never listed.
+
+  Every one of these is a corner the radius estimator missed and the car then
+  struggled with: it is the direct readout of the documented short-sweep blind
+  spot (v3.6.4 measured a true R=40 reading as R=172). A steadily rising ORPH
+  on familiar roads means the geometry is the weak link, not the budget — and
+  those records now enter the corner list on their own, so the same bend should
+  stop producing new ones once it is learned.
+  """
+  def update(self, sm, is_metric):
+    n = _scc_debug()[15]
+    return UiElement(str(n), "ORPH", "", _GREY if n == 0 else _AMBER)
 
 
 class SccPassCountElement:

@@ -594,11 +594,11 @@ class TestTheGasGate:
 
     A gentle bend is what shows it: into a hard corner the envelope is under us
     from beyond the lookahead either way, so the lead changes nothing there."""
-    # measured: with the lead, approach_cap is 25.3 against a 26.5 threshold;
-    # without it, 27.6 — the gate straddles the threshold on this fixture and
-    # on nothing sharper, because a hard corner is under us from beyond the
-    # lookahead either way
-    route = bend_route(radius=250.0, arc_deg=60.0, lead_in=180.0)
+    # The fixture has to STRADDLE the threshold, which means re-measuring it
+    # whenever the envelope or the default budget move — v3.6.5 changed both,
+    # and the old R=250 case stopped gating at all (the assertion below says so
+    # out loud rather than reporting a passing test of nothing).
+    route = bend_route(radius=130.0, arc_deg=60.0, lead_in=200.0)
     scc = make(route)
     at(scc, route, 0, 27.0, 27.0)
     assert scc.gas_gating_active, "no gate at all — pick a different fixture"
@@ -897,3 +897,259 @@ class TestTheExitHandsAuthorityBack:
     scc.is_enabled = True
     scc._update_gas_gate(v_ego=27.0, v_cruise=30.0)
     assert scc.gas_gating_active
+
+
+def orphan_drive(scc, seconds=4.0, dt=0.01, v=20.0, curvature=0.012,
+                 lat_active=True, torque=0.0, saturated=False, t0=500.0,
+                 lat=45.0, lon=-93.0):
+  """Drive a bend the corner list knows nothing about."""
+  n = int(seconds / dt)
+  for i in range(n):
+    scc.observe_frame(t0 + i * dt, v, curvature, 25.0, torque, lat_active,
+                      saturated, False, False, False, 3.0,
+                      lat=lat, lon=lon, bearing=90.0)
+
+
+class TestBendsTheGeometryNeverSaw:
+  """FunnyPilot v3.6.5 — the structural gap this closes.
+
+  A pass only ever opened INSIDE a listed corner, and the radius estimator has
+  a documented blind spot on short-sweep bends (v3.6.4: a true R=40 reading as
+  R=172). So a corner it misses was missed FOREVER: nothing capped for it, and
+  because no pass opened there, nothing learned it existed either. The owner's
+  report is that exact loop — the car runs wide, the driver grabs it, and the
+  next visit is identical.
+  """
+
+  def test_a_stressed_unlisted_bend_is_recorded(self, store):
+    """MUTATION: delete the _observe_orphan call from observe_frame."""
+    scc = make([], store=store)
+    orphan_drive(scc, saturated=True)
+    orphan_drive(scc, seconds=1.0, curvature=0.0, t0=504.0)
+    assert store.count == 1
+    assert scc.orphan_count == 1
+
+  def test_the_radius_comes_from_the_car_not_the_map(self):
+    """`controlsState.curvature` is the vehicle model's reading of the steering
+    angle, so R = 1/|k| at the tightest point is what the car ACTUALLY drove —
+    no node spacing, no smoothing window, no aliasing. That is why an orphan
+    record is worth having at all."""
+    with tempfile.TemporaryDirectory() as d:
+      s = LS.LearnStore(directory=d, name="corners_v2.jsonl")
+      scc = make([], store=s)
+      orphan_drive(scc, curvature=0.01, saturated=True)
+      orphan_drive(scc, seconds=1.0, curvature=0.0, t0=504.0)
+      rec = next(iter(s.corners.values()))
+      assert rec.r == pytest.approx(100.0, abs=1.0)
+      s.join_writes()
+
+  def test_a_clean_unlisted_bend_is_not_recorded(self, store):
+    """THE ONE EXTRA GATE AN ORPHAN HAS, and the owner's rule: a listed corner
+    records every usable pass because its existence is established, while an
+    orphan's existence is being ASSERTED by the record — so it has to have
+    actually hurt. MUTATION: drop the `severity < 1.0` return."""
+    scc = make([], store=store)
+    orphan_drive(scc)
+    orphan_drive(scc, seconds=1.0, curvature=0.0, t0=504.0)
+    assert store.count == 0
+
+  def test_a_straight_road_is_never_an_orphan(self, store):
+    """ORPHAN_K_MIN. MUTATION: set it to 0 and every metre of road becomes a
+    candidate corner."""
+    scc = make([], store=store)
+    # BETWEEN ORPHAN_K_END and ORPHAN_K_MIN ON PURPOSE. The first version of
+    # this used 0.0005, which is under BOTH — so the orphan opened and closed on
+    # the same frame either way and the mutation survived. Sustained curvature
+    # in the band is the only fixture that can see the threshold.
+    assert M.ORPHAN_K_END < 0.0025 < M.ORPHAN_K_MIN
+    orphan_drive(scc, seconds=6.0, curvature=0.0025, saturated=True)
+    assert scc._orphan is None
+    assert store.count == 0
+
+  def test_a_listed_corner_is_not_double_counted(self, store):
+    """The orphan observer only runs when no pass is open, so a bend the
+    geometry DID find is measured once, by the normal path."""
+    scc = inside_a_corner(store)
+    traverse(scc, v=18.0, curvature=0.012, lat_active=True, saturated=True)
+    leave(scc)
+    assert scc.orphan_count == 0
+    assert store.count == 1
+
+
+class TestLearnedCornersEnterTheList:
+  """v3.6.5 — the store is a SOURCE of corners now, not only an annotation.
+
+  Without this an orphan record is data nothing reads: `_refresh_corners` built
+  the list from the geometry alone, so a bend the geometry misses could never
+  cap the car however many times it had been measured — and could never show a
+  ring on the minimap either, since the ring needs `visits >= 1` on a LISTED
+  corner.
+  """
+
+  def _seeded(self, d, radius=90.0):
+    tmp = tempfile.TemporaryDirectory()
+    s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
+    # a record straight ahead (bearing 0 => north => +lat)
+    s.observe(d / M_PER_DEG, 0.0, 0.0, radius, 2.0, 0.2)
+    return s, tmp
+
+  def test_a_learned_bend_the_geometry_missed_still_caps(self):
+    """MUTATION: delete the `_corners_from_store` call from
+    _refresh_corners."""
+    s, tmp = self._seeded(150.0)
+    try:
+      scc = make([], store=s)          # NO route at all: geometry finds nothing
+      run(scc, v_ego=28.0, v_cruise=28.0, n=5)
+      assert scc.corners, "the store must be able to put a corner in the list"
+      assert scc.corners[0].visits >= 1
+      assert scc.is_active
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_it_carries_the_visits_the_ring_is_drawn_from(self):
+    """THE MINIMAP SIDE OF THE SAME FIX. `learned_corners_from` filters on
+    field 6 (visits) of fp_corners, and only a LISTED corner is ever written
+    there."""
+    s, tmp = self._seeded(200.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=3)
+      assert any(c.visits >= 1 for c in scc.corners)
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_geometry_wins_where_both_describe_the_same_bend(self):
+    """STORE_DEDUPE_M. The polyline apex is a live projection from the current
+    pose; a record's position is where the car was on an earlier drive. Keeping
+    both would cap one bend twice. MUTATION: drop the dedupe."""
+    route = bend_route(radius=100.0, lead_in=150.0)
+    scc = make(route)
+    run(scc, v_ego=28.0, v_cruise=28.0, n=2)
+    geom_n = len(scc.corners)
+    apex = min(scc.corners, key=lambda c: abs(c.distance))
+    with tempfile.TemporaryDirectory() as d:
+      s = LS.LearnStore(directory=d, name="corners_v2.jsonl")
+      s.observe(apex.lat, apex.lon, apex.bearing, 100.0, 2.0, 0.2)
+      scc2 = make(route, store=s)
+      run(scc2, v_ego=28.0, v_cruise=28.0, n=2)
+      assert len(scc2.corners) == geom_n
+      s.join_writes()
+
+  def test_a_record_behind_us_is_not_injected(self):
+    s, tmp = self._seeded(-150.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=3)
+      assert not scc.corners
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+
+class TestTheUnmanageableCornerWarning:
+  """v3.6.5 — a bend whose learned budget has bottomed out and which STILL
+  stresses the car cannot be fixed by slowing down: A_LAT_MIN is the floor by
+  construction. So the driver is told, on the APPROACH."""
+
+  def _at_floor(self, d, radius=90.0, visits=3):
+    tmp = tempfile.TemporaryDirectory()
+    s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
+    for _ in range(visits):
+      s.observe(d / M_PER_DEG, 0.0, 0.0, radius, 1.0, 3.0)
+    return s, tmp
+
+  def test_the_rule_has_one_home(self):
+    """Corners reach the list by two routes now — the route geometry and the
+    store — and the first cut of this tested the same thing inline in both. A
+    mutation to one copy left the suite green through the other."""
+    assert M.is_unmanageable(1.0, 1.0, 3)
+    assert not M.is_unmanageable(1.0, 1.0, 1)          # one bad pass is not a pattern
+    assert not M.is_unmanageable(2.4, 2.4, 9)          # an ordinary learned bend
+    assert not M.is_unmanageable(None, 1.0, 3)         # garbage never warns
+
+  def test_a_bottomed_out_bend_ahead_warns(self):
+    """MUTATION: drop the `unmanageable` term from _update_warning."""
+    s, tmp = self._at_floor(100.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=25.0, v_cruise=25.0, n=3)
+      assert scc.corners and scc.corners[0].unmanageable
+      assert scc.corner_warning
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_an_ordinary_learned_bend_does_not(self):
+    """MUTATION: drop the UNMANAGEABLE_A_LAT test and every learned corner
+    raises a banner, which is how a warning becomes noise."""
+    tmp = tempfile.TemporaryDirectory()
+    try:
+      s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
+      for _ in range(3):
+        s.observe(100.0 / M_PER_DEG, 0.0, 0.0, 90.0, 2.4, 0.1)
+      scc = make([], store=s)
+      run(scc, v_ego=25.0, v_cruise=25.0, n=3)
+      assert not scc.corner_warning
+      s.join_writes()
+    finally:
+      tmp.cleanup()
+
+  def test_one_bad_visit_is_not_a_pattern(self):
+    """UNMANAGEABLE_VISITS. A single catastrophic pass SEEDS the ceiling
+    outright, so without this the first bad sample warns forever."""
+    s, tmp = self._at_floor(100.0, visits=1)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=25.0, v_cruise=25.0, n=3)
+      assert not scc.corner_warning
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_it_warns_before_the_entry_not_inside_the_bend(self):
+    """WARN_LEAD_T is SECONDS to the corner's ENTRY. Being told about a bend
+    once you are in it is the complaint this exists to fix."""
+    s, tmp = self._at_floor(350.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=10.0, v_cruise=25.0, n=3)   # 350 m is 35 s away at 10 m/s
+      assert not scc.corner_warning
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_the_cap_is_not_removed(self):
+    """THE ONE PLACE THIS DELIBERATELY STOPS SHORT OF "stop trying to slow
+    down": taking an existing constraint off a bend the car has repeatedly
+    failed is the version of that which could hurt someone. The floor cap
+    stays; only the escalation and the silence end."""
+    s, tmp = self._at_floor(100.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=25.0, v_cruise=25.0, n=6)
+      assert scc.corner_warning
+      assert scc.is_active and scc.output_v_target < 25.0
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_it_latches_so_the_banner_cannot_flicker(self):
+    """The geometry refresh moves a corner's distance across the threshold; a
+    warning that blinks reads as a glitch. MUTATION: drop WARN_MIN_S."""
+    s, tmp = self._at_floor(100.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=25.0, v_cruise=25.0, n=3)
+      assert scc.corner_warning
+      # gps_ok=False empties the corner list for real. Clearing `scc.corners` by
+      # hand does NOT: run() forces a geometry refresh, which rebuilds the list
+      # from the store, so the first version of this test never presented an
+      # empty list to _update_warning and the mutation survived.
+      run(scc, v_ego=25.0, v_cruise=25.0, n=1, gps_ok=False)
+      assert not scc.corners
+      assert scc.corner_warning, "it must hold for WARN_MIN_S"
+    finally:
+      s.join_writes()
+      tmp.cleanup()

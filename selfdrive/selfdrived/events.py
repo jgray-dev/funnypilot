@@ -821,13 +821,24 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.HIGH, VisualAlert.none, AudibleAlert.disengage, 3.),
   },
 
-  # FunnyPilot: Changed to silent static banner - no disengage, no audio, engagement still allowed at high speed
+  # FunnyPilot v0.9.7: silent static banner — no disengage, no audio, engagement
+  # still allowed at high speed.
+  #
+  # v3.6.5 REWORDED AND REPURPOSED. It said "High Speed Warning / Model uncertain
+  # above training speed", which describes a state the car is ALREADY in, and its
+  # only raise site was `car_specific.py` at vEgo > MAX_CTRL_SPEED — about 90 mph
+  # on this platform, i.e. never. SCC-M v2 now raises it on the APPROACH to a bend
+  # whose learned budget has bottomed out and which still stresses the car: a
+  # corner the speed cap cannot fix, where the useful thing is to tell the driver
+  # before the entry rather than after it. The text is future-tense for that
+  # reason. Reusing a stock event is what keeps this off `cereal/custom.capnp`,
+  # which cannot be edited on this fork without forcing a device rebuild.
   EventName.speedTooHigh: {
     ET.WARNING: Alert(
-      "High Speed Warning",
-      "Model uncertain above training speed",
-      AlertStatus.normal, AlertSize.small,
-      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, 3.),
+      "Sharp Curve Ahead",
+      "Slow down — beyond assist limits",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 4.),
   },
 
   EventName.vehicleSensorsInvalid: {

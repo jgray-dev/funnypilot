@@ -85,6 +85,76 @@ BEHIND_KEEP_M = 25.0
 # This is how far apart they may be and still be the same corner.
 SAME_CORNER_M = 30.0
 
+# ── corners the geometry cannot see (v3.6.5) ───────────────────────────────
+#
+# THE STORE IS NOW A SOURCE OF CORNERS, NOT ONLY AN ANNOTATION ON THEM. Until
+# v3.6.5 a TrackedCorner could only be created by `road_geometry`, and the
+# store was consulted afterwards to price it. That has two consequences that
+# were both reported:
+#
+#   * the documented short-sweep blind spot (v3.6.4: a 40 m radius through 20
+#     degrees is 14 m of arc inside a 50 m window, read as R=172) means some
+#     real bends are never in the list at all — so nothing caps for them, and
+#     nothing can learn about them either, because the observer only opens a
+#     pass INSIDE a listed corner.
+#   * no ring has ever been seen on the minimap. The ring needs `visits >= 1`
+#     on a listed corner, so a bend the geometry misses can never show one
+#     however many times it is driven.
+#
+# A record in the store is a bend THIS CAR HAS MEASURED, which is stronger
+# evidence that it exists than a polyline is. So records ahead of us are
+# injected into the corner list directly, and geometry corners win where the
+# two describe the same bend.
+STORE_LOOKAHEAD_M = 400.0
+STORE_DEDUPE_M = 60.0      # a store record this close to a geometry corner IS it
+# How much of a bend the car has to be pulling before an undetected stretch of
+# road is a candidate corner at all. 0.0035 1/m is R = 285 m, which at 30 m/s
+# is 3.2 m/s^2 — well past anything a straight road produces.
+ORPHAN_K_MIN = 0.0035
+# ...and how far the curvature has to fall before the bend is over.
+ORPHAN_K_END = 0.0020
+ORPHAN_MIN_S = 1.0
+ORPHAN_MAX_S = 25.0        # past this it is a road, not a corner
+
+# ── corners we cannot manage (v3.6.5) ──────────────────────────────────────
+#
+# A corner whose learned interval has been driven to the floor and which STILL
+# reports stressed passes is telling us something the cap cannot fix: slowing
+# further is not available (A_LAT_MIN is the floor by construction) and has not
+# worked. Ratcheting at the floor forever just makes the bend crawl.
+#
+# So it is flagged instead, and the driver is warned on the APPROACH rather
+# than discovering it mid-bend. THE CAP IS NOT REMOVED — the owner's phrasing
+# was "stop trying to slow down", and the part of that which is safe to do is
+# stop DEMANDING MORE; taking an existing constraint off a bend the car has
+# repeatedly failed is the one version of this that could hurt someone, so the
+# floor cap stays and only the escalation and the silence end.
+UNMANAGEABLE_A_LAT = CS_.A_LAT_MIN + 0.15
+UNMANAGEABLE_VISITS = 2
+
+
+def is_unmanageable(a_lo: float, a_hi: float, visits: int) -> bool:
+  """Has this bend's learned interval bottomed out over more than one visit?
+
+  A FUNCTION RATHER THAN TWO INLINE COPIES, and that is not tidiness: corners
+  reach the list by two routes now (the route geometry and the store), each
+  needed this test, and the first cut wrote it twice. A mutation to one copy
+  then left the suite green through the other — which is the same shape as
+  every duplicated rule this repo has been bitten by.
+
+  BOTH TERMS ARE LOAD-BEARING. Without the floor test every learned corner
+  raises a banner, which is how a warning becomes noise. Without the visit
+  count a single catastrophic pass — which `seed` adopts OUTRIGHT — warns
+  forever on one bad sample.
+  """
+  try:
+    return bool(min(float(a_lo), float(a_hi)) <= UNMANAGEABLE_A_LAT
+                and int(visits) >= UNMANAGEABLE_VISITS)
+  except (TypeError, ValueError):
+    return False
+WARN_LEAD_T = 6.0          # s of travel before the entry that the warning appears
+WARN_MIN_S = 3.0           # ...and the shortest time it stays up
+
 # ── the gas gate ───────────────────────────────────────────────────────────
 #
 # WHAT IT IS FOR, and why it is not the same thing as the speed cap. The cap
@@ -98,7 +168,18 @@ SAME_CORNER_M = 30.0
 # this speed, will the cap be under me shortly?" If yes, coast. That makes the
 # lead time an explicit number in seconds rather than something that falls out
 # of where the envelope happens to cross.
-GATE_LEAD_T = 3.0        # s of travel of lead the gate gets over the cap itself
+# v3.6.5 — 3.0 -> 2.0. The gate is the COASTING phase, and coasting is what the
+# owner asked for less of ("I'd rather apply a little bit of braking ... than
+# slow down 50,000 feet before by gas gating"). It still lifts off before the
+# cap bites — that is the whole reason it exists and a car that holds throttle
+# into the envelope is the thing this replaced — but two seconds of lead rather
+# than three, against a v3.6.5 envelope that itself starts later, moves most of
+# the slowdown out of the coast and into a short firm decel. Corners gentle
+# enough that coasting alone does it still never reach the brakes: the gate
+# only clips the THROTTLE (accel_clip[1]), the floor is untouched, so a corner
+# whose envelope never falls under the coast rate is a pure lift-off exactly as
+# before.
+GATE_LEAD_T = 2.0        # s of travel of lead the gate gets over the cap itself
 # v_ego must actually be ABOVE the target. THE v3.4.8 POST-MORTEM IS ABOUT
 # EXACTLY THIS: a gate defined on a command rather than on the state it is
 # meant to protect fired when there was no throttle to cut, pinned the accel
@@ -178,11 +259,11 @@ class TrackedCorner:
   """A corner from the geometry, with whatever the store knows about it."""
   __slots__ = ("lat", "lon", "bearing", "radius", "half_len", "distance",
                "a_lat", "visits", "confidence", "settled", "v_target",
-               "sign", "turn_deg")
+               "sign", "turn_deg", "unmanageable")
 
   def __init__(self, lat, lon, bearing, radius, half_len, distance,
                a_lat, visits, confidence, v_target, sign=0, turn_deg=0.0,
-               settled=0.0):
+               settled=0.0, unmanageable=False):
     self.lat, self.lon, self.bearing = lat, lon, bearing
     self.radius, self.half_len, self.distance = radius, half_len, distance
     # `confidence` is the fusion's "have we been here" (visit count only).
@@ -195,6 +276,9 @@ class TrackedCorner:
     # OPPOSITE sign, and telling that from one long corner is the difference
     # between holding speed through the middle and surging into the second half.
     self.sign, self.turn_deg = sign, turn_deg
+    # v3.6.5 — this bend has driven its own budget to the floor and STILL
+    # stresses the car. The cap cannot fix it; the driver is warned instead.
+    self.unmanageable = unmanageable
 
 
 class SCCMapV2:
@@ -234,6 +318,10 @@ class SCCMapV2:
     self._pass_key = None       # (lat, lon, bearing, radius) of the corner being driven
     self._geom_at = 0.0
     self._dr_at = 0.0        # v3.6.5: when the distances were last advanced
+    self._orphan = None      # v3.6.5: a bend the geometry never listed
+    self.orphan_count = 0
+    self.corner_warning = False   # v3.6.5: an unmanageable bend is coming up
+    self._warn_frames = 0
     self._last_sample_t = 0.0
     self._gate_frames = 0
 
@@ -333,11 +421,119 @@ class SCCMapV2:
       v = max(CS_.speed_for(rc.radius, a_lat), CS_.MIN_V_TARGET)
       out.append(TrackedCorner(clat, clon, cbrg, rc.radius, rc.half_len, d,
                                a_lat, visits, conf, v, rc.sign, rc.turn_deg,
-                               settled))
+                               settled, self._unmanageable(clat, clon, cbrg)))
+    out.extend(self._corners_from_store(lat, lon, bearing, out))
     self.corners = out
     s = self.store()
     if s is not None:
       self.learned_count = s.count
+
+  def _unmanageable(self, lat: float, lon: float, bearing: float) -> bool:
+    """Has this bend driven its own budget to the floor and still stressed us?
+
+    v3.6.5 — the condition for warning rather than capping harder. Two terms,
+    and both are needed: the learned interval has to have BOTTOMED OUT (there
+    is no more speed to take away — A_LAT_MIN is the floor by construction),
+    and it has to have done so over more than one visit, because a single
+    catastrophic pass seeds the ceiling outright and one bad sample is not a
+    pattern. False on any doubt: a warning nobody can act on is worse than no
+    warning, and a store failure must not manufacture one.
+    """
+    try:
+      s = self.store()
+      if s is None:
+        return False
+      near = s.nearby(lat, lon, bearing, MATCH_M, MATCH_BEARING_DEG, ahead_only=False)
+      if not near:
+        return False
+      _d, c = min(near, key=lambda dc: dc[0])
+      return is_unmanageable(c.a_lo, c.a_hi, c.n)
+    except Exception:
+      return False
+
+  def _update_warning(self, v_ego: float) -> None:
+    """Is an unmanageable bend close enough to warn about? v3.6.5.
+
+    THE LEAD TIME IS IN SECONDS, NOT METRES, so the warning arrives the same
+    distance ahead in the driver's terms at any speed — and it is measured to
+    the corner's ENTRY, not its apex, because being told about a bend once you
+    are in it is the complaint this exists to fix.
+
+    It LATCHES for WARN_MIN_S. Without that the banner would flicker as the
+    geometry refresh moves the corner's distance across the threshold, and a
+    warning that blinks reads as a glitch rather than as a warning.
+    """
+    if self._warn_frames > 0:
+      self._warn_frames -= 1
+    want = False
+    try:
+      if self.is_enabled and v_ego > 0.0:
+        for c in self.corners:
+          if not c.unmanageable:
+            continue
+          to_entry = c.distance - c.half_len
+          if 0.0 <= to_entry <= v_ego * WARN_LEAD_T:
+            want = True
+            break
+    except Exception:
+      want = False
+    if want:
+      self._warn_frames = max(self._warn_frames, int(WARN_MIN_S / _DT))
+    self.corner_warning = self._warn_frames > 0
+
+  def _corners_from_store(self, lat, lon, bearing, geom):
+    """Learned bends ahead that the geometry did not find. v3.6.5.
+
+    A record in the store is a bend this car has MEASURED — position, heading,
+    radius and lateral budget all from its own passes — which is better
+    evidence that the bend exists than a polyline traced from imagery. The
+    geometry's documented short-sweep blind spot means some real corners are
+    never listed, and a corner that is never listed can neither cap the car nor
+    accumulate another visit, so the miss is self-perpetuating.
+
+    GEOMETRY WINS WHERE BOTH DESCRIBE THE SAME BEND. The polyline's apex is a
+    live projection from the current pose, while a record's position is where
+    the car was on some previous drive; deduping toward geometry keeps the
+    fresher number and stops one bend being capped twice.
+
+    Distance is straight-line along the heading, not arc length, so on a curvy
+    road it UNDERSTATES how far away the corner is. That direction is
+    deliberate: an understated distance tightens the cap early rather than
+    arriving late. Never raises — a store failure yields no extra corners.
+    """
+    extra = []
+    try:
+      s = self.store()
+      if s is None:
+        return extra
+      near = s.nearby(lat, lon, bearing, STORE_LOOKAHEAD_M,
+                      MATCH_BEARING_DEG, ahead_only=True)
+      cos_lat = math.cos(math.radians(lat))
+      hx, hy = math.sin(math.radians(bearing)), math.cos(math.radians(bearing))
+      for _d, c in near:
+        if c.r <= 0.0 or c.n < 1:
+          continue
+        if any(self._sep_m(c.lat, c.lon, g.lat, g.lon) <= STORE_DEDUPE_M for g in geom):
+          continue
+        north = (c.lat - lat) * 111320.0
+        east = (c.lon - lon) * 111320.0 * cos_lat
+        d = north * hy + east * hx
+        if not (0.0 < d <= CS_.MAX_LOOKAHEAD_M):
+          continue
+        a_lat = CS_.effective_a_lat(c.a_lo, c.a_hi, c.n, drift=c.d)
+        # A record carries a radius but no sweep, so its extent is estimated
+        # from the radius and capped. Erring short is the safe direction here:
+        # it starts the run-out sooner, which hands throttle back rather than
+        # holding the car down over road we have no evidence about.
+        half = min(0.35 * float(c.r), 40.0)
+        extra.append(TrackedCorner(
+          c.lat, c.lon, c.bearing, c.r, half, d, a_lat, int(c.n),
+          CS_.confidence_for(c.n), max(CS_.speed_for(c.r, a_lat), CS_.MIN_V_TARGET),
+          0, 0.0, CS_.confidence_of(c.n, c.d),
+          is_unmanageable(c.a_lo, c.a_hi, c.n)))
+    except Exception:
+      return []
+    return extra
 
   def _dead_reckon(self, now: float, v_ego: float) -> None:
     """Close the corner distances by how far we have driven since the refresh.
@@ -391,7 +587,9 @@ class SCCMapV2:
                     blinker: bool, standstill: bool, gps_acc: float,
                     pitch_rate_deg_s: float = 0.0, departure_m: float = 0.0,
                     lane_change: bool = False, long_active: bool = True,
-                    brake_pressed: bool = False, lead: bool = False) -> None:
+                    brake_pressed: bool = False, lead: bool = False,
+                    gas_pressed: bool = False, lat: float = 0.0, lon: float = 0.0,
+                    bearing: float = 0.0) -> None:
     """Watch the car drive. Called at the carState rate; never raises.
 
     A pass opens when the car enters the extent of the nearest corner ahead and
@@ -420,7 +618,7 @@ class SCCMapV2:
       self._effort.update(dt, v_ego, curvature, steering_angle_deg,
                           steer_torque, lat_active, saturated, eps_limited,
                           pitch_rate_deg_s, departure_m, lane_change,
-                          long_active, brake_pressed)
+                          long_active, brake_pressed, gas_pressed)
 
       inside = None
       for c in self.corners:
@@ -446,6 +644,83 @@ class SCCMapV2:
         self._pass.begin()
         self._pass_key = (inside.lat, inside.lon, inside.bearing, inside.radius)
         self._pass.add(self._effort, dt, v_ego, blocked=blocked, lead=lead)
+        return
+      self._observe_orphan(dt, v_ego, curvature, lat, lon, bearing, gps_acc,
+                           blocked, lead)
+    except Exception:
+      pass
+
+  def _observe_orphan(self, dt, v_ego, curvature, lat, lon, bearing, gps_acc,
+                      blocked, lead) -> None:
+    """Watch a bend the geometry never told us about. v3.6.5.
+
+    THE STRUCTURAL PROBLEM THIS CLOSES. A pass only opens INSIDE a listed
+    corner, and the radius estimator has a documented blind spot on short-sweep
+    bends. So a corner it misses is missed permanently: nothing caps for it,
+    and — because no pass ever opens there — nothing ever learns that it exists
+    either. The owner's report is the symptom: the car runs wide, the driver
+    grabs it, and next time is identical.
+
+    THE RADIUS COMES FROM THE CAR, NOT FROM THE MAP, and it is the better
+    measurement of the two. `controlsState.curvature` is the vehicle model's
+    reading of the steering angle, so `R = 1/|k|` at the tightest point is what
+    the car actually drove — no node spacing, no smoothing window, no aliasing.
+    That is why an orphan record is worth having even though its POSITION is
+    only as good as the GPS.
+
+    ONLY STRESSED ORPHANS ARE FILED, which is the owner's rule: a gentle
+    unlisted bend cost nothing and needs no record, and filing every one would
+    put the whole road network in a store sized for corners. A stressed one is
+    exactly the case where the missing corner hurt.
+    """
+    if self._pass.open:
+      return
+    k = abs(float(curvature)) if curvature == curvature else 0.0
+    if self._orphan is None:
+      if (k < ORPHAN_K_MIN or v_ego < _V_MIN_ACTIVE or gps_acc > MAX_GPS_ACC_M
+          or not (lat or lon)):
+        return
+      p = CornerPass()
+      p.begin()
+      self._orphan = {"pass": p, "k": k, "lat": lat, "lon": lon,
+                      "brg": bearing, "t": 0.0}
+    o = self._orphan
+    o["t"] += dt
+    o["pass"].add(self._effort, dt, v_ego, blocked=blocked, lead=lead)
+    if k > o["k"]:
+      # keep the TIGHTEST point, which is the apex and where a record belongs
+      o["k"], o["lat"], o["lon"], o["brg"] = k, lat, lon, bearing
+    if k >= ORPHAN_K_END and o["t"] <= ORPHAN_MAX_S:
+      return
+    self._commit_orphan()
+
+  def _commit_orphan(self) -> None:
+    o, self._orphan = self._orphan, None
+    if o is None:
+      return
+    try:
+      p = o["pass"]
+      if o["t"] < ORPHAN_MIN_S or not p.usable():
+        return
+      a_peak, severity = p.verdict()
+      # THE ONE EXTRA GATE AN ORPHAN HAS. A listed corner records every usable
+      # pass because its existence is already established; an orphan's
+      # existence is being ASSERTED by this record, so it has to have actually
+      # hurt. Below the limit the bend was fine and needs no entry.
+      if severity < 1.0:
+        return
+      s = self.store()
+      if s is None:
+        return
+      radius = 1.0 / o["k"] if o["k"] > 0.0 else 0.0
+      if radius <= 0.0:
+        return
+      s.observe(o["lat"], o["lon"], o["brg"], radius, a_peak, severity,
+                FLAG_ENGAGED, allow_raise=False)
+      self.learned_count = s.count
+      self.orphan_count += 1
+      self.last_pass = (a_peak, severity, radius, p.depart_peak)
+      self.pass_count += 1
     except Exception:
       pass
 
@@ -465,8 +740,19 @@ class SCCMapV2:
       # It blocks only the FLOOR — a governed pass that still oscillated is
       # real evidence in the safe direction, and refusing that would mean the
       # one case where we are demonstrably wrong is the one we never learn from.
+      # v3.6.5 — A DEMONSTRATED PASS IS ADOPTED, NOT EASED TOWARD. openpilot
+      # steered the whole bend, nothing was stressed, and the driver held the
+      # throttle: `a_peak` under those conditions is not an estimate of what the
+      # corner supports, it is a demonstration that it supports it. `seed`
+      # skips the ALPHA_FLOOR discount, which is what "learn quicker" means for
+      # a floor. `allow_raise` still applies — a pass WE were governing is not
+      # evidence about the corner however hard the driver pushed the pedal,
+      # because the speed was ours. In practice the two coincide rarely, which
+      # is why the gate reads as strict: with SCC-M holding the car down, gas
+      # takes `long_active` false and the cap stops being ours a moment later.
+      demo = self._pass.demonstrated()
       s.observe(key[0], key[1], key[2], key[3], a_peak, severity, flags,
-                allow_raise=not self.is_active)
+                allow_raise=not self.is_active, seed=demo)
       self.learned_count = s.count
       # v3.6.2 — NO LOG LINE HERE. The pass used to be written to the swaglog
       # so the thresholds could be calibrated from a drive. They are pinned by
@@ -594,6 +880,7 @@ class SCCMapV2:
     # cap is still above us, so it is computed from the corner list rather than
     # from the cap's output.
     self._update_gas_gate(v_ego, v_cruise)
+    self._update_warning(v_ego)
 
     try:
       self.raw_v_target = self._raw_cap(v_cruise)
@@ -634,7 +921,7 @@ class SCCMapV2:
             int(bool(self.gas_gating_active)),
             cap, authority, self.learned_count,
             self.last_pass[0], self.last_pass[1], self.last_pass[2], self.pass_count,
-            self.last_pass[3])
+            self.last_pass[3], self.orphan_count)
 
   def _reset(self):
     self.state = "INACTIVE"
@@ -644,6 +931,8 @@ class SCCMapV2:
     self.is_active = False
     self.gas_gating_active = False
     self._gate_frames = 0
+    self.corner_warning = False
+    self._warn_frames = 0
     self.corner_radius_m = 0.0
     self.gov_lat = 0.0
     self.gov_lon = 0.0

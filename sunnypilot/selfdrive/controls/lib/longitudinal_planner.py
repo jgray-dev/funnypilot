@@ -28,7 +28,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import S
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_effort import (
   lane_departure_m as _lane_departure_m)
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
-  write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm,
+  write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm, write_corner_warning_shm,
   read_eps_limited as _read_eps_limited, read_pitch_rate as _read_pitch_rate)
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
@@ -140,9 +140,14 @@ class LongitudinalPlannerSP:
       except Exception:
         departure, lane_change = 0.0, False
 
-      # v3.6.5 — DID THE HUMAN TAKE AN AXIS BACK? Both facts are read straight
-      # off carControl/carState; corner_effort decides what they mean. Note
-      # `gasPressed` is deliberately not among them — see TAKEOVER_SEVERITY.
+      # v3.6.5 — DID THE HUMAN TAKE AN AXIS BACK? The facts are read straight off
+      # carControl/carState; corner_effort decides what they mean.
+      #
+      # v3.6.5 — `gasPressed` IS PASSED NOW, AND FOR THE OPPOSITE REASON TO THE
+      # OTHERS. controlsd clears `longActive` for any `overrideLongitudinal`
+      # event, and a gas press is one — so without the pedal itself, corner_effort
+      # cannot tell "the driver switched longitudinal off" from "the driver is
+      # asking for more speed", and v3.6.5 scored the second as a takeover.
       CC = sm['carControl']
       # A lead disarms the takeover VERDICT (not the truncation): braking for a
       # car that slowed in front of us mid-bend says nothing about the bend.
@@ -152,13 +157,17 @@ class LongitudinalPlannerSP:
         lead = bool(sm['radarState'].leadOne.status)
       except Exception:
         lead = False
+      # v3.6.5 — THE POSITION IS PASSED IN NOW, because a bend the geometry
+      # never listed has no coordinates of its own. `read_gps` was already
+      # called here and its lat/lon discarded.
       _lat, _lon, _brg, acc, _ok = read_gps(sm)
       self._scc_map_v2.observe_frame(
         now, float(CS.vEgo), float(cst.curvature), float(CS.steeringAngleDeg),
         float(CS.steeringTorque), bool(CC.latActive), saturated,
         _read_eps_limited(), bool(CS.leftBlinker or CS.rightBlinker),
         bool(CS.standstill), acc, _read_pitch_rate(), departure, lane_change,
-        bool(CC.longActive), bool(CS.brakePressed), lead)
+        bool(CC.longActive), bool(CS.brakePressed), lead,
+        bool(CS.gasPressed), _lat, _lon, _brg)
     except Exception:
       pass
 
@@ -328,6 +337,7 @@ class LongitudinalPlannerSP:
     # these — the learned half lives in a store on /data and nothing in the HUD
     # may touch a filesystem.
     write_corners_shm(self._scc_map_v2.corners)
+    write_corner_warning_shm(self._scc_map_v2.corner_warning)
 
     # v3.6.2: the dev-UI payload. Diagnostic only — see long_v2/scc_shm.py.
     write_scc_debug_shm(self._scc_map_v2.debug_row(self._scc_map_authority))

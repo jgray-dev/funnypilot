@@ -38,13 +38,24 @@ class TestTheEquation:
                  (100.0, float('inf')), (None, 2.0), ("x", "y")):
       assert CS.speed_for(r, a) == 0.0
 
-  def test_the_default_budget_is_below_sccv(self):
-    """1.8 is deliberately under SCC-V's own 2.1 comfort target: an unvisited
-    corner's radius comes from OSM node geometry, and the cost of that being
-    wrong should be paid in a slow corner, not a fast one. Learning is what
-    earns it back."""
-    assert CS.A_LAT_DEFAULT < 2.1
+  def test_the_default_budget_leaves_room_to_learn_in_both_directions(self):
+    """v3.6.5 — 1.8 -> 2.25, because a first visit was unbearably slow.
+
+    WHAT THE DEFAULT HAS TO SATISFY IS A RELATIONSHIP, NOT A VALUE: it must sit
+    strictly inside the learned bounds, so a corner can teach us it is slower
+    AND a corner can earn its way faster. Pinning it at the ceiling would make
+    the whole interval one-directional. MUTATION: set it to A_LAT_MAX."""
     assert CS.A_LAT_MIN < CS.A_LAT_DEFAULT < CS.A_LAT_MAX
+    # ...and room above it worth having: a corner that proves itself must be
+    # able to gain at least another 10% of speed over the default.
+    assert CS.A_LAT_MAX / CS.A_LAT_DEFAULT >= 1.21
+
+  def test_the_default_is_the_requested_step_over_v365(self):
+    """Speed is sqrt(a*R), so the 10-15% FASTER that was asked for is 21-32% of
+    BUDGET. Pinned in speed terms because that is the quantity that was
+    specified and the one the driver feels."""
+    faster = math.sqrt(CS.A_LAT_DEFAULT / 1.8)
+    assert 1.10 <= faster <= 1.15
 
 
 class TestTheIntervalCloses:
@@ -187,15 +198,29 @@ class TestTheApproachEnvelope:
     assert CS.approach_cap(v, lead_m + 40.0) > v
 
   def test_the_implied_deceleration_never_exceeds_what_the_mpc_can_do(self):
-    """1.20 m/s^2 is a structural ceiling: long_mpc.CRUISE_MIN_ACCEL is -1.2,
-    so a speed cap falling faster than that is theatre the MPC cannot follow.
-    MUTATION: raise the last entry of _J_V without raising CRUISE_MIN_ACCEL."""
+    """The envelope may not ask for more than the MPC can deliver. v3.6.5
+    steepened the table to 1.35 after v3.6.5 raised CRUISE_MIN_ACCEL to -1.6;
+    the RELATIONSHIP between the two is pinned by
+    TestTheEnvelopeHasRoomToBeFollowed, which reads the constant out of
+    long_mpc rather than restating it here."""
     v = 10.0
     d = 1.0
     while d < 400.0:
       a = (CS.approach_cap(v, d + 1.0) ** 2 - CS.approach_cap(v, d) ** 2) / 2.0
-      assert a <= 1.201, f"implied decel {a:.3f} m/s^2 at d={d}"
+      assert a <= 1.351, f"implied decel {a:.3f} m/s^2 at d={d}"
       d += 1.0
+
+  def test_v366_starts_later_than_v365_did(self):
+    """The owner asked for "an extra 100 ft of cruise speed" instead of a long
+    gas-gated coast. MEASURED on the reported case, 60 mph into a 29 mph bend:
+    the cap first crosses 1 m/s under the set speed at ~327 m, where the v3.6.5
+    table had it constraining from the moment the corner appeared at 400 m.
+    MUTATION: restore _J_V to (0, 72, 144, 269)."""
+    v_set, v_corner = 26.8, 13.0
+    d = 400.0
+    while d > 0.0 and CS.approach_cap(v_corner, d) > v_set - 1.0:
+      d -= 1.0
+    assert 280.0 <= d <= 360.0, f"first constrains at {d:.0f} m"
 
   def test_nonsense_never_constrains(self):
     for v, d in ((0.0, 100.0), (-3.0, 100.0), (float('nan'), 100.0),

@@ -378,7 +378,8 @@ class LearnStore:
 
   def observe(self, lat: float, lon: float, bearing: float, radius: float,
               a_peak: float, severity: float, flags: int = 0,
-              now: float | None = None, allow_raise: bool = True) -> str:
+              now: float | None = None, allow_raise: bool = True,
+              seed: bool = False) -> str:
     """Fold one traversal in. Returns the key it landed on.
 
     The interval maths lives in corner_speed.update_interval — this method owns
@@ -407,7 +408,12 @@ class LearnStore:
       self._index_add(key, c)
 
     before = min(c.a_lo, c.a_hi)
-    lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh)
+    # `seed` is OR-ed, not overridden: a fresh record is seeded because its
+    # bounds are not measurements, and v3.6.5 also seeds a pass the driver
+    # DEMONSTRATED (see corner_effort.MIN_DEMO_S). Both mean "this evidence
+    # deserves no discount"; neither weakens the direction guards inside
+    # update_interval, which still refuse to lower a floor or raise a ceiling.
+    lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh or bool(seed))
     if not allow_raise:
       lo = min(lo, c.a_lo)
     c.a_lo, c.a_hi = lo, hi

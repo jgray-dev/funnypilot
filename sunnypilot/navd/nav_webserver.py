@@ -219,6 +219,15 @@ _CODE_MARKERS = [
   ("CRUISE_MIN_ACCEL = -1.6", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC headroom over the approach envelope"),
   ("TAKEOVER_SEVERITY", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "a driver takeover is a verdict"),
   ("y POSITIVE RIGHT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure frame convention fixed"),
+  # v3.6.5, second pass
+  ("MIN_DEMO_S", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "gas with lateral on is a demonstration"),
+  ("DEPART_DEADBAND_M", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure deadband + low pass"),
+  ("def _observe_orphan", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "bends the geometry never listed are learned"),
+  ("def _corners_from_store", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "learned bends enter the corner list"),
+  ("def is_unmanageable", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "bends the cap cannot fix"),
+  ("def read_corner_warning_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "preemptive curve warning channel"),
+  ("Sharp Curve Ahead", "/data/openpilot/selfdrive/selfdrived/events.py", "curve warning is future tense"),
+  ("class SccOrphanElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "ORPH dev-UI readout"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

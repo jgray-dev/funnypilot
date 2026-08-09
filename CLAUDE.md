@@ -119,6 +119,161 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.5, second pass — SAME BRANCH, NO VERSION BUMP
+
+SEVEN owner requests after the first 3.6.5 drive ("feeling really good to
+drive"). Pushed onto `funnypilot-3.6.5` at explicit request; the version files
+are UNCHANGED, which follows the v3.6.2 precedent and keeps the Verify page
+green (`_eval_diag` matches `EXPECTED_VERSION` against the BRANCH NAME).
+**THE COST, STATED: the device's version readout can no longer distinguish this
+code from what was flashed earlier today.** Check the git hash, not the version,
+when triaging a 3.6.5 device from here on.
+
+- `long_v2/corner_effort.py` — **A GAS PRESS WAS SCORING AS A TAKEOVER, WHICH IS
+  THE EXACT OPPOSITE OF WHAT IT MEANS.** `controlsd.py:139` clears
+  `CC.longActive` for ANY event carrying `overrideLongitudinal`, and
+  `pedalPressed`/`gasPressedOverride` are exactly that — so on this stack a gas
+  press is INDISTINGUISHABLE from the driver switching longitudinal off. The
+  first pass of v3.6.5 therefore filed every mid-corner throttle input as a
+  driver takeover at `TAKEOVER_SEVERITY` 2.0: the one input arguing a corner is
+  too SLOW was lowering its ceiling. `long_active` is now only believed with the
+  pedal up (`gas_pressed` is threaded through from `carState`).
+- `long_v2/corner_effort.py` — **AND THEN THE MIRROR OF THE TAKEOVER**,
+  owner-requested. openpilot is steering, nothing is oscillating or clamped or
+  saturated, the car is in its lane, and the driver holds the throttle: the
+  lateral acceleration reached under those conditions is not an ESTIMATE of what
+  the bend supports, it is a DEMONSTRATION that it does. `demonstrated()` passes
+  `seed=True` into the store so the floor ADOPTS `a_peak` instead of easing
+  toward it at `ALPHA_FLOOR` — which is what "learn quicker" has to mean for a
+  floor: not a bigger step, but no discount on evidence that is not uncertain.
+  `MIN_DEMO_S` 0.5 (one dab is not a demonstration); every other guard stays on,
+  and the CLEAN_TH term is what makes it safe — throttle through a bend the car
+  is sawing at is proof the corner does NOT support it, and still takes the
+  ceiling down through `verdict()`.
+- `long_v2/corner_effort.py` — **LANE, THE SECOND DEFECT: RIGHT ARITHMETIC, WRONG
+  SENSOR MODEL.** v3.6.5 fixed the sign; the reading was then inconsistent —
+  5-6 cm with the car dead centre. `laneLines[i].y[0]` is at `X_IDXS[0]` = 0 m,
+  BESIDE THE CAR, which the forward camera cannot see: the model EXTRAPOLATES it,
+  and that is the noisiest point on the polyline. Two fixes. `DEPART_DEADBAND_M`
+  0.10 subtracted (a shift, not a threshold — a step would make `DEPART_LIMIT_M`
+  mean two different things either side of it), and `CAMERA_OFFSET_M` 0.04, since
+  `y` is in the DEVICE frame and the car's centreline is not the camera's
+  (`ldw.py` carries the same asymmetry). Then `DEPART_TAU_S` 0.20 low-passes it
+  before `depart_peak` takes the max. **v3.6.4 SAID "IT IS A PEAK, NOT A RATE —
+  ONE WHEEL OVER THE LINE DOES NOT HAVE TO PERSIST", WHICH IS RIGHT ABOUT THE
+  ROAD AND WRONG ABOUT THE SENSOR**: a peak over four seconds of an extrapolated
+  signal is the noise floor, and one frame of a guessed line is not a wheel
+  anywhere.
+  ALSO WORTH KNOWING FOR THE NEXT TEST DRIVE: the LANE readout is `last_pass[3]`
+  and only updates when a pass COMMITS, so deliberately crossing a line on
+  STRAIGHT road correctly shows nothing — there is no corner to attribute it to.
+- `long_v2/corner_speed.py` — `A_LAT_DEFAULT` 1.8 -> **2.25**, owner-requested
+  ("some corners are unbearably slow the first time"). UNITS ARE WHY THAT LOOKS
+  BIG AND IS NOT: speed is sqrt(a*R), so +25% of budget is **+11.8% of SPEED**,
+  the middle of the 10-15% asked for. At R=100 m a first pass goes 30.0 ->
+  33.5 mph. The safe direction is untouched — a corner that has taught us it is
+  slow still gets `CONF_LOWER_FLOOR` weight on visit one and overrides this
+  immediately, and `R_TRIM_LO` still trims the radius pessimistically.
+- `long_v2/corner_speed.py` — **ENVELOPE RETUNED FOR "BRAKE LATER, BRAKE FIRMER"**
+  ("I'd rather apply a little bit of braking and have an extra 100 ft of cruise
+  speed than slow down 50,000 feet before by gas gating"). 1.20/0.80/0.50 ->
+  **1.35/1.00/0.62**. READ THE TABLE THE RIGHT WAY ROUND, because it inverts the
+  intuition: J is the budget integrated BACKWARDS from the corner, so a SMALL
+  far-field budget means the cap is already low at 400 m, i.e. slow early and
+  gently. "Start later" is a BIGGER J. Measured, 60 mph into a 29 mph bend: first
+  constrains at ~327 m where the old table constrained from the moment the corner
+  appeared at 400 m — about 240 ft more road at cruise. 1.35 is 80% of what the
+  MPC can deliver at the v3.6.5 `CRUISE_MIN_ACCEL` of -1.6; **at the old -1.2
+  this table would have been unfollowable**, so the two changes had to happen in
+  this order.
+- `long_v2/scc_map_v2.py` — `GATE_LEAD_T` 3.0 -> 2.0. The gate IS the coasting
+  phase and coasting is what there was too much of. It still lifts off before the
+  cap bites; corners gentle enough that a lift alone does it never reach the
+  brakes, because the gate only clips `accel_clip[1]` and the floor is untouched.
+- **ON "WIRE THE LONGITUDINAL CONTROLLER DIRECTLY INTO SCC-M v2 RATHER THAN
+  USING THE SET SPEED AS A MIDDLEMAN" — the intuition is half right and the
+  honest answer is worth recording.** There is no hidden second path: SCC-M v2 is
+  a SPEED-DOMAIN governor by design (v3.2.6e), its cap goes through
+  `speed_governor`'s min() into the MPC's `v_cruise`, and the MPC builds the
+  cruise obstacle from it. That IS the wiring. What was genuinely wrong was
+  everything the cap had to survive on the way — a 0.5 s distance staircase
+  (fixed in the first pass), and a clip at 95% of the envelope's own steepest
+  ask (also first pass) — plus a schedule that started too early and finished too
+  gently, which is what this pass retunes. **THE ACCEL-DOMAIN REWRITE WAS NOT
+  DONE AND SHOULD NOT BE GUESSED AT**: `long_mpc.py` imports acados and cannot be
+  constructed off-device, so a corner-as-spatial-obstacle change would ship
+  untested into the one file that decides how hard the car brakes. If the feel is
+  still wrong after this, `_J_V` is the knob and it has room to ~1.35 before the
+  headroom guard fires.
+- `long_v2/scc_map_v2.py` — **NEW `_observe_orphan`: BENDS THE GEOMETRY NEVER
+  SAW.** Owner-requested, and it closes a self-perpetuating gap. A pass only ever
+  opened INSIDE a listed corner, and the radius estimator has a documented
+  short-sweep blind spot (v3.6.4 measured a true R=40 reading as R=172) — so a
+  corner it misses was missed FOREVER: nothing capped for it, and because no pass
+  opened there, nothing learned it existed either. **THE RADIUS COMES FROM THE
+  CAR, AND IS THE BETTER OF THE TWO MEASUREMENTS**: `controlsState.curvature` is
+  the vehicle model's reading of the steering angle, so `R = 1/|k|` at the
+  tightest point is what was actually driven — no node spacing, no smoothing
+  window, no aliasing. ONLY STRESSED ORPHANS ARE FILED (`severity >= 1.0`): a
+  listed corner records every usable pass because its existence is established,
+  while an orphan's existence is being ASSERTED by the record.
+- `long_v2/scc_map_v2.py` — **NEW `_corners_from_store`, AND WITHOUT IT THE ABOVE
+  IS DATA NOTHING READS.** `_refresh_corners` built the list from the geometry
+  alone, so a learned bend the geometry misses could never cap the car however
+  many times it had been measured — **and could never show a minimap ring
+  either**, since the ring needs `visits >= 1` on a LISTED corner. That is the
+  most likely answer to "I've yet to see a single crosshair": the whole pipeline
+  (`_lookup` -> `TrackedCorner.visits` -> `write_corners_shm` field 6 ->
+  `learned_corners_from` -> `draw_ring`) was traced end to end and is correct,
+  but every stage needs the geometry to have found the bend first. Geometry wins
+  on dedupe (`STORE_DEDUPE_M` 60 m) because a polyline apex is a live projection
+  while a record is where the car was on an earlier drive. Distance is
+  straight-line, which UNDERSTATES it on a curvy road — the direction is
+  deliberate, an understated distance tightens the cap early rather than late.
+- `long_v2/scc_map_v2.py`, `scc_shm.py`, `selfdrived.py`, `events.py` —
+  **THE PREEMPTIVE CURVE WARNING.** A bend whose learned interval has BOTTOMED
+  OUT (`min(a_lo,a_hi) <= A_LAT_MIN + 0.15`) over more than one visit and which
+  still stresses the car cannot be fixed by slowing: `A_LAT_MIN` is the floor by
+  construction. So it is flagged and the driver is told `WARN_LEAD_T` = 6 s
+  before the ENTRY, latched for `WARN_MIN_S` so the banner cannot flicker as the
+  refresh moves the distance across the threshold. `speedTooHigh` is REUSED and
+  REWORDED — "High Speed Warning / Model uncertain above training speed" became
+  **"Sharp Curve Ahead / Slow down — beyond assist limits"**, future tense as
+  asked. Reusing a stock event is what keeps this off `cereal/custom.capnp`,
+  which cannot be edited without forcing a device rebuild; its only prior raise
+  site was `car_specific.py` at vEgo > MAX_CTRL_SPEED, about 90 mph here.
+  **ONE DELIBERATE DEVIATION FROM "STOP TRYING TO SLOW DOWN": THE CAP IS NOT
+  REMOVED.** Taking an existing constraint off a bend the car has repeatedly
+  failed is the version of that request which could hurt someone. What stops is
+  the escalation and the silence; the floor cap stays.
+- `selfdrived.py` — the flag is read from `/dev/shm/fp_cornerwarn` at **5 Hz, not
+  100**: this is the most schedule-sensitive loop on the device and the value
+  changes on the 20 Hz planner. Its OWN file, not a field on `fp_scc`, per the
+  v3.5.0 rule. **THE FAILURE DIRECTION IS INVERTED HERE ON PURPOSE** — a stale
+  read is FALSE, because a banner latched on by a wedged plannerd would train the
+  driver to ignore it. Silence is the safe failure for an alert; the speed cap is
+  what fails safe for the car.
+- `developer_ui/` — NEW **ORPH** readout (16th debug field): bends recorded that
+  the route geometry never listed. A steadily rising ORPH on familiar roads means
+  the geometry is the weak link rather than the budget.
+- TESTS: **962 green**, ruff clean. NEW `TestTheDriversDemonstration` (6),
+  `TestBendsTheGeometryNeverSaw` (5), `TestLearnedCornersEnterTheList` (4),
+  `TestTheUnmanageableCornerWarning` (7), `TestTheCornerWarningChannel` (5), plus
+  deadband/low-pass cases. SIXTEEN guards mutation-tested.
+  **THREE SURVIVED THE FIRST PASS AND ONE WAS A REAL DEFECT**: the unmanageable
+  rule was written INLINE IN TWO PLACES (corners reach the list by two routes
+  now), so mutating one copy left the suite green through the other — extracted
+  as `is_unmanageable()`. The other two were vacuous tests of mine: the straight
+  -road fixture used a curvature under BOTH orphan thresholds, so the orphan
+  opened and closed on the same frame either way; and the latch test cleared
+  `scc.corners` by hand, which `run()` immediately rebuilt from the store.
+- ON-ROAD VERIFICATION: (1) **LANE should now sit at 0 dead centre and rise when
+  a wheel genuinely clips a line, inside a corner** — it does not update on
+  straight road by design. (2) **watch ORPH**: non-zero means the geometry is
+  missing bends, and those should start showing rings once learned. (3) the
+  curve warning needs a bend at the floor over two visits; if it never fires,
+  check ALAT on the dev UI is actually reaching ~1.0 somewhere.
+
 ### v3.6.5 Changes (based on funnypilot-3.6.4)
 
 Four on-road reports, all SCC-M v2. Two were defects with a specific broken

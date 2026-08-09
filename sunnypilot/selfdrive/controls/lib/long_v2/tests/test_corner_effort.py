@@ -448,7 +448,9 @@ class TestLaneDepartureGeometry:
     """
     real = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
     assert real > 0.0
-    assert real == pytest.approx(0.33, abs=0.01)
+    # 0.93 half-track + 0.04 camera offset - 0.60 to the line, less the 0.10
+    # deadband v3.6.5 added for the model's x=0 extrapolation noise
+    assert real == pytest.approx(0.27, abs=0.01)
 
   def test_inside_the_lines_is_still_zero(self):
     """Drifting within the lane is not a departure. MUTATION: drop the max(0,
@@ -456,11 +458,28 @@ class TestLaneDepartureGeometry:
     assert CE.lane_departure_m(-2.3, 1.4, self.P, self.P) == 0.0
 
   def test_crossing_the_left_line_measures_the_overhang(self):
-    """Left line 0.60 m from the centreline means our left edge (0.93 m out)
-    is 0.33 m past it."""
+    """Left line 0.60 m from the device centreline, our left edge 0.93 + 0.04 m
+    out, less the v3.6.5 deadband."""
     d = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
-    assert d == pytest.approx(CE.HALF_TRACK_M - 0.60)
-    assert d == pytest.approx(0.33, abs=0.01)
+    assert d == pytest.approx(CE.HALF_TRACK_M + CE.CAMERA_OFFSET_M - 0.60
+                              - CE.DEPART_DEADBAND_M)
+
+  def test_the_deadband_swallows_the_extrapolation_noise(self):
+    """v3.6.5 — THE REPORTED FALSE POSITIVE. `laneLines[i].y[0]` is at x = 0,
+    beside the car, which the forward camera cannot see: the model infers it,
+    and the inference wanders by a few centimetres. Dead centre in a lane was
+    reading 5-6 cm of "departure". MUTATION: drop DEPART_DEADBAND_M."""
+    # 6 cm of apparent overhang — the magnitude that was reported
+    y_l = -CE.HALF_TRACK_M - CE.CAMERA_OFFSET_M + 0.06
+    assert CE.lane_departure_m(y_l, y_l + 3.6, self.P, self.P) == 0.0
+
+  def test_the_deadband_is_a_shift_not_a_step(self):
+    """Subtracted rather than thresholded, so the signal stays continuous: a
+    step at the deadband would make DEPART_LIMIT_M mean two different things
+    either side of it. MUTATION: `return 0 if out < DEADBAND else out`."""
+    y_l = -CE.HALF_TRACK_M - CE.CAMERA_OFFSET_M + CE.DEPART_DEADBAND_M + 0.01
+    d = CE.lane_departure_m(y_l, y_l + 3.6, self.P, self.P)
+    assert 0.0 < d < 0.02
 
   def test_crossing_the_right_line_is_symmetric(self):
     """Which way we fell out of the lane says nothing about the corner.
@@ -468,8 +487,10 @@ class TestLaneDepartureGeometry:
     NOTE this assertion was VACUOUS in v3.6.4 — with the signs inverted both
     sides returned 0.0 and were trivially equal. Both sides are non-zero now,
     which is asserted so it cannot go quiet again."""
-    left = CE.lane_departure_m(-0.60, 3.10, self.P, self.P)
-    right = CE.lane_departure_m(-3.10, 0.60, self.P, self.P)
+    left = CE.lane_departure_m(-0.60 - CE.CAMERA_OFFSET_M, 3.10 - CE.CAMERA_OFFSET_M,
+                               self.P, self.P)
+    right = CE.lane_departure_m(-3.10 - CE.CAMERA_OFFSET_M, 0.60 - CE.CAMERA_OFFSET_M,
+                                self.P, self.P)
     assert left > 0.0 and right > 0.0
     assert left == pytest.approx(right)
 
@@ -525,9 +546,12 @@ class TestLaneDepartureDrivesSeverity:
     assert p.verdict()[1] == pytest.approx(2.0)
 
   def test_it_is_a_peak_not_a_rate(self):
-    """One wheel a quarter of a metre outside the line is a fact about the
-    corner; it does not have to persist to count. Half a second of departure
-    in a four second pass must still register."""
+    """A departure is a fact about the corner and does not have to last for the
+    bend to count. Half a second of it in a four second pass must register.
+
+    v3.6.5 — the peak is now taken on a DEPART_TAU_S low pass, so half a second
+    reaches most of the way rather than all of it. The looseness in the bound
+    is that filter, not slack in the requirement."""
     p, e = CE.CornerPass(), CE.LateralEffort()
     p.begin()
     for i in range(400):
@@ -535,8 +559,25 @@ class TestLaneDepartureDrivesSeverity:
       e.update(self.DT, 20.0, 0.005, 0.0, 0.0, True, departure_m=d)
       e.a_lat = 2.0
       p.add(e, self.DT, 20.0)
-    assert p.depart_peak == pytest.approx(0.4)
+    assert 0.3 < p.depart_peak <= 0.4
     assert p.verdict()[1] > 1.0
+
+  def test_a_single_frame_of_noise_is_not_a_departure(self):
+    """v3.6.5 — THE OTHER HALF OF THE REPORTED PROBLEM. A PEAK over a four
+    second pass of a signal derived from an extrapolation is the noise floor,
+    not the signal: one frame set `depart_peak` for the whole bend. v3.6.4
+    argued "it does not have to persist to count", which is right about the
+    ROAD and wrong about the SENSOR. MUTATION: remove the DEPART_TAU_S filter
+    and one frame condemns the corner again."""
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for i in range(400):
+      d = 0.6 if i == 100 else 0.0
+      e.update(self.DT, 20.0, 0.005, 0.0, 0.0, True, departure_m=d)
+      e.a_lat = 2.0
+      p.add(e, self.DT, 20.0)
+    assert p.depart_peak < 0.05
+    assert p.verdict()[1] < CE.CLEAN_TH
 
   def test_a_lane_change_is_not_a_lane_departure(self):
     """Crossing a line on purpose says nothing about the corner. MUTATION:
@@ -649,10 +690,14 @@ class TestTheDriversVerdict:
     it in here would let the one signal arguing for more speed lower the
     ceiling. Pinned on the signature, the way the v3.4.0 status dot pinned the
     absence of a pitch term."""
-    import inspect
-    names = set(inspect.signature(CE.LateralEffort.update).parameters)
-    assert 'brake_pressed' in names and 'long_active' in names
-    assert not any('gas' in n for n in names)
+    e = CE.LateralEffort()
+    # lateral engaged, longitudinal handed back BY THE PEDAL: not a takeover
+    e.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=False, gas_pressed=True)
+    assert not e.override
+    # the same longitudinal state with the pedal UP is
+    e2 = CE.LateralEffort()
+    e2.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=False, gas_pressed=False)
+    assert e2.override
 
   def test_a_pass_that_was_never_ours_is_not_a_takeover(self):
     """v3.6.4's rule, unchanged: the human driving the whole bend teaches
@@ -728,3 +773,75 @@ class TestTheDriversVerdict:
     clean = self._pass(seconds=4.0)
     assert clean.verdict()[1] == pytest.approx(0.0)
     assert self._pass(seconds=4.0, take_at=2.0).verdict()[1] > clean.verdict()[1]
+
+
+class TestTheDriversDemonstration:
+  """FunnyPilot v3.6.5 — the mirror of the takeover, and the only signal in this
+  file that can make a corner FASTER on one pass.
+
+  openpilot is steering, nothing is stressed, the driver holds the throttle.
+  Whatever the car reaches under those conditions is not an estimate of what the
+  corner supports — it is a demonstration that it supports it.
+  """
+  DT = 0.01
+
+  def _pass(self, seconds=4.0, gas_from=None, lat=True, sawing=False,
+            brake=False):
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    n = int(seconds / self.DT)
+    for i in range(n):
+      t = i * self.DT
+      gas = gas_from is not None and t >= gas_from
+      e.update(self.DT, 20.0, 0.005,
+               30.0 + (5.0 if (i // 5) % 2 else -5.0) if sawing else 30.0,
+               0.0, lat, long_active=not gas, gas_pressed=gas,
+               brake_pressed=brake and gas)
+      e.a_lat = 3.0
+      p.add(e, self.DT, 20.0)
+    return p
+
+  def test_gas_with_lateral_engaged_is_a_demonstration(self):
+    """MUTATION: drop the `demo` term from LateralEffort, or the demo_time
+    accumulation from CornerPass.add."""
+    p = self._pass(gas_from=1.0)
+    assert p.demo_time >= CE.MIN_DEMO_S
+    assert p.demonstrated()
+    assert p.usable()
+
+  def test_it_is_not_a_takeover(self):
+    """THE BUG v3.6.5 SHIPPED. `controlsd` clears `longActive` for any
+    `overrideLongitudinal` event and a gas press is one, so without the pedal
+    itself a driver asking for more speed was indistinguishable from one
+    switching longitudinal off — and scored 2.0. MUTATION: remove the
+    `and not gas` term from `override`."""
+    p = self._pass(gas_from=1.0)
+    assert not p.took_over
+    assert p.verdict()[1] < CE.CLEAN_TH
+
+  def test_a_tap_is_not_a_demonstration(self):
+    """MIN_DEMO_S. One dab of the pedal says nothing about the whole bend."""
+    p = self._pass(seconds=4.0, gas_from=3.9)
+    assert not p.demonstrated()
+
+  def test_a_stressed_pass_is_never_a_demonstration(self):
+    """THE GUARD THAT MAKES THIS SAFE. Throttle through a bend the car is
+    sawing at is not proof the bend supports it — it is proof it does not.
+    MUTATION: drop the CLEAN_TH term from demonstrated()."""
+    p = self._pass(gas_from=1.0, sawing=True)
+    assert p.verdict()[1] >= CE.CLEAN_TH
+    assert not p.demonstrated()
+
+  def test_the_driver_steering_is_never_a_demonstration(self):
+    """v3.6.4's rule is untouched: with the human on the wheel the speed they
+    choose says nothing about what the CONTROLLER can do through the bend."""
+    p = self._pass(gas_from=1.0, lat=False)
+    assert not p.demonstrated()
+
+  def test_the_brake_still_ends_it(self):
+    """Gas is exempted from the takeover; the brake is not."""
+    # brake and gas together from t=1.0: the pass starts ours, and the pedal
+    # that ENDS it is the brake
+    p = self._pass(gas_from=1.0, brake=True)
+    assert p.took_over
+    assert not p.demonstrated()

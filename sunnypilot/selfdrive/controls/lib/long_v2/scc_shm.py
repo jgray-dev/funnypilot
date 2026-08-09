@@ -56,6 +56,15 @@ import time
 SHM_PATH = '/dev/shm/fp_scc'
 LEARN_SHM_PATH = '/dev/shm/fp_learn'
 CORNERS_SHM_PATH = '/dev/shm/fp_corners'
+# v3.6.5 — "an unmanageable bend is coming up", one character, its own file.
+#
+# A SEPARATE CHANNEL RATHER THAN A FIELD ON fp_scc, for the reason the v3.5.0
+# note gives: that reader unpacks positionally and its contract is pinned by
+# tests, and widening a working channel for an unrelated consumer is how a
+# reader that indexes [4] starts reading a different quantity. This one is read
+# by selfdrived, which is the most schedule-sensitive process on the device, so
+# it is deliberately the smallest thing that can carry a boolean.
+WARN_SHM_PATH = '/dev/shm/fp_cornerwarn'
 
 # A bound on the payload, not a tuning knob: 400 m of road holds a handful of
 # corners, and an unbounded list would make a 20 Hz write depend on how curvy
@@ -126,6 +135,35 @@ def write_corners_shm(corners) -> None:
     pass
 
 
+def write_corner_warning_shm(warn: bool) -> None:
+  """Publish "a bend we cannot manage is coming up". v3.6.5. Never raises."""
+  try:
+    _atomic_write(WARN_SHM_PATH, f"{1 if warn else 0},{time.monotonic():.3f}")
+  except Exception:
+    pass
+
+
+def read_corner_warning_shm() -> bool:
+  """False on any doubt — missing file, garbage, or a publisher that stopped.
+
+  THE FAILURE DIRECTION IS THE OPPOSITE OF THE USUAL ONE HERE, and deliberately
+  so: this drives a banner, not a control output, and a warning latched on by a
+  dead plannerd would train the driver to ignore it. Silence is the safe
+  failure for an alert; the speed cap is what fails safe for the car.
+  """
+  try:
+    with open(WARN_SHM_PATH) as f:
+      parts = f.read().strip().split(',')
+    if len(parts) < 2:
+      return False
+    age = time.monotonic() - float(parts[1])
+    if not -1.0 < age <= STALE_S:
+      return False
+    return parts[0].strip() == "1"
+  except Exception:
+    return False
+
+
 def write_scc_debug_shm(vals) -> None:
   """Publish the dev-UI payload from plannerd. Best-effort; never raises."""
   try:
@@ -147,7 +185,8 @@ def read_scc_debug_shm():
     if not -1.0 < age <= STALE_S or any(x != x for x in p):
       return DEBUG_INACTIVE
     return (int(p[0]), p[1], p[2], p[3], p[4], int(p[5]), bool(int(p[6])),
-            p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]), p[14])
+            p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]), p[14],
+            int(p[15]))
   except Exception:
     return DEBUG_INACTIVE
 
@@ -241,7 +280,7 @@ DEBUG_SHM_PATH = '/dev/shm/fp_sccdbg'
 #   gate, cap_mps, authority, learned_count,
 #   last_pass_a_peak, last_pass_severity, last_pass_radius_m, pass_count,
 #   last_pass_lane_departure_m
-DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0)
+DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0)
 
 LAT_INTERP_PATH = '/dev/shm/lat_interp'
 # Fraction of control frames in which the EPS governor's bound was actually

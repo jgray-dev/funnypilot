@@ -72,7 +72,19 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import RELEAS
 # Learning is what earns the speed back, and it may earn its way past 2.1 —
 # A_LAT_MAX is the ceiling, and it is a comfort bound, not a grip bound: 3.0
 # m/s^2 is a firm corner in a family saloon, and well inside what the tyres do.
-A_LAT_DEFAULT = 1.8
+#
+# v3.6.5 — 1.8 -> 2.25, owner-requested: a first visit to an ordinary bend was
+# unbearably slow. THE UNITS ARE WHY THAT LOOKS LIKE A BIG STEP AND IS NOT:
+# speed is sqrt(a*R), so a 25% budget increase is only sqrt(1.25) = 11.8% of
+# SPEED — the middle of the 10-15% that was asked for. At R = 100 m the first
+# pass goes 30.0 -> 33.5 mph.
+# THE SAFE DIRECTION IS UNTOUCHED. This moves only the number used where
+# NOTHING has been learned; a corner that has taught us it is slow still gets
+# `CONF_LOWER_FLOOR` weight on visit one and overrides this immediately, and
+# `R_TRIM_LO` in road_geometry still trims the radius pessimistically. 2.25 is
+# also comfortably under A_LAT_MAX, so a learned corner can still earn its way
+# above the default rather than starting at the ceiling.
+A_LAT_DEFAULT = 2.25
 A_LAT_MIN = 1.0        # a learned ceiling may never argue for less than this
 A_LAT_MAX = 3.0        # ...nor a learned floor for more
 
@@ -145,8 +157,30 @@ DRIFT_UNKNOWN = DRIFT_LEARNING
 # still validated, and the MPC now has ~40% margin to FOLLOW it. If a corner is
 # still entered too fast after v3.6.5, this table is the next knob — and it can
 # now be steepened up to about 1.35 before the same trap reappears.
+#
+# v3.6.5 — RETUNED FOR "BRAKE LATER, BRAKE FIRMER". Owner: "I'd rather apply a
+# little bit of braking and have an extra 100 ft of cruise speed prior to the
+# corner than slow down 50,000 feet before by gas gating."
+#
+# READ THE TABLE THE RIGHT WAY ROUND, because it inverts the intuition. J is
+# the integral of the decel budget measured BACKWARDS from the corner, so a
+# SMALL far-field budget means the cap at 400 m is already low, i.e. slow down
+# early and gently. A LARGER far-field budget holds cruise speed further in and
+# pays for it with a firmer finish. "Start later" is therefore a bigger J, not
+# a smaller one.
+#
+#   implied decel   v3.6.5            v3.6.5
+#   0-60 m          1.20              1.35
+#   60-150 m        0.80              1.00
+#   150-400 m       0.50              0.62
+#
+# MEASURED, 60 mph set into a 29 mph bend: the cap first constrains at 400 m
+# (where it appears) before, and at ~327 m now — about 240 ft more road at
+# cruise speed. 1.35 is 80% of what the MPC can deliver after v3.6.5 raised
+# CRUISE_MIN_ACCEL to -1.6, so the headroom guard still holds with room to
+# spare; at the old -1.2 this table would have been unfollowable.
 _J_BP = (0.0, 60.0, 150.0, 400.0)    # m of distance-to-go, after the arrival lead
-_J_V = (0.0, 72.0, 144.0, 269.0)     # integral of the budget, m^2/s^2
+_J_V = (0.0, 81.0, 171.0, 326.5)     # integral of the budget, m^2/s^2
 
 # Seconds of travel AT THE CORNER SPEED by which the corner speed is reached
 # early. v3.6.1 raised this from 2.0: the lead lands us at v_curve exactly

@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   SccCornersElement, SccRadiusElement, SccCornerSpeedElement, SccDistanceElement,
   SccALatElement, SccVisitsElement, SccGateElement, SccCapElement,
   SccAuthorityElement, SccLearnedElement, SccLastPassElement, SccPassCountElement,
-  SccLaneDepartElement,
+  SccLaneDepartElement, SccOrphanElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -58,6 +58,7 @@ class DeveloperUiRenderer(Widget):
     self.scc_learned = SccLearnedElement()
     self.scc_last_pass = SccLastPassElement()
     self.scc_lane_depart = SccLaneDepartElement()
+    self.scc_orphan = SccOrphanElement()
     self.scc_pass_count = SccPassCountElement()
 
   @staticmethod
@@ -174,6 +175,7 @@ class DeveloperUiRenderer(Widget):
       self.scc_last_pass.update(sm, ui_state.is_metric),
       self.scc_lane_depart.update(sm, ui_state.is_metric),
       self.scc_pass_count.update(sm, ui_state.is_metric),
+      self.scc_orphan.update(sm, ui_state.is_metric),
       self.scc_learned.update(sm, ui_state.is_metric),
     ]
 
