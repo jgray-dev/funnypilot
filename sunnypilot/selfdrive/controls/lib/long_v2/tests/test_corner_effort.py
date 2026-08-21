@@ -14,6 +14,7 @@ import math
 import pytest
 
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import corner_effort as CE
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import corner_speed as CE_CS
 
 
 DT = 0.01     # the carState rate this is actually fed at
@@ -678,12 +679,23 @@ class TestTheDriversVerdict:
     assert p.usable()
     assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
 
-  def test_the_brake_pedal_counts_too(self):
-    """'any portion, longitudinal or lateral'. Lateral stays active here, so
-    only the pedal can produce the verdict."""
+  def test_the_brake_pedal_no_longer_condemns_the_corner(self):
+    """v3.6.6 REVERSES THE v3.6.5 HALF OF THIS ON PURPOSE, and the owner's rule
+    is why: "if we take manual control of long going through a corner, the speed
+    we take it at should only ever RAISE the corner's speed". Braking through a
+    45 mph bend is a statement about the driver's appetite, not about the bend —
+    they may be behind traffic or simply unsure of the road — so it must not
+    leave that bend permanently slower.
+
+    The pass is not discarded, it is RAISE-ONLY (see scc_learn_store.observe),
+    and the lateral signals measured during it still lower the ceiling on their
+    own evidence. Only the SPEED is removed from the argument.
+
+    MUTATION: put brake back into `override`."""
     p = self._pass(take_at=2.0, brake=True)
-    assert p.took_over
-    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+    assert not p.took_over
+    assert p.long_manual
+    assert p.verdict()[1] == pytest.approx(0.0)
 
   def test_the_accelerator_is_deliberately_absent(self):
     """A driver adding throttle mid-bend is evidence we were too SLOW. Folding
@@ -691,12 +703,19 @@ class TestTheDriversVerdict:
     ceiling. Pinned on the signature, the way the v3.4.0 status dot pinned the
     absence of a pitch term."""
     e = CE.LateralEffort()
-    # lateral engaged, longitudinal handed back BY THE PEDAL: not a takeover
-    e.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=False, gas_pressed=True)
-    assert not e.override
-    # the same longitudinal state with the pedal UP is
+    # v3.6.6 — NO longitudinal state is a takeover any more, pedal up or down,
+    # because a manual speed choice can only ever RAISE a corner. What it does
+    # set is `long_manual`, which makes the pass raise-only.
+    for gas, brake, long_on in ((True, False, False), (False, True, True),
+                                (False, False, False)):
+      e = CE.LateralEffort()
+      e.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=long_on,
+               gas_pressed=gas, brake_pressed=brake)
+      assert not e.override, (gas, brake, long_on)
+      assert e.long_manual, (gas, brake, long_on)
+    # the WHEEL is still a takeover
     e2 = CE.LateralEffort()
-    e2.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=False, gas_pressed=False)
+    e2.update(0.01, 20.0, 0.005, 0.0, 0.0, False)
     assert e2.override
 
   def test_a_pass_that_was_never_ours_is_not_a_takeover(self):
@@ -838,10 +857,16 @@ class TestTheDriversDemonstration:
     p = self._pass(gas_from=1.0, lat=False)
     assert not p.demonstrated()
 
-  def test_the_brake_still_ends_it(self):
-    """Gas is exempted from the takeover; the brake is not."""
-    # brake and gas together from t=1.0: the pass starts ours, and the pedal
-    # that ENDS it is the brake
+  def test_braking_marks_the_pass_raise_only_and_moves_nothing(self):
+    """v3.6.6 — the brake no longer condemns the corner. It also cannot make it
+    faster, and NOT because `demonstrated()` rejects it: seeding never bypasses
+    update_interval's direction guards, and a pass the driver braked through has
+    a LOW `a_peak`, which may not lower a floor. The two mechanisms compose to
+    exactly the owner's rule — a 45 mph bend taken by hand at 35 stays 45."""
     p = self._pass(gas_from=1.0, brake=True)
-    assert p.took_over
-    assert not p.demonstrated()
+    assert not p.took_over
+    assert p.long_manual
+    lo, hi = CE_CS.update_interval(2.4, 3.0, a_peak=p.verdict()[0] * 0.4,
+                                  severity=0.0, seed=True)
+    assert lo == pytest.approx(2.4), "a slow manual pass must not lower the floor"
+    assert hi == pytest.approx(3.0), "...nor touch the ceiling"

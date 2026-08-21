@@ -1093,7 +1093,7 @@ class TestTheSlowdownGradient:
     exactly 1. No bend can fade to invisible however far away it is — only its
     run-in and run-out fade."""
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
-    gov, cap = _rm.corner_plan_at(0.0, [(0.0, self.HALF, v_corner)], self._cap())
+    gov, cap, _kn = _rm.corner_plan_at(0.0, [(0.0, self.HALF, v_corner)], self._cap())
     assert gov == pytest.approx(v_corner)
     assert cap == pytest.approx(v_corner)
     assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0)
@@ -1106,7 +1106,7 @@ class TestTheSlowdownGradient:
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
     ac = self._cap()
     for m in (-self.HALF, -10.0, 0.0, 10.0, self.HALF):
-      gov, cap = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
+      gov, cap, _kn = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
       assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0), m
 
   def test_it_builds_monotonically_through_the_approach(self):
@@ -1116,7 +1116,7 @@ class TestTheSlowdownGradient:
     ac = self._cap()
     alphas = []
     for ft in (700, 600, 500, 400, 300, 200, 100, 0):
-      gov, cap = _rm.corner_plan_at(-ft * 0.3048, [(0.0, self.HALF, v_corner)], ac)
+      gov, cap, _kn = _rm.corner_plan_at(-ft * 0.3048, [(0.0, self.HALF, v_corner)], ac)
       alphas.append(_rm.plan_alpha(v_set, gov, cap))
     assert alphas == sorted(alphas)
     assert alphas[-1] == pytest.approx(1.0)
@@ -1130,7 +1130,7 @@ class TestTheSlowdownGradient:
     alphas = []
     # measured from the EXIT, which is HALF beyond the apex
     for m in (0.0, 30.0, 60.0, 90.0, 140.0):
-      gov, cap = _rm.corner_plan_at(self.HALF + m, [(0.0, self.HALF, v_corner)], ac)
+      gov, cap, _kn = _rm.corner_plan_at(self.HALF + m, [(0.0, self.HALF, v_corner)], ac)
       alphas.append(_rm.plan_alpha(v_set, gov, cap))
     assert alphas == sorted(alphas, reverse=True)
     assert alphas[0] == pytest.approx(1.0)
@@ -1148,7 +1148,7 @@ class TestTheSlowdownGradient:
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
     ac = self._cap()
     def alpha_at(m):
-      gov, cap = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
+      gov, cap, _kn = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
       return _rm.plan_alpha(v_set, gov, cap)
     assert alpha_at(self.HALF + 100.0) < alpha_at(-self.HALF - 100.0)
 
@@ -1156,25 +1156,25 @@ class TestTheSlowdownGradient:
     """0% opacity means 'the set speed decides here'. A bend we would take at
     or above the set speed has nothing to say and must not tint the road."""
     v_set = 30 / self.MPH
-    gov, cap = _rm.corner_plan_at(-50.0, [(0.0, self.HALF, 45 / self.MPH)], self._cap())
+    gov, cap, _kn = _rm.corner_plan_at(-50.0, [(0.0, self.HALF, 45 / self.MPH)], self._cap())
     assert _rm.plan_alpha(v_set, gov, cap) == 0.0
 
   def test_no_corners_is_no_plan(self):
-    assert _rm.corner_plan_at(0.0, [], self._cap()) == (0.0, 0.0)
+    assert _rm.corner_plan_at(0.0, [], self._cap()) == (0.0, 0.0, False)
     assert _rm.plan_alpha(25.0, 0.0, 0.0) == 0.0
 
   def test_a_short_entry_is_skipped_not_fatal(self):
     """The corner tuple has grown twice now. A consumer that cannot survive a
     row it does not recognise is how the minimap vanished in v3.6.3."""
     ac = self._cap()
-    gov, _c = _rm.corner_plan_at(-40.0, [(0.0, 9.0), (0.0, self.HALF, 12.0)], ac)
+    gov, _c, _kn = _rm.corner_plan_at(-40.0, [(0.0, 9.0), (0.0, self.HALF, 12.0)], ac)
     assert gov == pytest.approx(12.0)
 
   def test_the_slower_of_two_corners_governs(self):
     """The same min() the controller takes, so the ribbon cannot disagree with
     the cap the car is actually holding."""
     ac = self._cap()
-    gov, _cap = _rm.corner_plan_at(-80.0, [(0.0, self.HALF, 20.0),
+    gov, _cap, _kn = _rm.corner_plan_at(-80.0, [(0.0, self.HALF, 20.0),
                                            (40.0, self.HALF, 9.0)], ac)
     assert gov == pytest.approx(9.0)
 
@@ -1200,5 +1200,62 @@ class TestTheSlowdownGradient:
     from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import RELEASE_RATE
     assert CS.RELEASE_RATE is RELEASE_RATE
     # and the widget's own value comes from that function, not a local copy
-    _gov, cap = _rm.corner_plan_at(45.0, [(0.0, 20.0, 12.0)], self._cap())
+    _gov, cap, _kn = _rm.corner_plan_at(45.0, [(0.0, 20.0, 12.0)], self._cap())
     assert cap == pytest.approx(CS.corner_cap(12.0, -45.0, 20.0))
+
+
+class TestAKnownCornerThatCostsNothing:
+  """FunnyPilot v3.6.6 — "the minimap should show green for corners where we
+  recognise them as corners, but they don't require any slowdown."
+
+  Before this, alpha 0 meant "the set speed decides here" — which a straight
+  road and a free-flowing recognised bend both produce, so the ribbon could not
+  distinguish "SCC-M v2 has nothing to say" from "SCC-M v2 has looked at this
+  and it is fine". The second is the feature working, and worth seeing.
+  """
+  MPH = 2.23694
+  HALF = 20.0
+
+  def _cap(self):
+    from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import corner_cap
+    return corner_cap
+
+  def test_a_free_corner_reports_itself_as_a_corner(self):
+    """MUTATION: drop the third return value, or the `abs(s - s_apex) <= half`
+    test. The bend then reads as plain road."""
+    gov, cap, known = _rm.corner_plan_at(0.0, [(0.0, self.HALF, 45 / self.MPH)],
+                                         self._cap())
+    assert known
+    assert _rm.plan_alpha(30 / self.MPH, gov, cap) == 0.0
+
+  def test_plain_road_does_not(self):
+    _gov, _cap, known = _rm.corner_plan_at(300.0, [(0.0, self.HALF, 12.0)],
+                                           self._cap())
+    assert not known
+
+  def test_the_extent_is_what_counts_not_the_approach(self):
+    """A corner's run-in is not the corner. Green over the approach would
+    colour hundreds of metres of straight road for a bend that is still far
+    away."""
+    corners = [(0.0, self.HALF, 12.0)]
+    ac = self._cap()
+    assert _rm.corner_plan_at(-self.HALF, corners, ac)[2]
+    assert not _rm.corner_plan_at(-self.HALF - 5.0, corners, ac)[2]
+
+  def test_green_is_the_forks_one_green(self):
+    """A driver should learn ONE green. MUTATION: re-declare a local colour —
+    the drift is the problem, not the current value."""
+    assert _rm.KNOWN_FREE_RGB == (_tok.ENGAGED.r, _tok.ENGAGED.g, _tok.ENGAGED.b)
+
+  def test_it_does_not_compete_with_a_bend_that_costs_speed(self):
+    """This is information, not a warning: a constraining corner must always
+    read louder than a free one."""
+    assert _rm.KNOWN_FREE_ALPHA < 1.0
+    free = _rm.blend(_rm._RAMP[0][1], _rm.KNOWN_FREE_RGB, _rm.KNOWN_FREE_ALPHA)
+    hot = _rm.blend(_rm._RAMP[0][1], _rm.ramp_color(20.0), 1.0)
+    assert hot[0] > free[0]
+
+  def test_the_two_bands_do_not_overlap(self):
+    """Above KNOWN_FREE_TH the ordinary ramp takes over, so no point on the
+    ribbon is ever both 'free' and 'slowing'."""
+    assert 0.0 < _rm.KNOWN_FREE_TH < 1.0

@@ -207,7 +207,7 @@ class TestTheApproachEnvelope:
     d = 1.0
     while d < 400.0:
       a = (CS.approach_cap(v, d + 1.0) ** 2 - CS.approach_cap(v, d) ** 2) / 2.0
-      assert a <= 1.351, f"implied decel {a:.3f} m/s^2 at d={d}"
+      assert a <= 1.601, f"implied decel {a:.3f} m/s^2 at d={d}"
       d += 1.0
 
   def test_v366_starts_later_than_v365_did(self):

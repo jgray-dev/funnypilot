@@ -404,8 +404,9 @@ class LateralEffort:
     self.disturbed = False     # the road is hitting the car; see DISTURB_DEG_S
     self.departure = 0.0       # metres our nearer edge is outside the lane
     self.engaged = False       # openpilot was steering this frame
-    self.override = False      # the human has taken some control this frame
-    self.demo = False          # ...or is DEMONSTRATING a speed; see MIN_DEMO_S
+    self.override = False      # the human has taken the WHEEL this frame
+    self.long_manual = False   # ...or is choosing the speed by pedal
+    self.demo = False          # ...which, with lateral still on, is a DEMONSTRATION
 
   def update(self, dt: float, v_ego: float, curvature: float, steering_angle_deg: float,
              steer_torque: float, lat_active: bool, saturated: bool = False,
@@ -427,13 +428,33 @@ class LateralEffort:
     # `gas_pressed` defaults False so a caller that does not know about the
     # pedal gets the v3.6.5 answer rather than a silently different one.
     gas = bool(gas_pressed)
-    self.override = (not bool(lat_active)) or bool(brake_pressed) or \
-                    (not bool(long_active) and not gas)
+
+    # v3.6.6 — LONGITUDINAL AND LATERAL HANDOVERS ARE NO LONGER THE SAME EVENT,
+    # and the split is the owner's rule: "if we take manual control of long
+    # going through a corner, the speed we take it at should only ever RAISE the
+    # corner's speed."
+    #
+    # The reasoning holds up. A driver choosing to go SLOWER through a bend is
+    # not evidence about the bend — they may be behind traffic, unsure of the
+    # road, or simply cautious — so a 45 mph corner taken by hand at 35 must
+    # stay a 45 mph corner. A driver going FASTER while openpilot still holds
+    # the line IS evidence, and the strongest available. Neither of those is a
+    # reason to lower the ceiling, so a longitudinal handover makes the pass
+    # RAISE-ONLY rather than condemning it.
+    #
+    # `override` — the thing that TRUNCATES the pass and carries
+    # TAKEOVER_SEVERITY — is therefore LATERAL ONLY from v3.6.6. That is also
+    # what makes the raise measurable at all: with lateral still active the
+    # oscillation, clamp, saturation and lane signals are still OURS, so the
+    # pass can be judged clean and its `a_peak` believed.
+    self.override = not bool(lat_active)
+    # ...and this is "the human owns the speed right now", by any route.
+    self.long_manual = gas or bool(brake_pressed) or (not bool(long_active))
 
     # THE DEMONSTRATION. Only while openpilot still has the wheel: with the
     # driver steering, the speed they choose says nothing about what the
     # CONTROLLER can do through the bend, which is the whole v3.6.4 argument.
-    self.demo = gas and bool(lat_active)
+    self.demo = self.long_manual and bool(lat_active)
 
     # A LANE CHANGE IS NOT A LANE DEPARTURE. Crossing a line on purpose says
     # nothing about the corner, so the signal is suppressed outright rather
@@ -533,8 +554,9 @@ class CornerPass:
     self.took_over = False     # ...and the human then intervened; see TAKEOVER_SEVERITY
     self._started = False
     self._ended = False        # the human is driving now; stop measuring
-    self._override_t = 0.0     # how long they have held an axis; TAKEOVER_DWELL_S
-    self.demo_time = 0.0       # held throttle with lateral active; MIN_DEMO_S
+    self._override_t = 0.0     # how long they have held the wheel; TAKEOVER_DWELL_S
+    self.demo_time = 0.0       # driver chose the speed, lateral on; MIN_DEMO_S
+    self.long_manual = False   # the driver owned the speed at some point
 
   def begin(self) -> None:
     self.reset()
@@ -611,6 +633,8 @@ class CornerPass:
     self.reversals += int(effort.reversal)
     if effort.demo:
       self.demo_time += dt
+    if effort.long_manual:
+      self.long_manual = True
     if effort.departure > self.depart_peak:
       self.depart_peak = min(effort.departure, MAX_DEPART_M)
     if effort.limited:
@@ -623,7 +647,7 @@ class CornerPass:
     return self.engaged_duration / self.duration
 
   def demonstrated(self) -> bool:
-    """The driver held the throttle through a bend openpilot steered cleanly.
+    """The driver chose the speed through a bend openpilot steered cleanly.
 
     v3.6.5 — see MIN_DEMO_S. The CLEAN_TH term is what keeps this from being a
     licence: a pass that oscillated or left the lane is not a demonstration of

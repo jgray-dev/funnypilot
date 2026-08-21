@@ -379,7 +379,7 @@ class LearnStore:
   def observe(self, lat: float, lon: float, bearing: float, radius: float,
               a_peak: float, severity: float, flags: int = 0,
               now: float | None = None, allow_raise: bool = True,
-              seed: bool = False) -> str:
+              seed: bool = False, allow_lower: bool = True) -> str:
     """Fold one traversal in. Returns the key it landed on.
 
     The interval maths lives in corner_speed.update_interval — this method owns
@@ -416,6 +416,13 @@ class LearnStore:
     lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh or bool(seed))
     if not allow_raise:
       lo = min(lo, c.a_lo)
+    # v3.6.6 — THE MIRROR, and the owner's rule for a manual longitudinal pass:
+    # "the speed we take it at should only ever RAISE the corner's speed". A
+    # driver choosing to go slower through a bend is not evidence about the
+    # bend, so the ceiling is held where it was; a driver going faster while
+    # openpilot still holds the line is evidence, and the floor still moves.
+    if not allow_lower:
+      hi = max(hi, c.a_hi)
     c.a_lo, c.a_hi = lo, hi
     # v3.6.2 — how far this pass moved the answer, which is what makes the
     # difference between a corner we have visited and one we have worked out.

@@ -55,6 +55,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import side_signals, stations
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.speed_sign import SpeedSign
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.route_map import RouteMap
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_corner_warning_shm
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.sunnypilot.selfdrive.car.brake_light_shm import read_brake_light
@@ -146,6 +147,8 @@ class HudRendererSP(HudRenderer):
 
     self._sign = SpeedSign()
     self._route_map = RouteMap()
+    self._corner_warn = False    # v3.6.6, polled from /dev/shm at 5 Hz
+    self._warn_t = 0.0
 
     self.pcm_cruise_speed: bool = True
     self.show_icbm_status: bool = False
@@ -214,6 +217,21 @@ class HudRendererSP(HudRenderer):
                                      read_brake_light())
 
     self._pills = self._build_pills(gas_gating, sla_gate)
+
+    # FunnyPilot v3.6.6 — SCC-M v2 has a bend ahead whose learned budget has
+    # bottomed out and which still stresses the car. v3.6.5 said so with a
+    # banner; the owner asked for the state glow instead, which is the right
+    # channel for it — a banner is read, an edge pulse is FELT, and the
+    # peripheral edge is already this HUD's engagement-state channel.
+    # Polled at 5 Hz: the value changes on the 20 Hz planner and the pulse lasts
+    # seconds, so a frame-rate read would be free of information.
+    now = time.monotonic()
+    if now - self._warn_t > 0.2:
+      self._warn_t = now
+      try:
+        self._corner_warn = read_corner_warning_shm()
+      except Exception:
+        self._corner_warn = False
     self._update_map_reference()
 
   def _update_map_reference(self) -> None:
@@ -301,8 +319,15 @@ class HudRendererSP(HudRenderer):
 
   def state_color(self) -> rl.Color:
     """v3.5.4: cross-faded. Engaging used to CUT from slate to green at the
-    frame boundary; on a 120 px glow that is a flash in peripheral vision."""
-    return self._state_tint.update(_STATE_COLORS.get(ui_state.status, T.DISENGAGED))
+    frame boundary; on a 120 px glow that is a flash in peripheral vision.
+
+    v3.6.6 — AMBER OVERRIDES THE ENGAGEMENT COLOUR while an unmanageable bend is
+    coming up. It goes through the SAME easer, so the change of meaning arrives
+    as a cross-fade rather than a flash; and it is `T.ATTENTION`, the fork's one
+    amber, so a driver learns one colour for "look at this" rather than one per
+    feature."""
+    base = _STATE_COLORS.get(ui_state.status, T.DISENGAGED)
+    return self._state_tint.update(T.ATTENTION if self._corner_warn else base)
 
   def chrome_scale(self) -> float:
     """Ambient-adaptive chrome strength, eased so a passing streetlight or a
@@ -317,6 +342,13 @@ class HudRendererSP(HudRenderer):
     """Breathe while the driver is overriding. This is the channel that
     replaces a text banner for 'I am not steering right now'."""
     self._glow_phase = (self._glow_phase + 1.0 / max(gui_app.target_fps, 1)) % 8.0
+    # v3.6.6 — the corner warning pulses HARDER AND FASTER than the override
+    # breath, and checked first so it wins when both are true. The two must not
+    # be confusable: an override breath says "I am not steering", this says
+    # "the bend ahead is beyond what I can hold". Deeper swing (0.55..1.15
+    # against 0.86..1.10) and roughly twice the rate.
+    if self._corner_warn:
+      return 0.85 + 0.30 * math.sin(self._glow_phase * math.pi / 0.6)
     if ui_state.status == UIStatus.OVERRIDE:
       return 0.86 + 0.24 * (0.5 + 0.5 * math.sin(self._glow_phase * math.pi / 1.3))
     return 1.0
@@ -426,13 +458,18 @@ class HudRendererSP(HudRenderer):
                       set_speed=self.set_speed if self.is_cruise_set else 0.0)
 
   def _draw_route_map(self, rect: rl.Rectangle) -> None:
-    """Drawn whenever SCC-M is enabled — the feature it visualises. The slot is
-    reserved regardless, so turning the feature on never shifts anything."""
-    try:
-      if not ui_state.sm['longitudinalPlanSP'].smartCruiseControl.map.enabled:
-        return
-    except Exception:
-      return
+    """ALWAYS DRAWN as of v3.6.6.
+
+    It used to be gated on `smartCruiseControl.map.enabled`, which is SCC-M v2's
+    `is_enabled` — `long_enabled and toggle`. `long_enabled` is
+    `carControl.enabled`, so with only LATERAL engaged the whole minimap
+    vanished, which is exactly when a driver is most interested in what the road
+    ahead is doing.
+    THE DATA IS THERE EITHER WAY: `_refresh_corners` runs before the
+    `is_enabled` check in `update()` precisely so the geometry keeps being
+    measured with the feature off, and `write_corners_shm` publishes it every
+    frame. The gate was hiding a live widget, not saving any work.
+    The slot was always reserved, so nothing shifts."""
     x = rect.x + rect.width - MAP_W - MAP_RIGHT_INSET
     self._route_map.render(rl.Rectangle(x, rect.y, MAP_W, rect.height),
                            self._map_ref_mps, self._sla_ratio, self._sla_on,

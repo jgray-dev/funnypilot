@@ -256,3 +256,110 @@ class TestCrossModuleAttributesExist:
             'DeveloperUiRenderer': (['Widget'], {'BOTTOM_BAR_HEIGHT'}, {'BOTTOM_BAR_HEIGHT'})}
     assert _defines(fake, 'DeveloperUiRenderer', 'BOTTOM_BAR_HEIGHT')
     assert not _defines(fake, 'DeveloperUiRenderer', 'get_bottom_dev_ui_offset')
+
+
+# ── v3.6.6: two HUD behaviours that cannot be exercised off-device ──────────
+#
+# `hud_renderer.py` imports ui_state, which needs msgq/ipc_pyx.so, so neither of
+# these can be tested by running them. Same reason the widget contracts above
+# are an AST scan: where the path cannot execute off the device, a static check
+# is the only check there is.
+
+def _hud_renderer_src():
+  import pathlib
+  p = pathlib.Path(__file__).resolve().parents[1] / "hud_renderer.py"
+  return p.read_text()
+
+
+def _fn_node(src: str, name: str):
+  import ast
+  for node in ast.walk(ast.parse(src)):
+    if isinstance(node, ast.FunctionDef) and node.name == name:
+      return node
+  raise AssertionError(f"{name} not found — this scan would pass vacuously")
+
+
+def _fn_src(src: str, name: str) -> str:
+  """The function's CODE, with its docstring removed.
+
+  THE DOCSTRING HAS TO GO, and finding that out was the point. The first cut of
+  the minimap guard asserted `"map.enabled" not in body` and failed on its own
+  explanation of why the gate was removed. That is the v3.5.8 lesson inverted:
+  a test a comment can satisfy is not a test, and neither is one a comment can
+  break."""
+  import ast
+  node = _fn_node(src, name)
+  body = [n for n in node.body
+          if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                  and isinstance(n.value.value, str))]
+  return "\n".join(ast.get_source_segment(src, n) or "" for n in body)
+
+
+class TestTheMinimapIsAlwaysDrawn:
+  """v3.6.6 — it used to be gated on `smartCruiseControl.map.enabled`, which is
+  SCC-M v2's `is_enabled` = `long_enabled and toggle`. `long_enabled` is
+  `carControl.enabled`, so with only LATERAL engaged the whole minimap vanished
+  — exactly when a driver is most interested in the road ahead.
+
+  THE DATA WAS THERE THE WHOLE TIME: `_refresh_corners` deliberately runs before
+  the `is_enabled` check in `update()`, and `write_corners_shm` publishes every
+  frame. The gate hid a live widget and saved no work.
+  """
+
+  def test_the_engagement_gate_is_gone(self):
+    """MUTATION: put the `if not ...map.enabled: return` back.
+
+    STRUCTURAL, NOT TEXTUAL — see _fn_src. Any bare `return` inside the function
+    is a gate on drawing, whatever it is spelled as."""
+    import ast
+    node = _fn_node(_hud_renderer_src(), "_draw_route_map")
+    for n in ast.walk(node):
+      assert not (isinstance(n, ast.Return) and n.value is None), \
+          "no early return may gate the minimap"
+      assert not (isinstance(n, ast.Attribute) and n.attr == "enabled"), \
+          "the minimap must not consult an enabled flag"
+
+  def test_it_is_still_actually_drawn(self):
+    """Anti-vacuous: deleting the whole function would satisfy the above."""
+    assert "self._route_map.render(" in _fn_src(_hud_renderer_src(), "_draw_route_map")
+
+
+class TestTheCurveWarningIsAGlowNotABanner:
+  """v3.6.6 — "instead of a banner alert saying sharp corner ahead, please
+  remove it and rather pulse the state glow around the edges of the screen with
+  orange as we approach the corner."
+
+  A banner is READ; an edge pulse is FELT, and the peripheral edge is already
+  this HUD's engagement-state channel — so the warning arrives in the driver's
+  vision without asking for a glance at text.
+  """
+
+  def test_the_banner_raise_site_is_gone(self):
+    """MUTATION: re-add `self.events.add(EventName.speedTooHigh)` to
+    selfdrived. The alert itself still exists for its stock purpose
+    (car_specific.py above MAX_CTRL_SPEED); what must not come back is SCC-M v2
+    raising it."""
+    import pathlib
+    sd = (pathlib.Path(__file__).resolve().parents[4]
+          / "selfdrived/selfdrived.py").read_text()
+    import ast
+    for n in ast.walk(ast.parse(sd)):
+      assert not (isinstance(n, ast.Attribute) and n.attr == "speedTooHigh"), \
+          "SCC-M v2 must not raise the banner any more"
+      assert not (isinstance(n, ast.Name)
+                  and "corner_warning" in n.id), "no shm poll in selfdrived"
+
+  def test_the_glow_carries_it_instead(self):
+    """Both halves: the COLOUR changes and the PULSE changes, so the warning is
+    distinguishable from the override breath by rhythm as well as hue."""
+    src = _hud_renderer_src()
+    assert "_corner_warn" in _fn_src(src, "state_color")
+    assert "_corner_warn" in _fn_src(src, "glow_intensity")
+
+  def test_it_is_polled_not_read_every_frame(self):
+    """The value changes on the 20 Hz planner and the pulse lasts seconds, so a
+    per-frame read would be free of information and cost a syscall on the
+    render path."""
+    body = _fn_src(_hud_renderer_src(), "_update_derived")
+    assert "read_corner_warning_shm" in body
+    assert "self._warn_t" in body, "the poll must be throttled"

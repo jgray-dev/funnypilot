@@ -25,7 +25,6 @@ from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_corner_warning_shm
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -165,7 +164,6 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.dashcamMode, static=True)
 
     self.events_sp = EventsSP()
-    self._fp_corner_warning = False   # v3.6.5, polled from /dev/shm at 5 Hz
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
@@ -315,19 +313,6 @@ class SelfdriveD(CruiseHelper):
     elif lane_turn_direction == TurnDirection.turnRight:
       self.events_sp.add(custom.OnroadEventSP.EventName.laneTurnRight)
 
-    # FunnyPilot v3.6.5 — SCC-M v2 has a bend ahead whose learned budget has
-    # bottomed out and which still stresses the car. Slowing further is not
-    # available, so the driver is told before the entry instead.
-    #
-    # READ AT 5 Hz, NOT EVERY FRAME. This is the highest-rate loop on the
-    # device and the value it is polling changes on the 20 Hz planner; one
-    # tmpfs read is ~11 us, so 100 Hz would be 1.1 ms per second of pure
-    # nothing. The alert holds for seconds either way, so the sampling delay
-    # is unobservable.
-    if self.sm.frame % 20 == 0:
-      self._fp_corner_warning = read_corner_warning_shm()
-    if self._fp_corner_warning:
-      self.events.add(EventName.speedTooHigh)
 
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput

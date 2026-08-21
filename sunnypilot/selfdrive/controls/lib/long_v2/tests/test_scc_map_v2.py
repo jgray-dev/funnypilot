@@ -102,7 +102,11 @@ class TestTheCapComesFromGeometry:
     assert not scc.is_active
 
   def test_a_bend_ahead_constrains(self):
-    scc = make(bend_route(radius=100.0))
+    # lead_in shortened for v3.6.6: the retuned envelope deliberately holds
+    # cruise speed further in, so a corner 340 m out no longer dips a full
+    # ACTIVATE_MARGIN under the set speed. That is the change, not a defect —
+    # TestTheGasGate below pins the coast still starting out there.
+    scc = make(bend_route(radius=100.0, lead_in=180.0))
     run(scc, v_ego=28.0, v_cruise=28.0, n=20)
     assert scc.is_active
     assert scc.output_v_target < 28.0
@@ -418,7 +422,7 @@ class TestLearningFeedsBackIn:
     """An unvisited corner must report zero confidence, or scc_fusion would
     let it bypass the vision veto and the junction-jog protection would be
     gone. MUTATION: default gov_confidence to anything above zero."""
-    scc = make(bend_route(radius=100.0))
+    scc = make(bend_route(radius=100.0, lead_in=180.0))
     run(scc, v_ego=28.0, v_cruise=28.0, n=5)
     assert scc.is_active
     assert scc.gov_confidence == 0.0
@@ -612,13 +616,21 @@ class TestTheGasGate:
 
   def test_it_fires_far_out_on_an_approach(self):
     """"Plenty of time ahead": at 60 mph into a bend the gate is on while the
-    corner is still hundreds of metres away, so the approach is a coast rather
-    than a late brake."""
-    route = bend_route(radius=100.0, lead_in=300.0)
+    corner is still hundreds of metres away, so the approach begins as a coast
+    rather than as a late brake.
+
+    v3.6.6 — THE LIFT-OFF STILL COMES FIRST, AND THAT IS THE POINT OF THE
+    RETUNE RATHER THAN AN EXCEPTION TO IT. The owner asked to trade a long gas
+    -gated coast for a shorter, firmer decel; what that means in the shape is
+    that the GATE still opens out here (~360 m) while the CAP now waits until
+    ~256 m — the coast phase got shorter at the far end, not deleted."""
+    route = bend_route(radius=100.0, lead_in=250.0)
     scc = make(route)
     at(scc, route, 0, 27.0, 27.0)
     assert scc.corners and min(c.distance for c in scc.corners) > 250.0
     assert scc.gas_gating_active
+    # ...and the cap is NOT yet constraining at that distance
+    assert not scc.is_active
 
   def test_it_does_not_fire_on_a_straight_road(self):
     straight = [(x / M_PER_DEG, 0.0) for x in range(-20, 400)]
@@ -1153,3 +1165,85 @@ class TestTheUnmanageableCornerWarning:
     finally:
       s.join_writes()
       tmp.cleanup()
+
+
+class TestAManualSpeedOnlyEverRaises:
+  """FunnyPilot v3.6.6 — the owner's rule, verbatim: "if we take manual control
+  of long going through a corner, the speed we take it at should only ever raise
+  the corner's speed. If we have a 45 mph recognised corner and take long
+  control over and go 35 through it, the corner's speed should remain at 45. If
+  we instead accelerated to 50 and the lateral control was able to keep us on
+  track, it should be raised to 50."
+
+  It is implemented as a SPLIT rather than a new signal: a LATERAL handover
+  still truncates the pass and condemns the corner (v3.6.5), while a
+  LONGITUDINAL one leaves the pass running — lateral is still ours, so the
+  effort signals are still meaningful — and makes it raise-only.
+  """
+
+  def _learned(self, d, a_lo=2.0, a_hi=2.2):
+    tmp = tempfile.TemporaryDirectory()
+    s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
+    key = s.observe(d / M_PER_DEG, 0.0, 0.0, 90.0, a_lo, 0.2)
+    c = s.corners[key]
+    c.a_lo, c.a_hi = a_lo, a_hi
+    return s, tmp, key
+
+  def test_going_slower_by_hand_leaves_the_corner_alone(self):
+    """MUTATION: drop `allow_lower` from the observe() call, or from the store.
+    The braking pass then drags the ceiling down and a 45 mph bend becomes a
+    35 mph bend permanently."""
+    s, tmp, key = self._learned(100.0)
+    try:
+      before = (s.corners[key].a_lo, s.corners[key].a_hi)
+      # a hard, stressed pass at a LOW peak — the shape a cautious manual
+      # traversal has — with allow_lower off
+      s.observe(100.0 / M_PER_DEG, 0.0, 0.0, 90.0, 1.2, 2.5, allow_lower=False)
+      assert (s.corners[key].a_lo, s.corners[key].a_hi) == pytest.approx(before)
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_the_same_pass_would_have_lowered_it_otherwise(self):
+    """Anti-vacuous: the mutation has to be able to change something."""
+    s, tmp, key = self._learned(100.0)
+    try:
+      s.observe(100.0 / M_PER_DEG, 0.0, 0.0, 90.0, 1.2, 2.5, allow_lower=True)
+      assert s.corners[key].a_hi < 2.2
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_going_faster_by_hand_does_raise_it(self):
+    """The other half. A clean pass at a higher peak still moves the floor,
+    and `seed` (the demonstration) adopts it outright."""
+    s, tmp, key = self._learned(100.0)
+    try:
+      s.observe(100.0 / M_PER_DEG, 0.0, 0.0, 90.0, 2.7, 0.1,
+                allow_lower=False, seed=True)
+      assert s.corners[key].a_lo == pytest.approx(2.7)
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_the_wheel_is_still_a_takeover(self):
+    """v3.6.5's rule survives untouched: LATERAL is the axis that condemns."""
+    e = M.LateralEffort()
+    e.update(0.01, 20.0, 0.005, 0.0, 0.0, False)
+    assert e.override
+    e2 = M.LateralEffort()
+    e2.update(0.01, 20.0, 0.005, 0.0, 0.0, True, long_active=False)
+    assert not e2.override and e2.long_manual
+
+  def test_the_flag_reaches_the_store(self):
+    """MUTATION: pass `allow_lower=True` unconditionally at the call site.
+    Wiring, not arithmetic — the arithmetic is tested above."""
+    import ast
+    import inspect
+    src = inspect.getsource(M.SCCMapV2._commit_pass)
+    tree = ast.parse(src.strip())
+    found = False
+    for node in ast.walk(tree):
+      if isinstance(node, ast.keyword) and node.arg == "allow_lower":
+        found = not isinstance(node.value, ast.Constant)
+    assert found, "_commit_pass must pass a computed allow_lower to observe()"

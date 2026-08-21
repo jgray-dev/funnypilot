@@ -169,24 +169,39 @@ DRIFT_UNKNOWN = DRIFT_LEARNING
 # pays for it with a firmer finish. "Start later" is therefore a bigger J, not
 # a smaller one.
 #
-#   implied decel   v3.6.5            v3.6.5
-#   0-60 m          1.20              1.35
-#   60-150 m        0.80              1.00
-#   150-400 m       0.50              0.62
+#   implied decel   v3.6.4     v3.6.5     v3.6.6
+#   0-60 m          1.20       1.35       1.60
+#   60-150 m        0.80       1.00       1.00
+#   150-400 m       0.50       0.62       0.62
 #
-# MEASURED, 60 mph set into a 29 mph bend: the cap first constrains at 400 m
-# (where it appears) before, and at ~327 m now — about 240 ft more road at
-# cruise speed. 1.35 is 80% of what the MPC can deliver after v3.6.5 raised
-# CRUISE_MIN_ACCEL to -1.6, so the headroom guard still holds with room to
-# spare; at the old -1.2 this table would have been unfollowable.
+# v3.6.6 STEEPENS ONLY THE LAST 60 m, because the previous pass fixed the wrong
+# half of the problem. Holding cruise longer worked; ARRIVING did not — "the CAP
+# values feel fair, but we're rarely ever actually going that speed through the
+# corner ... usually gas gating or slightly braking to decelerate prior to/
+# through the corner". That is the car still SHEDDING speed at the apex, which
+# is what being permanently behind a schedule you can only just follow looks
+# like. So the finish gets firmer at the same time as long_mpc.CRUISE_MIN_ACCEL
+# goes to -2.0; 1.60 is 76% of the 2.10 the MPC can now deliver.
+#
+# MEASURED, 60 mph set into a 29 mph bend: first constrains at ~315 m (v3.6.4
+# constrained from the moment the corner appeared at 400 m), reaches 39.6 mph
+# at ~110 m and 29 mph at 65 m — later, firmer, and finished sooner.
 _J_BP = (0.0, 60.0, 150.0, 400.0)    # m of distance-to-go, after the arrival lead
-_J_V = (0.0, 81.0, 171.0, 326.5)     # integral of the budget, m^2/s^2
+_J_V = (0.0, 96.0, 186.0, 341.0)     # integral of the budget, m^2/s^2
 
 # Seconds of travel AT THE CORNER SPEED by which the corner speed is reached
 # early. v3.6.1 raised this from 2.0: the lead lands us at v_curve exactly
 # `v_curve * T` metres before the governing point, and at 2 s that is the apex
 # rather than the entry.
-ARRIVAL_LEAD_T = 4.0
+#
+# v3.6.6 — 4.0 -> 5.0, THE OTHER HALF OF "we're rarely actually going that
+# speed". This is the FLAT RUNWAY, and the car trails the cap by roughly its own
+# tracking lag: at 4 s with a 30 m half-length there was barely a second of flat
+# before the ENTRY, so whatever the car was behind by got paid off inside the
+# bend instead of before it. 5 s is 65 m at 13 m/s — two to three seconds of
+# settled speed ahead of the entry. It costs 13 m of earlier arrival, which the
+# steeper finish above more than gives back.
+ARRIVAL_LEAD_T = 5.0
 MAX_LOOKAHEAD_M = 400.0
 
 

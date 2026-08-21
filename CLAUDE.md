@@ -119,6 +119,116 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.6 Changes (based on funnypilot-3.6.5)
+
+Six owner requests. Two are UI, one is a channel change, and three move
+longitudinal behaviour — including the first fix aimed at CITY driving rather
+than at corners.
+
+- `selfdrive/ui/sunnypilot/onroad/hud_renderer.py` — **THE MINIMAP IS ALWAYS
+  DRAWN NOW.** It was gated on `smartCruiseControl.map.enabled`, which is
+  SCC-M v2's `is_enabled` = `long_enabled and toggle`, and `long_enabled` is
+  `carControl.enabled` — so with only LATERAL engaged the whole widget vanished,
+  which is exactly when a driver most wants to see what the road ahead is doing.
+  **THE DATA WAS THERE THE WHOLE TIME**: `_refresh_corners` deliberately runs
+  BEFORE the `is_enabled` check in `update()` so the geometry keeps being
+  measured with the feature off, and `write_corners_shm` publishes every frame.
+  The gate hid a live widget and saved no work. The slot was always reserved, so
+  nothing shifts.
+- `hud/route_map.py` — **GREEN MEANS "SEEN, AND IT COSTS YOU NOTHING".**
+  `corner_plan_at` returns a third value, whether the point lies inside a
+  recognised bend's own extent. Before this, a corner we would take at or above
+  the set speed produced alpha 0 — plain road — which is the SAME PICTURE as a
+  straight, so the ribbon could not distinguish "SCC-M v2 has nothing to say
+  here" from "SCC-M v2 has looked at this and it is fine". `KNOWN_FREE_RGB` is
+  DERIVED from `T.ENGAGED` rather than re-typed; the first cut was a literal and
+  was already wrong by a shade, which the test caught.
+- `selfdrived.py`, `events.py`, `hud_renderer.py` — **THE CURVE WARNING IS AN
+  EDGE PULSE, NOT A BANNER.** v3.6.5's `speedTooHigh` raise site is deleted and
+  the alert text is REVERTED to stock (`car_specific.py` still raises it above
+  MAX_CTRL_SPEED). The unmanageable-corner flag now drives `state_color()` to
+  `T.ATTENTION` and `glow_intensity()` to a deeper, faster pulse (0.55..1.15 at
+  roughly twice the rate) than the override breath, so the two are
+  distinguishable by RHYTHM as well as hue. A banner is read; an edge pulse is
+  felt, and the peripheral edge is already this HUD's state channel.
+- `long_v2/corner_effort.py`, `scc_learn_store.py` — **A MANUAL LONGITUDINAL
+  PASS IS RAISE-ONLY.** Owner's rule: a 45 mph bend taken by hand at 35 stays a
+  45 mph bend; accelerate to 50 with lateral holding the line and it becomes 50.
+  Implemented as a SPLIT rather than a new signal: `override` (which truncates
+  the pass and carries `TAKEOVER_SEVERITY`) is now **LATERAL ONLY**, while a
+  longitudinal handover sets `long_manual` and passes `allow_lower=False` into
+  the store. **THIS REVERSES THE BRAKE HALF OF v3.6.5 ON PURPOSE** — a driver
+  choosing to go slower may be behind traffic or unsure of the road, and that is
+  not evidence about the bend. Leaving lateral engaged is also what makes the
+  RAISE measurable: the effort signals are still ours, so the pass can be judged
+  clean and its `a_peak` believed. The store's mirror is one line
+  (`if not allow_lower: hi = max(hi, c.a_hi)`), and `update_interval`'s existing
+  direction guard does the rest — a braked pass has a LOW `a_peak`, which may
+  not lower a floor, so the two compose to exactly the rule as stated.
+- `selfdrive/controls/lib/long_shaping.py` — NEW `StopGovernor`. **THE FIRST FIX
+  IN THIS FORK AIMED AT STOP-AND-GO**: "it frequently decides it doesn't need to
+  brake early for a stopped car, and is very much willing to rear end someone if
+  I don't take over braking."
+  **WHY THE MPC ALONE IS NOT ENOUGH, HONESTLY STATED.** Its following constraint
+  is a COST, not a hard limit — `get_safe_obstacle_distance` says how far back it
+  would LIKE to be and the solver trades that against comfort, the model's plan
+  and the cruise obstacle. In `blended` mode the model's velocity plan carries a
+  weight of 5.0 against 0.1 on position, so a stopped car the model has not
+  committed to is a soft suggestion. That is the dangerous case: a stationary
+  obstacle gives no relative-motion cue and the failure mode is a rear-end.
+  So this is the fork's own idiom applied to that one case — a SPEED-DOMAIN cap
+  from stopping GEOMETRY, `sqrt(v_lead^2 + 2*a*(d - gap))`, which goes through
+  the governor's min() into `v_cruise` and is therefore honoured by every MPC
+  mode (cruise obstacle in acc, position cap in blended). At 60 m from a
+  stationary car it caps at 13.5 m/s (30 mph); at 100 m, 18.1 (40 mph).
+  **1.8 m/s^2 IS DELIBERATELY GENTLER THAN COMFORT_BRAKE (2.2)**: the point is
+  to be slow enough early that the MPC never has to find the hard part, so
+  planning on a gentle rate makes the cap bind SOONER. It can only ever slow the
+  car, never raises a target, never touches the accel path, and the MPC's lead
+  constraint still owns the actual stop.
+  FOUR NARROWINGS, all fail-safe: `STOP_GOV_LEAD_V` 6.0 so it never joins the
+  ordinary following problem (a general follow governor competing with the
+  solver is the stacked-authority mistake v3.2.6e removed), a FADE on the lead's
+  speed rather than on the cap so the geometry stays honest, `CONFIRM_N` 3 so a
+  radar ghost cannot grab the cruise target, and `FALL_RATE` 3.0 m/s^2 because
+  this is an early shave rather than the emergency brake.
+- `long_mpc.py` `CRUISE_MIN_ACCEL` -1.6 -> **-2.0**, `corner_speed._J_V` near
+  field 1.35 -> **1.60**, `ARRIVAL_LEAD_T` 4.0 -> **5.0**. "The CAP values feel
+  fair, but we're rarely ever actually going that speed through the corner —
+  usually gas gating or slightly braking to decelerate prior to/through the
+  corner." **THAT IS THE CAR STILL SHEDDING SPEED AT THE APEX**, i.e.
+  permanently behind a schedule it can only just follow. v3.6.5 fixed the START
+  (hold cruise longer) and not the ARRIVAL. Both halves move now: a firmer
+  finish, and more flat runway before the ENTRY for the trailing error to be
+  paid off on. MEASURED, 60 mph into a 29 mph bend: first constrains at ~315 m
+  (v3.6.4 constrained from the moment the corner appeared at 400 m), 39.6 mph at
+  ~110 m, 29 mph at 65 m. Headroom is 1.60 / (2.0 * 1.05) = 76%, so
+  `TestTheEnvelopeHasRoomToBeFollowed` still holds with room.
+- TESTS: **989 green**, ruff clean. NEW `TestTheStopGovernor` (11),
+  `TestAManualSpeedOnlyEverRaises` (5), `TestAKnownCornerThatCostsNothing` (6),
+  `TestTheMinimapIsAlwaysDrawn` (2), `TestTheCurveWarningIsAGlowNotABanner` (3).
+  FOURTEEN guards mutation-tested, all caught.
+  **THE PROCESS NOTE THIS TIME IS THE MIRROR OF v3.5.8's.** That release found a
+  guard a COMMENT could satisfy; this one wrote a guard a comment could BREAK —
+  `assert "map.enabled" not in body` failed on the docstring explaining why the
+  gate was removed. Both are the same mistake: matching text where the property
+  is structural. The scan walks the AST for a bare `Return` and for an
+  `Attribute` named `enabled`, and `_fn_src` strips docstrings before any
+  textual check.
+  Two fixtures moved because the envelope did, and both say so in place: a bend
+  340 m out no longer dips a full ACTIVATE_MARGIN under the set speed. The gate
+  still opens at ~360 m while the cap now waits until ~256 m — the coast phase
+  got shorter at the far end, which is the retune working.
+- `FUNNYPILOT_VERSION` -> 3.6.6, `EXPECTED_VERSION` -> "3.6.6", branch
+  `funnypilot-3.6.6`. Eight new `_CODE_MARKERS`; all 124 resolve.
+- ON-ROAD VERIFICATION: (1) **stop-and-go is the one to watch** — approaching a
+  stopped queue the speed should come off noticeably earlier and more smoothly
+  than before. If it now feels too eager behind a crawling lead,
+  `STOP_GOV_LEAD_V` is the first knob, NOT `STOP_GOV_A`. (2) corners should
+  SETTLE at CAP before the entry rather than arriving still decelerating.
+  (3) the minimap should be there with lateral only, and free-flowing bends
+  should read green.
+
 ### v3.6.5, second pass — SAME BRANCH, NO VERSION BUMP
 
 SEVEN owner requests after the first 3.6.5 drive ("feeling really good to

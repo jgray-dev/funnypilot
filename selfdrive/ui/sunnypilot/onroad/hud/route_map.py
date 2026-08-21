@@ -165,6 +165,22 @@ _RAMP = ((0.00, (118, 134, 152)),
 _M_PER_DEG = 111320.0
 
 
+# v3.6.6 — a bend we RECOGNISE that asks for no slowdown. Distinct from the
+# neutral road colour on purpose: alpha 0 already means "the set speed decides
+# here", and a straight and a free-flowing corner both produce it, so the two
+# were indistinguishable. Green is the fork's ENGAGED colour, DERIVED from the
+# token rather than re-typed: the v3.5.4 rule is that a driver should learn one
+# green, and a hand-copied hex is exactly how two of them appear. The first cut
+# of this WAS a literal and was already wrong by a shade; the test caught it.
+KNOWN_FREE_RGB = (T.ENGAGED.r, T.ENGAGED.g, T.ENGAGED.b)
+# How little of a slowdown still counts as "none". Above this the ordinary
+# amber/red ramp takes over, so there is no band where a corner is both.
+KNOWN_FREE_TH = 0.08
+# Deliberately well under a constraining corner's opacity: this is information,
+# not a warning, and it must not compete with the bends that do cost speed.
+KNOWN_FREE_ALPHA = 0.45
+
+
 def ramp_color(delta_mph: float) -> tuple[int, int, int]:
   """Neutral -> amber -> orange -> red. Pure; unit-tested."""
   if not T.finite(delta_mph):
@@ -288,25 +304,37 @@ def corner_plan_at(s: float, corners_s, corner_cap):
     The governing corner is the one whose envelope is LOWEST here — the same
     min() the controller takes, so the ribbon cannot disagree with the cap.
 
+    v3.6.6 returns a THIRD value: whether this point lies inside a recognised
+    bend's own extent, which is what lets the ribbon say "seen, and it needs
+    nothing" in green instead of leaving it looking like straight road.
+
     Entries are read POSITIONALLY and tolerate extra fields: this tuple has
     already grown once, and a consumer that spells out every name breaks the
     next time one is added (the v3.6.3 minimap outage).
 
     (0.0, 0.0) means no corner has any say at this point.
     """
-    best, gov = float('inf'), 0.0
+    best, gov, on = float('inf'), 0.0, False
     for c in corners_s:
       if len(c) < 3:
         continue
       s_apex, half, v = c[0], c[1], c[2]
       if v <= 0.0:
         continue
+      # v3.6.6 — IS THIS POINT INSIDE A RECOGNISED BEND AT ALL? A separate
+      # question from "does it constrain us", and the reason it needs asking
+      # separately is that the two answers looked identical before: a corner we
+      # would take at or above the set speed produced alpha 0, i.e. plain road,
+      # which is indistinguishable from a straight. The driver could not tell
+      # "SCC-M sees nothing here" from "SCC-M sees this and it is fine".
+      if abs(s - s_apex) <= max(half, 1.0):
+        on = True
       cap = corner_cap(v, s_apex - s, half)
       if cap < best:
         best, gov = cap, v
     if gov <= 0.0 or not T.finite(best):
-      return 0.0, 0.0
-    return gov, best
+      return 0.0, 0.0, on
+    return gov, best, on
 
 
 def plan_alpha(expected_mps: float, v_gov: float, cap_mps: float) -> float:
@@ -569,7 +597,7 @@ class RouteMap:
     self._last_frame = 0.0
     # raw route in geodetic coords: list of (lat, lon, delta_mph). Kept raw so
     # the smoothed pose below can re-project it every frame.
-    self._raw: list[tuple[float, float, float]] = []
+    self._raw: list[tuple] = []   # (lat, lon, v_gov, zone_limit, cap, on_corner)
     self._fix = None            # (lat, lon, bearing) as last polled
     self._pose = None           # (lat, lon, bearing) as displayed, eased
     self._raw_corners: list[tuple[float, float, float]] = []  # (lat, lon, conf), conf > 0 only
@@ -762,9 +790,9 @@ class RouteMap:
       # and `cap` is the envelope value here (which sets the OPACITY). The live
       # set speed is applied per frame in render(), where it belongs.
       if self._approach_cap:
-        v, cap = corner_plan_at(fwd, corners_fwd, self._approach_cap)
+        v, cap, known = corner_plan_at(fwd, corners_fwd, self._approach_cap)
       else:
-        v, cap = corner_speed_at(plat, plon, corners), 0.0
+        v, cap, known = corner_speed_at(plat, plon, corners), 0.0, False
       # which zone is in force at this point. Stored RAW, not folded into a
       # delta: since v3.5.2 the comparison depends on the live set speed and
       # SLA offset, which change every frame while this poll is 1 Hz.
@@ -784,7 +812,7 @@ class RouteMap:
             and math.hypot(fwd - kept_at[0], right - kept_at[1]) < DECIMATE_M):
           continue
       kept_at, kept_v, kept_lim = (fwd, right), v, lim
-      pts.append((plat, plon, v, lim, cap))
+      pts.append((plat, plon, v, lim, cap, known))
 
     if points and not pts:
       # the array had points but none survived the range filter -- the usual
@@ -841,7 +869,8 @@ class RouteMap:
       east = (plon - lon0) * _M_PER_DEG * clat
       return north * cb + east * sb, -north * sb + east * cb
 
-    pts = [(*to_ego(plat, plon), v, lim, cap) for plat, plon, v, lim, cap in self._raw]
+    pts = [(*to_ego(plat, plon), v, lim, cap, kn)
+           for plat, plon, v, lim, cap, kn in self._raw]
 
     # v3.5.5: take the lane/centreline offset out so the ribbon runs through
     # the marker. Computed BEFORE the stitch (the stitch adds a point at the
@@ -850,7 +879,7 @@ class RouteMap:
     # off the road it belongs to.
     shift = lateral_offset_at_ego(pts)
     if shift:
-      pts = [(f, r - shift, v, lim, cap) for f, r, v, lim, cap in pts]
+      pts = [(f, r - shift, v, lim, cap, kn) for f, r, v, lim, cap, kn in pts]
 
     corners = [(*to_ego(plat, plon), conf) for plat, plon, conf in self._raw_corners]
     if shift:
@@ -898,8 +927,8 @@ class RouteMap:
     # result that cannot differ between passes. Identical output, half the work.
     segs = []
     for i in range(1, len(pts)):
-      f0, r0, _v0, _l0, _c0 = pts[i - 1]
-      f1, r1, v1, lim1, cap1 = pts[i]
+      f0, r0 = pts[i - 1][0], pts[i - 1][1]
+      f1, r1, v1, lim1, cap1, known1 = pts[i]
       a, b = px(f0, r0), px(f1, r1)
 
       expected = expected_speed_at(ref_mps, lim1, sla_ratio, sla_active)
@@ -907,7 +936,17 @@ class RouteMap:
       # has happened here. The hue must not fade with the alpha, or a hard
       # bend would look gentle from a distance instead of merely distant.
       full = ramp_color(tint_delta_mph(expected, v1))
-      c = blend(_RAMP[0][1], full, plan_alpha(expected, v1, cap1))
+      alpha = plan_alpha(expected, v1, cap1)
+      # v3.6.6 — GREEN MEANS "SEEN, AND IT COSTS YOU NOTHING". Without this a
+      # recognised bend that needs no slowdown painted plain road, which is the
+      # same picture as a straight — so the ribbon could not distinguish
+      # "SCC-M v2 has nothing to say here" from "SCC-M v2 has looked at this and
+      # it is fine". Those are very different things to know on an unfamiliar
+      # road, and the second one is the feature working.
+      if known1 and alpha <= KNOWN_FREE_TH:
+        c = blend(_RAMP[0][1], KNOWN_FREE_RGB, KNOWN_FREE_ALPHA)
+      else:
+        c = blend(_RAMP[0][1], full, alpha)
 
       # SUBDIVIDE. A highway segment can span the whole strip; drawing it as one
       # line meant one opacity for all of it and, worse, dropping the whole

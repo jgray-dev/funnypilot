@@ -76,7 +76,17 @@ STOP_DISTANCE = 7.5
 # at the bend above the speed the cap had been asking for since 400 m out. That
 # is the reported "doesn't have enough authority to slow down enough".
 #
-# -1.6 restores ~40% headroom over the same, UNCHANGED envelope. Note what this
+# v3.6.6 TAKES IT TO -2.0. The v3.6.5 pair (-1.6 against a 1.35 envelope) closed
+# the gap but not the symptom: "the CAP values feel fair, but we're rarely ever
+# actually going that speed through the corner — we're usually gas gating or
+# slightly braking to decelerate prior to/through the corner." That is the car
+# still SHEDDING speed at the apex, i.e. permanently behind a schedule it can
+# only just follow. 2.0 * 1.05 = 2.10 against a 1.60 envelope is 24% margin
+# with a firmer finish, which is what lets the car actually ARRIVE at the cap
+# instead of chasing it. Still well inside comfort: COMFORT_BRAKE is 2.2 and
+# ACCEL_MIN far lower.
+#
+# -1.6 restored ~40% headroom over the same, UNCHANGED envelope. Note what this
 # is and is not: the clip is PERMISSIVE, not a demand — it bounds what the MPC
 # is allowed to be told, and the solver's own cost still decides the shape. So
 # this removes an artificial ceiling rather than commanding harder braking, and
@@ -85,7 +95,7 @@ STOP_DISTANCE = 7.5
 # STILL WELL INSIDE COMFORT: COMFORT_BRAKE above is 2.2 and ACCEL_MIN far lower.
 # SLA is UNAFFECTED — its RATE_MAX is 1.2 m/s per second in its own right, so
 # this simply stops being the binding constraint on a ramp that never used it.
-CRUISE_MIN_ACCEL = -1.6
+CRUISE_MIN_ACCEL = -2.0
 CRUISE_MAX_ACCEL = 1.6
 MIN_X_LEAD_FACTOR = 0.5
 

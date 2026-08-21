@@ -36,7 +36,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
-from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace
+from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace, StopGovernor
 from openpilot.selfdrive.controls.lib.turn_limit import limit_accel_in_turns, predicted_lat_accel
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
@@ -93,6 +93,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_should_stop = False
     self.shaper = AccelJerkShaper(self.dt, a_init=init_a)
     self.lead_grace = LeadGrace(self.dt)
+    self.stop_gov = StopGovernor(self.dt)
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -173,6 +174,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
       self.shaper.reset(self.a_desired)
       self.lead_grace.reset()
+      self.stop_gov.reset()
       # FunnyPilot v3.5.3 — RESET THE CLIP RATE LIMITER TOO.
       # `prev_accel_clip` feeds a +/-0.05-per-frame limiter on the accel
       # CEILING (see the clip below). That limiter exists to stop the ceiling
@@ -245,6 +247,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
     lead_one = sm['radarState'].leadOne
     v_cruise = self.lead_grace.update(bool(lead_one.status), following, lead_one.vLead, v_ego, v_cruise)
+    # FunnyPilot v3.6.6 — the stop-and-go governor. A speed cap computed from
+    # stopping geometry for a lead that is stopped or crawling, because the
+    # MPC's following constraint is a COST and in blended mode it competes with
+    # a model plan weighted 50x higher. Speed-domain and monotone in distance,
+    # so it can only ever slow the car; the MPC still owns the stop itself.
+    v_cruise = self.stop_gov.update(bool(lead_one.status), lead_one.dRel,
+                                    lead_one.vLead, v_ego, v_cruise)
 
     personality = sm['selfdriveState'].personality
     self.mpc.set_weights(prev_accel_constraint, personality=personality)

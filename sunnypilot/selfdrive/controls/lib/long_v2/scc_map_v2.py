@@ -751,8 +751,15 @@ class SCCMapV2:
       # is why the gate reads as strict: with SCC-M holding the car down, gas
       # takes `long_active` false and the cap stops being ours a moment later.
       demo = self._pass.demonstrated()
+      # v3.6.6 — A MANUAL LONGITUDINAL PASS IS RAISE-ONLY. See
+      # scc_learn_store.observe: the driver's chosen speed can only ever argue
+      # the corner is FASTER, never slower, because "I went round it at 35"
+      # says nothing about a bend openpilot rates at 45. The lateral signals
+      # measured during the same pass are unaffected and still lower the ceiling
+      # on their own evidence — this only removes the SPEED from the argument.
       s.observe(key[0], key[1], key[2], key[3], a_peak, severity, flags,
-                allow_raise=not self.is_active, seed=demo)
+                allow_raise=not self.is_active, seed=demo,
+                allow_lower=not self._pass.long_manual)
       self.learned_count = s.count
       # v3.6.2 — NO LOG LINE HERE. The pass used to be written to the swaglog
       # so the thresholds could be calibrated from a drive. They are pinned by

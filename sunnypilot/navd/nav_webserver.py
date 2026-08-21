@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.5"
+EXPECTED_VERSION = "3.6.6"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -216,7 +216,6 @@ _CODE_MARKERS = [
   # v3.6.5
   ("def corner_cap", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "corner run-out hands throttle back"),
   ("def _dead_reckon", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "corner distances close between refreshes"),
-  ("CRUISE_MIN_ACCEL = -1.6", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC headroom over the approach envelope"),
   ("TAKEOVER_SEVERITY", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "a driver takeover is a verdict"),
   ("y POSITIVE RIGHT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure frame convention fixed"),
   # v3.6.5, second pass
@@ -226,8 +225,16 @@ _CODE_MARKERS = [
   ("def _corners_from_store", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "learned bends enter the corner list"),
   ("def is_unmanageable", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "bends the cap cannot fix"),
   ("def read_corner_warning_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "preemptive curve warning channel"),
-  ("Sharp Curve Ahead", "/data/openpilot/selfdrive/selfdrived/events.py", "curve warning is future tense"),
   ("class SccOrphanElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "ORPH dev-UI readout"),
+  # v3.6.6
+  ("class StopGovernor", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop-and-go lead speed cap"),
+  ("self.stop_gov.update", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "stop governor reaches v_cruise"),
+  ("CRUISE_MIN_ACCEL = -2.0", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "corner decel headroom"),
+  ("allow_lower", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "a manual speed only ever raises"),
+  ("long_manual", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "longitudinal handover is not a takeover"),
+  ("KNOWN_FREE_RGB", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "green for a bend that costs nothing"),
+  ("ALWAYS DRAWN", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "minimap survives lateral-only"),
+  ("_corner_warn", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "curve warning is an edge pulse"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
