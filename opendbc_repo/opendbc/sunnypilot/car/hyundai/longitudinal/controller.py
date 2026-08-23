@@ -18,6 +18,44 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 
 MIN_JERK = 0.5
 
+# ── FunnyPilot v3.6.7: the feed-forward the "predictive" scheme was missing ──
+#
+# WHAT PREDICTIVE ACTUALLY WAS. `_calculate_lookahead_jerk` sizes the jerk
+# allowance as `(accel_cmd - accel_last) / future_t`, i.e. purely proportional
+# to how far the output still has to travel. `jerk_limited_integrator` then
+# rate-limits by that, so each 20 Hz step closes `dt / future_t` of the
+# remaining gap — a FIRST-ORDER LAG with time constant `future_t`, which is
+# 0.6 s at speed on the default config.
+#
+# A PURE P CONTROLLER CANNOT TRACK A RAMP, and the planner's output is a ramp
+# almost all the time. The steady-state error is `future_t * d(accel_cmd)/dt`:
+# a planner ramping brake in at 1 m/s^3 leaves the car 0.6 m/s^2 short of the
+# commanded deceleration for as long as the ramp lasts. It is not a delay you
+# can wait out — it persists until the command stops changing, and it goes the
+# same way on the throttle side. That is all three reported symptoms at once:
+# late braking for a stopped car, sluggish launch behind a lead, and a
+# following loop that keeps overshooting and correcting.
+#
+# It is also worse than it looks, because `CP.longitudinalActuatorDelay` tells
+# the PLANNER to expect 0.50 s of actuator delay. The lag above is on top of
+# that and the planner does not know about it, so the plant is slower than the
+# model the plan was built against — the textbook way to turn a well-damped
+# distance loop into an oscillating one.
+#
+# THE FIX MAKES IT PREDICTIVE IN THE SENSE THE NAME PROMISES: the allowance now
+# includes the rate the COMMAND ITSELF IS MOVING AT, not just where it is. Then
+# the proportional term only has to close the residual, and the tracking error
+# on a ramp goes to zero instead of to `future_t * rate`. Nothing gets less
+# smooth: this only ever raises a LIMIT, the output is still
+# `rate_limit(..., desired_accel)` so it can never exceed what the planner
+# asked for, and both speed caps and `jerk_limits` still bound the result.
+#
+# The feed-forward is taken only in the direction the command is moving (a
+# falling command must not shrink the upper allowance) and lightly smoothed,
+# because it is a difference of a 20 Hz signal and it is published to the car
+# in SCC12/SCC14 rather than merely used internally.
+FF_ALPHA = 0.4
+
 DYNAMIC_LOWER_JERK_BP = [-2.0, -1.5, -1.0, -0.25, -0.1, -0.025, -0.01, -0.005]
 DYNAMIC_LOWER_JERK_V  = [3.3,  1.5,  1.0,   0.8,  0.7,   0.65,  0.55,    0.5]
 
@@ -55,6 +93,9 @@ class LongitudinalController:
     self.comfort_band_upper = 0.0
     self.comfort_band_lower = 0.0
     self.stopping = False
+    # v3.6.7 feed-forward state
+    self.accel_cmd_last = 0.0
+    self.cmd_rate = 0.0
 
   @property
   def enabled(self) -> bool:
@@ -109,6 +150,20 @@ class LongitudinalController:
 
     return upper_limit, lower_limit
 
+  def _update_command_rate(self) -> float:
+    """How fast the planner's demand is itself moving, m/s^3. v3.6.7.
+
+    Differenced over the controller's own 20 Hz period, then lightly smoothed —
+    see FF_ALPHA. Returns the smoothed value; the caller decides which
+    direction it is allowed to help in.
+    """
+    raw = (self.accel_cmd - self.accel_cmd_last) / (DT_CTRL * 5)
+    self.accel_cmd_last = self.accel_cmd
+    if not np.isfinite(raw):
+      raw = 0.0
+    self.cmd_rate += (float(raw) - self.cmd_rate) * FF_ALPHA
+    return self.cmd_rate
+
   def _calculate_lookahead_jerk(self, accel_error: float, velocity: float) -> tuple[float, float]:
     """Calculate lookahead jerk needed to reach target acceleration.
 
@@ -124,9 +179,22 @@ class LongitudinalController:
     future_t_upper = float(np.interp(velocity, self.car_config.lookahead_jerk_bp, self.car_config.lookahead_jerk_upper_v))
     future_t_lower = float(np.interp(velocity, self.car_config.lookahead_jerk_bp, self.car_config.lookahead_jerk_lower_v))
 
-    # Required jerk to reach target acceleration in lookahead window
-    j_ego_upper = accel_error / future_t_upper
-    j_ego_lower = accel_error / future_t_lower
+    # Required jerk to reach target acceleration in lookahead window, PLUS the
+    # rate the command is moving at (FunnyPilot v3.6.7 — see FF_ALPHA). Taken
+    # only in the direction the command is going: a falling demand must not
+    # shrink the upper allowance, nor a rising one the lower.
+    #
+    # THE CLAMP IS CURRENTLY SUBSUMED BY THE SMOOTHING and is kept as the
+    # statement of intent, the same way scc_fusion keeps its vision veto. For it
+    # to change an output the SMOOTHED rate would have to keep its old sign
+    # through a reversal, and `_update_command_rate` folds the new raw rate in at
+    # FF_ALPHA — which at 0.4, against a command bounded by `jerk_limits`, always
+    # flips the sign in one step. Lower FF_ALPHA far enough and it becomes live;
+    # `test_the_direction_clamp_is_currently_subsumed_by_the_smoothing` pins that
+    # relationship so the transition is noticed rather than assumed.
+    ff = self.cmd_rate
+    j_ego_upper = max(ff, 0.0) + accel_error / future_t_upper
+    j_ego_lower = min(ff, 0.0) + accel_error / future_t_lower
 
     jerk_limit = self.car_config.jerk_limits
     j_ego_upper = np.clip(j_ego_upper, -jerk_limit, jerk_limit)
@@ -178,6 +246,7 @@ class LongitudinalController:
 
     velocity = CS.out.vEgo
     accel_error = self.accel_cmd - self.accel_last
+    self._update_command_rate()
 
     # Calculate jerk limits based on speed
     upper_speed_factor, lower_speed_factor = self._calculate_speed_based_jerk_limits(velocity, long_control_state)
@@ -235,6 +304,10 @@ class LongitudinalController:
       self.desired_accel = 0.0
       self.actual_accel = 0.0
       self.accel_last = 0.0
+      # SEEDED, NOT ZEROED. Zeroing would make the first engaged frame difference
+      # the whole demand against 0 and hand the feed-forward a spurious spike.
+      self.accel_cmd_last = self.accel_cmd
+      self.cmd_rate = 0.0
       return
 
     # Force zero acceleration during stopping

@@ -211,7 +211,8 @@ class LongitudinalPlannerSP:
                                 v_cruise, self._scc_vision_v2.corroboration,
                                 self._scc_map_v2.gov_confidence,
                                 self._scc_map_v2.gov_distance,
-                                v_ego)
+                                v_ego,
+                                self._scc_vision_v2.is_enabled)
     # v3.5.0: what fraction of the cut SCC-M asked for actually survived the
     # fusion. 1.0 = passed through whole, 0.0 = vetoed. The onroad minimap draws
     # this as a solid vs hollow marker; publishing it beats having the UI

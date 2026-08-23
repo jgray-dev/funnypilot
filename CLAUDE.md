@@ -119,6 +119,134 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.7 Changes (based on funnypilot-3.6.6)
+
+Four owner reports. THREE OF THEM ARE ONE LAG, and it is not in any file this
+fork has ever touched — it is in the actuator layer, in opendbc, under the
+"Predictive" longitudinal tuning scheme the car is set to.
+
+- `opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/controller.py` —
+  **"PREDICTIVE" WAS A PURE P CONTROLLER, AND A P CONTROLLER CANNOT TRACK A
+  RAMP.** `_calculate_lookahead_jerk` sized the jerk allowance as
+  `(accel_cmd - accel_last) / future_t` — proportional to the remaining gap and
+  nothing else. `jerk_limited_integrator` rate-limits by that, so each 20 Hz
+  step closes `dt / future_t` of what is left: a FIRST-ORDER LAG with time
+  constant `future_t`, 0.6 s at speed on the K5's config.
+  **THE PLANNER'S DEMAND IS A RAMP ALMOST ALL THE TIME**, and the steady-state
+  error of a P law on a ramp is `future_t * d(accel_cmd)/dt`. MEASURED through
+  the real controller over a 1.2 s ramp: **0.27 m/s^2 behind at 1 m/s^3,
+  0.54 at 2, 0.80 at 3** — and it does not decay, it persists for as long as
+  the command keeps moving. That is all three reports at once: braking that
+  arrives late for a stopped car, a launch that will not follow the lead off
+  the line, and a following loop that overshoots and corrects ("we're chasing
+  them again... it feels like we've lost radar tracks even though we haven't").
+  **IT IS WORSE THAN IT LOOKS, BECAUSE THE PLANNER IS TOLD A DIFFERENT NUMBER.**
+  `CP.longitudinalActuatorDelay` is 0.50 s and the plan is built against that;
+  this lag is ON TOP and invisible to it. A distance loop whose plant is slower
+  than the model it was tuned against is the textbook way to get exactly the
+  oscillation reported — so the wave and the late brake are the same defect
+  seen from two directions, not two problems.
+  THE FIX IS A FEED-FORWARD ON THE COMMAND'S OWN RATE: the allowance now
+  includes how fast the demand is MOVING, not only where it is, so the
+  proportional term is left with just the residual. Measured after: **exactly
+  zero steady-state error at 1 and 2 m/s^3**, and 0.12 at 3 where the speed cap
+  is what binds rather than the law.
+  **IT CANNOT MAKE ANYTHING HARSHER, BY CONSTRUCTION** — it only ever raises a
+  LIMIT, the output is still `rate_limit(..., desired_accel)` so it can never
+  exceed what the planner asked for, `jerk_limits` and the speed-based caps
+  still bound the result, and a STEP still comes out as a ramp
+  (`test_a_step_still_takes_the_shape_of_a_ramp`). This is the snappiness the
+  request asked to keep: the car stops arriving late at a plan that was already
+  correct.
+  `FF_ALPHA` 0.4 smooths it, because it is a difference of a 20 Hz signal and it
+  is PUBLISHED TO THE CAR in SCC12/SCC14 rather than merely used internally. The
+  inactive branch SEEDS `accel_cmd_last` from the current demand instead of
+  zeroing it — zeroing would difference the whole command against 0 on the first
+  engaged frame and hand the feed-forward a spike.
+  **THE DIRECTION CLAMP IS CURRENTLY SUBSUMED BY THE SMOOTHING** and is kept as
+  the statement of intent, the same treatment `scc_fusion` gives its vision
+  veto: for `max(ff, 0)` to change an output the SMOOTHED rate would have to
+  keep its old sign through a reversal, and at alpha 0.4 against a command
+  bounded by `jerk_limits` it always flips in one step.
+  `test_the_direction_clamp_is_currently_subsumed_by_the_smoothing` pins that
+  relationship so lowering FF_ALPHA is noticed rather than assumed.
+- `selfdrive/controls/lib/long_shaping.py` — **THE v3.6.6 STOP GOVERNOR HAD A
+  LAUNCH BUG AND IT WAS MINE.** `sqrt(v_lead^2 + 2*a*(d - GAP))` evaluates to
+  exactly `v_lead` at `d == GAP`, so sitting 6 m behind a car in traffic capped
+  the cruise target at the LEAD'S OWN SPEED — the car could match it and never
+  reopen a normal gap. Reported verbatim as "the lead car drives from a stop and
+  our vehicle doesn't accelerate appropriately".
+  The fix is to say what the governor is FOR: it answers "am I going too fast
+  for what is in front of me", which is only a question WHILE THE GAP IS
+  SHRINKING. `STOP_GOV_CLOSE_ON` 1.0 / `STOP_GOV_CLOSE_OFF` 0.2 m/s of overspeed
+  — two thresholds so a car matched to a lead cannot chatter it on and off, and
+  the hysteresis is on the ENGAGE TEST rather than on the cap, because which
+  question is being asked must not flicker. At or below the lead's speed the
+  ordinary following problem goes back to the MPC, exactly as it already does
+  for a fast lead.
+- `long_v2/scc_fusion.py`, `speed_governor.py`, `longitudinal_planner.py` (SP) —
+  **SCC-V IS SUPREME WHERE SCC-V IS LOOKING.** Owner: OSM's geometry folds onto
+  itself where a one-lane way ends into a two-lane one, vision shows zero desire
+  to turn, and SCC-M should have no authority to slow us there.
+  **TWO THINGS STOPPED THE EXISTING VETO FROM EVER DOING THAT, and fixing either
+  alone changes nothing.** (1) `VISION_DISAGREE_TH` 0.05 was UNREACHABLE:
+  corroboration is the lateral accel the model's path would pull at our speed
+  over 1.05 m/s^2, so 0.05 demanded the model predict under 0.05 m/s^2 — a
+  13.7 km radius at 60 mph — while the statistic is a MAX of a noisy
+  `orientationRate.z` over the whole horizon and ordinary straight-road jitter
+  clears that by two or three times. **0.30** is 0.32 m/s^2, which is 2.3 km of
+  radius at 60 mph and 550 m at 30, still nothing anyone would call a corner,
+  and a real 29 mph bend corroborates at 1.0. (2) **A LEARNED RECORD BYPASSED
+  IT** — `c` was floored by `learned` BEFORE the veto ran, and one completed
+  pass is 0.45, so any bend SCC-M had ever recorded ignored vision outright.
+  That is exactly backwards here: v3.6.5's orphan learner will happily file a
+  record at a junction the car once struggled with, and that record would then
+  permanently outrank a camera looking down an empty road. The veto is now
+  evaluated on `c_model`, the model's OWN number, BEFORE the flooring. **A
+  RECORD SAYS HOW FAST A BEND IS; IT DOES NOT GET TO SAY ONE EXISTS** when the
+  model can see that it does not — learning still grants AUTHORITY beyond the
+  model's horizon and where the two agree.
+  **GATED ON `vision_available`, AND THAT GUARD IS LOAD-BEARING RATHER THAN
+  DEFENSIVE**: `SCCVisionV2._reset()` clears corroboration to 0.0, so with the
+  SCC-V toggle off or below its 5 m/s floor an ungated veto would silently
+  disable SCC-M entirely. The planner passes `self._scc_vision_v2.is_enabled`.
+- `developer_ui/elements.py` — AUTH reads a grey `-` with no unit when there is
+  no corner, matching every other element in the column. It used to read a RED
+  0%, which is THE SAME GLYPH IT USES FOR "VETOED" — so the bottom of the column
+  shouted a fault on every straight road and the one reading that means
+  something was indistinguishable from the resting state. Gated on the same
+  field CVSP uses, so the column cannot show an authority for a corner it is not
+  showing a speed for.
+- TESTS: **1009 green**, ruff clean across
+  `selfdrive/ sunnypilot/ system/ common/ opendbc_repo/opendbc/sunnypilot/`.
+  NEW `hyundai/longitudinal/tests/test_predictive_tuning.py` (13),
+  `TestTheStopGovernorOnlyActsWhileClosing` (5);
+  `TestTheVisionDisagreementVeto` rewritten (6) — two of its cases pinned the
+  DEAD veto (subsumed by MIN_CUT, and cleared by one visit), which is exactly
+  what this release reverses, so keeping them would have been keeping the bug.
+  NINE guards mutation-tested, all caught.
+  **THE PROCESS NOTE IS THE ONE THIS FILE HAS ALREADY NAMED ONCE.** The first
+  `test_predictive_tuning.py` drove a local rig that RE-IMPLEMENTED the jerk
+  law, and three separate mutations to controller.py survived it — a test
+  carrying its own copy of the maths can only fail when the copy drifts (the
+  shape recorded against `long_v2/tests/test_physics.py` in v3.4.9). Rewritten
+  to construct the REAL `LongitudinalController` with `_Obj` stubs. Two further
+  findings from that rewrite: 3 s ramps were measuring `ACCEL_MIN` -3.5, not the
+  lag, so every bound was re-derived at 1.2 s; and the direction-clamp mutation
+  survived twice more until a test drove `_calculate_lookahead_jerk` DIRECTLY
+  with a forced `cmd_rate` — the integrator's own smoothing had been hiding it.
+- `FUNNYPILOT_VERSION` -> 3.6.7, `EXPECTED_VERSION` -> "3.6.7", branch
+  `funnypilot-3.6.7`. Four new `_CODE_MARKERS`; all 128 resolve.
+- ON-ROAD VERIFICATION: (1) **the following wave is the headline** — behind a
+  lead the car should now hold a gap instead of sawing between too-close and
+  too-far. If it still waves, the actuator lag is exonerated and the next
+  suspect is the MPC's own lead cost, NOT this file. (2) approaching a stopped
+  car the brake should arrive with the plan rather than after it. (3) launch
+  behind a lead pulling away from a stop should follow within a car length.
+  (4) SCC-M should stop slowing at the merge that prompted this; if it still
+  does, check AUTH — a live number there means the veto did not fire and the
+  model IS seeing curvature, which is a different problem from bad map data.
+
 ### v3.6.6 Changes (based on funnypilot-3.6.5)
 
 Six owner requests. Two are UI, one is a channel change, and three move

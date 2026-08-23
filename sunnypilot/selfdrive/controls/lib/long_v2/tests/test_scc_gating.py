@@ -14,7 +14,6 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.speed_governor import g
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_fusion import (
   fuse_map_target, MAP_SOLO_MAX_CUT, MAP_SOLO_MIN_CUT, VISION_DISAGREE_TH,
 )
-from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_speed import confidence_for
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 
 
@@ -91,52 +90,82 @@ class TestGradedAuthority:
 
 
 class TestTheVisionDisagreementVeto:
-  """v3.5.9's junction-jog protection, and what mutation testing said about it.
+  """v3.6.7 — VISION IS SUPREME WHERE VISION IS LOOKING.
 
-  THE BRANCH CANNOT CHANGE ANY OUTPUT AT THE CURRENT CONSTANTS. Replacing the
-  whole veto condition with `if False:` leaves the suite green and leaves the
-  car's behaviour unchanged, because a cut that only just survives the veto's
-  own threshold is already under MAP_SOLO_MIN_CUT and dropped a few lines
-  later. That is not a reason to write a contrived test that pretends
-  otherwise — it is a reason to pin the arithmetic, so that changing either
-  constant makes the veto start doing real work instead of quietly removing a
-  protection nobody realised was already absent.
+  This class used to document the veto as DEAD, and it was: `MAP_SOLO_MAX_CUT *
+  VISION_DISAGREE_TH` was under MAP_SOLO_MIN_CUT so the branch could not change
+  any output, and `c` was floored by `learned` before the veto was evaluated so
+  any recorded bend bypassed it outright. Both are reversed here, at the owner's
+  request and for a concrete reason: where a one-lane way merges into two, the
+  OSM geometry folds onto itself, every curvature estimator sees a corner, and
+  the camera looking down an empty straight road is the only thing that knows
+  better.
   """
 
-  def test_the_veto_is_currently_subsumed_by_min_cut(self):
-    """The relationship, not the values. If someone lowers MAP_SOLO_MIN_CUT or
-    raises VISION_DISAGREE_TH, this fails and the veto becomes load-bearing —
-    at which point it needs behavioural tests, which is exactly what the
-    failure message should prompt."""
-    assert MAP_SOLO_MAX_CUT * VISION_DISAGREE_TH < MAP_SOLO_MIN_CUT, (
-      "the vision-disagreement veto now changes outcomes on its own"
-      + " - give it behavioural tests")
+  def test_the_veto_now_changes_outcomes_on_its_own(self):
+    """The inverse of the old assertion, kept as an assertion so the reversal is
+    explicit rather than implied by a deleted test. A cut that survives the
+    veto's threshold must now be big enough to matter, or the veto is decorative
+    again. MUTATION: put VISION_DISAGREE_TH back to 0.05."""
+    assert MAP_SOLO_MAX_CUT * VISION_DISAGREE_TH > MAP_SOLO_MIN_CUT, (
+      "the vision-disagreement veto is subsumed by MIN_CUT again and does nothing")
 
-  def test_an_unvisited_corner_the_model_says_is_straight_gets_nothing(self):
-    """The behaviour the veto expresses, whichever check actually delivers it:
-    where two lanes merge the OSM way jogs sideways, any curvature estimator
-    sees a corner, and the model looking straight at it is the only thing that
-    says otherwise."""
-    for c in (0.0, 0.01, 0.04):
+  def test_a_straight_road_the_map_calls_a_corner_gets_nothing(self):
+    """THE REPORTED CASE. MUTATION: drop the veto, or restore the learned floor
+    ahead of it."""
+    for c in (0.0, 0.1, 0.25):
       v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=c,
-                          learned_conf=0.0, dist_m=80.0, v_ego=25.0)
+                          learned_conf=0.0, dist_m=80.0, v_ego=25.0,
+                          vision_available=True)
       assert v == CAP_INACTIVE, f"a corner the model denies got through at c={c}"
 
-  def test_a_corner_we_have_driven_is_not_vetoed(self):
-    """THE BYPASS, and it is `max(c, learned)` — nothing else. A bend does not
-    stop existing because the model has not seen it over a crest. MUTATION:
-    assign learned_conf instead of max()-ing it, or drop the floor entirely."""
+  def test_a_learned_record_no_longer_bypasses_it(self):
+    """THE DELIBERATE REVERSAL, and the half that actually bit. The orphan
+    learner files records at junctions the car once struggled at, and one
+    completed pass is 0.45 — so before v3.6.7 any such record permanently
+    outranked a camera looking straight down an empty road. A record says how
+    FAST a bend is; it does not get to say one EXISTS where the model can see
+    that it does not. MUTATION: evaluate the veto on `c` instead of
+    `c_model`."""
     v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=0.0,
-                        learned_conf=0.45, dist_m=80.0, v_ego=25.0)
-    assert v < CAP_INACTIVE
-    assert v < 30.0
+                        learned_conf=1.0, dist_m=80.0, v_ego=25.0,
+                        vision_available=True)
+    assert v == CAP_INACTIVE
 
-  def test_one_visit_clears_the_veto_threshold_by_construction(self):
-    """Why the bypass needs no clause of its own: confidence_for(1) is 0.45
-    against a 0.05 threshold. An earlier draft added `and learned <
-    LEARNED_TRUST_TH` to the veto, which reads like the bypass and could never
-    fire — dead code that looks like a live knob."""
-    assert confidence_for(1) > VISION_DISAGREE_TH * 5
+  def test_the_veto_needs_scc_v_to_be_running(self):
+    """LOAD-BEARING, NOT DEFENSIVE. `corroboration` is cleared to 0.0 in
+    SCCVisionV2._reset(), so with the SCC-V toggle off or below its 5 m/s speed
+    floor an ungated veto would silently disable SCC-M altogether — a far worse
+    regression than the one it fixes. MUTATION: drop `vision_available`."""
+    v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=0.0,
+                        learned_conf=0.45, dist_m=80.0, v_ego=25.0,
+                        vision_available=False)
+    assert v < CAP_INACTIVE
+
+  def test_a_real_corner_still_corroborates_far_above_the_threshold(self):
+    """The threshold has to sit between straight-road noise and a real bend.
+    `corroboration` is the lateral accel the model's path would pull at our
+    speed over CORROB_FRAC * a_lat_target = 1.05 m/s^2, so 0.30 is 0.32 m/s^2 —
+    a 2.3 km radius at 60 mph. Any bend worth slowing for saturates at 1.0."""
+    assert 0.10 < VISION_DISAGREE_TH < 0.5
+    v = fuse_map_target(20.0, 30.0, vision_is_active=False, vision_corroboration=1.0,
+                        learned_conf=0.0, dist_m=80.0, v_ego=25.0,
+                        vision_available=True)
+    assert v < CAP_INACTIVE
+
+  def test_a_learned_record_still_grants_authority_where_vision_agrees(self):
+    """The floor is only removed from the VETO, not from the authority sum. A
+    bend the model can see and we have driven still gets full authority."""
+    # a 3 m/s cut, under MAP_SOLO_MAX_CUT, so the ceiling does not bind and the
+    # authority itself is what decides how much survives
+    full = fuse_map_target(27.0, 30.0, vision_is_active=False, vision_corroboration=0.35,
+                           learned_conf=1.0, dist_m=80.0, v_ego=25.0,
+                           vision_available=True)
+    part = fuse_map_target(27.0, 30.0, vision_is_active=False, vision_corroboration=0.35,
+                           learned_conf=0.0, dist_m=80.0, v_ego=25.0,
+                           vision_available=True)
+    assert full == pytest.approx(27.0), "a driven corner the model sees passes whole"
+    assert part > full, "...and without the record it is throttled by corroboration"
 
   def test_beyond_the_model_horizon_proximity_still_stands_in(self):
     """The model's plan reaches ~v_ego * MODEL_HORIZON_T. Past that its silence

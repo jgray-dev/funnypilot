@@ -10,7 +10,8 @@ _V_CRUISE_MAX_MPS = 58.1  # ~130 mph
 
 def gate_map_target(map_v_target: float, vision_is_active: bool, v_cruise: float = 0.0,
                     vision_corroboration: float = 0.0, learned_conf: float = 0.0,
-                    dist_m: float = 0.0, v_ego: float = 0.0) -> float:
+                    dist_m: float = 0.0, v_ego: float = 0.0,
+                    vision_available: bool = False) -> float:
   """SCC-M v2's cap as the governor should see it.
 
   A thin alias so the governor's import site keeps one name for the operation.
@@ -18,7 +19,7 @@ def gate_map_target(map_v_target: float, vision_is_active: bool, v_cruise: float
   ours, and why a corner we have driven bypasses it.
   """
   return fuse_map_target(map_v_target, v_cruise, vision_is_active, vision_corroboration,
-                         learned_conf, dist_m, v_ego)
+                         learned_conf, dist_m, v_ego, vision_available)
 
 
 class SpeedGovernor:

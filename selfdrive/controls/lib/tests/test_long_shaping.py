@@ -343,3 +343,70 @@ class TestTheStopGovernor:
       g.reset()
       out = self._settle(g, d, vl, 20.0, 28.0, n=10)
       assert out <= 28.0 + 1e-9 and out == out
+
+
+class TestTheStopGovernorOnlyActsWhileClosing:
+  """FunnyPilot v3.6.7 — the launch bug v3.6.6 shipped, and it was mine.
+
+  The envelope evaluates to exactly `v_lead` at `d == STOP_GOV_GAP_M`, so
+  sitting 6 m behind a car in traffic capped the cruise target at the lead's own
+  speed: the car could match it and never regain a normal gap. Reported as "the
+  lead car drives from a stop and our vehicle doesn't accelerate appropriately".
+
+  The fix is to say what this governor is FOR. It answers "am I going too fast
+  for what is in front of me", which is only a question while the gap is
+  shrinking.
+  """
+  DT = 0.05
+
+  def _gov(self):
+    return long_shaping.StopGovernor(self.DT)
+
+  def _settle(self, g, d_rel, v_lead, v_ego, v_cruise, n=200):
+    out = v_cruise
+    for _ in range(n):
+      out = g.update(True, d_rel, v_lead, v_ego, v_cruise)
+    return out
+
+  def test_launching_behind_a_lead_is_not_capped(self):
+    """THE REPORTED CASE. Stopped 6 m back, the lead pulls away at 1 m/s and we
+    are still at 0.5 — not closing, so the governor has nothing to say and the
+    MPC gets the full cruise target to accelerate against. MUTATION: drop the
+    `closing` term and the cap returns to exactly the lead's speed."""
+    g = self._gov()
+    assert self._settle(g, 6.0, 1.0, 0.5, 25.0) == pytest.approx(25.0)
+    assert g.cap is None
+
+  def test_matching_the_leads_speed_releases_it(self):
+    """Once we have slowed to the lead there is nothing left to shave, and
+    holding a cap at the lead's own speed is what stopped the gap ever
+    recovering."""
+    g = self._gov()
+    self._settle(g, 40.0, 2.0, 20.0, 25.0)       # closing hard: engaged
+    assert g.cap is not None
+    assert self._settle(g, 40.0, 2.0, 2.0, 25.0) == pytest.approx(25.0)
+    assert g.cap is None
+
+  def test_it_still_engages_when_we_are_actually_closing(self):
+    """Anti-vacuous: the whole feature must survive its own guard."""
+    g = self._gov()
+    out = self._settle(g, 60.0, 0.0, 25.0, 30.0)
+    assert out == pytest.approx(g.raw_cap(60.0, 0.0), abs=0.01)
+    assert out < 15.0
+
+  def test_the_engage_threshold_has_hysteresis(self):
+    """A car tracking a lead at a near-identical speed must not chatter the
+    governor on and off. MUTATION: use one threshold for both."""
+    assert long_shaping.STOP_GOV_CLOSE_OFF < long_shaping.STOP_GOV_CLOSE_ON
+    g = self._gov()
+    # not closing enough to engage
+    assert self._settle(g, 40.0, 2.0, 2.5, 25.0, n=10) == pytest.approx(25.0)
+    # engaged, then a small drop in overspeed does NOT release it
+    self._settle(g, 40.0, 2.0, 20.0, 25.0)
+    assert g.update(True, 40.0, 2.0, 2.5, 25.0) < 25.0
+
+  def test_creeping_traffic_is_left_to_the_mpc(self):
+    """Following at the same speed in a queue is the ordinary following problem
+    and belongs to the solver, exactly as it does for a fast lead."""
+    g = self._gov()
+    assert self._settle(g, 8.0, 3.0, 3.0, 25.0) == pytest.approx(25.0)

@@ -184,6 +184,21 @@ STOP_GOV_CONFIRM_N = 3
 # arrive instantly — and rate-limiting it is what stops a flickering track from
 # yanking the cruise target.
 STOP_GOV_FALL_RATE = 3.0
+# v3.6.7 — IT ONLY ACTS WHILE WE ARE ACTUALLY CLOSING, AND WITHOUT THIS IT WAS A
+# LAUNCH BUG. The envelope evaluates to exactly `v_lead` at `d == GAP`, so
+# sitting 6 m behind a car in traffic capped the cruise target at the lead's own
+# speed — the car could match it and never regain a normal gap. Reported as "the
+# lead car drives from a stop and our vehicle doesn't accelerate appropriately",
+# and it was mine, introduced in v3.6.6.
+#
+# The fix is to say what this governor is FOR. It answers "am I going too fast
+# for what is in front of me", which is only a question while the gap is
+# shrinking. At or below the lead's speed there is nothing to shave and the
+# ordinary following problem is the MPC's, exactly as it is for a fast lead.
+# Two thresholds so a car tracking a lead at a near-identical speed cannot
+# chatter the governor on and off.
+STOP_GOV_CLOSE_ON = 1.0    # m/s of overspeed on the lead to ENGAGE
+STOP_GOV_CLOSE_OFF = 0.2   # ...and to keep holding once engaged
 
 
 class StopGovernor:
@@ -212,7 +227,11 @@ class StopGovernor:
   def update(self, lead_status: bool, d_rel: float, v_lead: float,
              v_ego: float, v_cruise: float) -> float:
     slow = bool(lead_status) and np.isfinite(v_lead) and float(v_lead) <= STOP_GOV_LEAD_V
-    if not slow:
+    # Hysteresis on the engage threshold, not on the cap: which question is
+    # being asked must not flicker.
+    margin = STOP_GOV_CLOSE_OFF if self.cap is not None else STOP_GOV_CLOSE_ON
+    closing = np.isfinite(v_ego) and float(v_ego) > float(v_lead) + margin
+    if not (slow and closing):
       self.reset()
       return v_cruise
 

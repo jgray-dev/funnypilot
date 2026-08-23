@@ -173,10 +173,19 @@ class SccCapElement:
 class SccAuthorityElement:
   """How much of the cut survived the corroboration gate. 100 = passed whole,
   0 = vetoed. A sensible CVSP with authority 0 means the fusion is the thing
-  stopping the car slowing, not the geometry."""
+  stopping the car slowing, not the geometry.
+
+  v3.6.7 — "-" IN GREY WITH NO UNIT WHEN THERE IS NO CORNER, matching every
+  other element in this column. It used to read a RED 0%, which is the same
+  glyph it uses for "vetoed" — so the bottom of the column shouted a fault on
+  every straight road, and the one reading that means something was
+  indistinguishable from the resting state. Gated on the SAME test CVSP uses
+  (field 2, the governing corner's own speed), so the column cannot show an
+  authority for a corner it is not showing a speed for."""
   def update(self, sm, is_metric):
-    a = _scc_debug()[8]
-    pct = int(round(a * 100))
+    if _scc_debug()[2] <= 0:
+      return UiElement("-", "AUTH", "", _GREY)
+    pct = int(round(_scc_debug()[8] * 100))
     col = _GREEN if pct >= 99 else (_AMBER if pct > 0 else _RED)
     return UiElement(f"{pct}", "AUTH", "%", col)
 

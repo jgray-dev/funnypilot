@@ -76,7 +76,45 @@ MAP_PROX_MAX_AUTHORITY = 0.75  # distance alone may never grant FULL authority
 # v_ego is what makes this the distance the model actually covers rather than a
 # fixed number that is wrong at every speed but one.
 MODEL_HORIZON_T = 8.0
-VISION_DISAGREE_TH = 0.05   # below this the model is actively reporting "straight"
+# FunnyPilot v3.6.7 — 0.05 -> 0.30, AND THE VETO NOW OUTRANKS EVERYTHING.
+#
+# Owner: "SCC-V should be able to ENTIRELY override SCC-M. There's a lot of
+# buggy or misleading map data in OpenStreetMap — for example where a one-lane
+# road merges into two, the one-lane way just ends and the two-lane way's
+# geometry folds onto itself. Vision shows zero desire to turn with almost full
+# confidence, so SCC-M v2 should have NO authority to slow us down."
+#
+# TWO THINGS STOPPED THAT FROM HAPPENING, and both are fixed together because
+# fixing either alone changes nothing.
+#
+# 1. THE THRESHOLD COULD NOT FIRE. `corroboration` is
+#    `max(path curvature) * v^2 / (CORROB_FRAC * a_lat_target)`, i.e. the
+#    lateral acceleration the model's PATH would pull at our speed, over
+#    1.05 m/s^2. At 0.05 the veto needed the model to predict under
+#    0.05 m/s^2 — a 13.7 km radius at 60 mph. `orientationRate.z` is a noisy
+#    signal and the statistic is a MAX over the whole horizon, so ordinary
+#    straight-road jitter clears that by a factor of two or three. The veto was
+#    unreachable in practice as well as (per the note below) subsumed on paper.
+#    0.30 is 0.32 m/s^2 — still nothing anyone would call a corner (2.3 km
+#    radius at 60 mph, 550 m at 30) while sitting far above the noise floor. A
+#    real 29 mph bend corroborates at 1.0.
+#
+# 2. A LEARNED RECORD BYPASSED IT. `c` was floored by `learned` BEFORE the veto
+#    was evaluated, and one completed pass is 0.45 — so any bend SCC-M had ever
+#    recorded ignored vision entirely. That is exactly backwards for the
+#    reported case: the orphan learner (v3.6.5) will happily file a record at a
+#    junction the car once struggled at, and that record then permanently
+#    outranks a camera looking straight down an empty road. The veto is now
+#    evaluated on the MODEL'S OWN number, before any flooring. Learning still
+#    grants AUTHORITY where the model is not looking or already agrees — it
+#    tells us how FAST a bend is, and it does not get to tell us one EXISTS
+#    when the model can see that it does not.
+#
+# IT IS GATED ON SCC-V ACTUALLY RUNNING (`vision_available`), and that guard is
+# load-bearing rather than defensive: `corroboration` is cleared to 0.0 in
+# SCCVisionV2._reset(), so with the SCC-V toggle off or below its 5 m/s speed
+# floor an ungated veto would silently disable SCC-M altogether.
+VISION_DISAGREE_TH = 0.30   # below this the model is actively reporting "straight"
 
 # FunnyPilot v3.6.2 — TWO PIECES OF ARITHMETIC, BOTH FOUND BY MUTATION TESTING,
 # AND BOTH WORTH RECORDING BECAUSE THEY MAKE CODE BELOW LOOK LOAD-BEARING WHEN
@@ -121,7 +159,8 @@ def proximity_authority(dist_m: float) -> float:
 
 def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool,
                     vision_corroboration: float, learned_conf: float = 0.0,
-                    dist_m: float = 0.0, v_ego: float = 0.0) -> float:
+                    dist_m: float = 0.0, v_ego: float = 0.0,
+                    vision_available: bool = False) -> float:
   """Return SCC-M v2's cap as the governor should see it.
 
   map_v_target: the smoothed cap (CAP_INACTIVE when it has nothing to say)
@@ -138,7 +177,8 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   if vision_is_active:
     return map_v_target
 
-  c = min(max(float(vision_corroboration), 0.0), 1.0)
+  c_model = min(max(float(vision_corroboration), 0.0), 1.0)
+  c = c_model
   learned = min(max(float(learned_conf), 0.0), 1.0)
   # A learned record FLOORS corroboration; `max`, never assignment, so where
   # the model already agrees fully a learned corner changes nothing. Assigning
@@ -149,13 +189,13 @@ def fuse_map_target(map_v_target: float, v_cruise: float, vision_is_active: bool
   d = float(dist_m) if dist_m and dist_m == dist_m else 0.0
   horizon = max(0.0, float(v_ego)) * MODEL_HORIZON_T if v_ego else 0.0
   model_could_see_it = 0.0 < d <= horizon
-  if model_could_see_it and c < VISION_DISAGREE_TH:
-    # Absence of evidence is evidence, but only where the model was looking. A
-    # bend we have DRIVEN does not stop existing because the model reports a
-    # straight road — and it does not need a clause here, because `c` was
-    # floored by `learned` above and one visit is 0.45 against a 0.05
-    # threshold. See the block above the constants; this branch is currently
-    # subsumed by MAP_SOLO_MIN_CUT and is kept as a statement of intent.
+  # v3.6.7 — VISION IS SUPREME WHERE VISION IS LOOKING. Evaluated on `c_model`,
+  # the model's OWN reading, deliberately before the learned floor above: a
+  # record says how fast a bend is, not that one exists, and a camera looking
+  # down an empty road is better evidence about existence than any map or any
+  # journal line. Gated on SCC-V running, because an SCC-V that is switched off
+  # reports 0.0 corroboration and would otherwise veto everything.
+  if vision_available and model_could_see_it and c_model < VISION_DISAGREE_TH:
     return CAP_INACTIVE
   if not model_could_see_it:
     c = max(c, proximity_authority(d))

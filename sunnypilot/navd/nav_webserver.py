@@ -48,7 +48,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.6"
+EXPECTED_VERSION = "3.6.7"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -235,6 +235,11 @@ _CODE_MARKERS = [
   ("KNOWN_FREE_RGB", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "green for a bend that costs nothing"),
   ("ALWAYS DRAWN", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "minimap survives lateral-only"),
   ("_corner_warn", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py", "curve warning is an edge pulse"),
+  # v3.6.7
+  ("def _update_command_rate", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/controller.py", "predictive tuning tracks a ramp"),
+  ("STOP_GOV_CLOSE_ON", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop governor only acts while closing"),
+  ("VISION_DISAGREE_TH = 0.30", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "vision outranks the map"),
+  ("vision_available", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "the veto knows if SCC-V is running"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
