@@ -186,7 +186,7 @@ def read_scc_debug_shm():
       return DEBUG_INACTIVE
     return (int(p[0]), p[1], p[2], p[3], p[4], int(p[5]), bool(int(p[6])),
             p[7], p[8], int(p[9]), p[10], p[11], p[12], int(p[13]), p[14],
-            int(p[15]))
+            int(p[15]), p[16], p[17], p[18], int(p[19]))
   except Exception:
     return DEBUG_INACTIVE
 
@@ -279,8 +279,16 @@ DEBUG_SHM_PATH = '/dev/shm/fp_sccdbg'
 #   n_corners, gov_radius_m, gov_v_mps, gov_dist_m, gov_a_lat, gov_visits,
 #   gate, cap_mps, authority, learned_count,
 #   last_pass_a_peak, last_pass_severity, last_pass_radius_m, pass_count,
-#   last_pass_lane_departure_m
-DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0)
+#   last_pass_lane_departure_m, orphan_count,
+#   scc_v_mps, corroboration, stop_gov_mps, long_source        <- v3.6.7
+#
+# THE FOUR v3.6.7 FIELDS ARE APPENDED, NOT INTERLEAVED, and that is the only
+# way this channel is allowed to grow: every reader is positional, so inserting
+# in the middle silently changes what index [8] means. The reader rejects a
+# short line outright rather than defaulting the tail — a dev panel showing a
+# zero it invented is exactly the failure this whole module is written against.
+DEBUG_INACTIVE = (0, 0.0, 0.0, 0.0, 0.0, 0, False, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0,
+                  0.0, 0.0, 0.0, 0)
 
 LAT_INTERP_PATH = '/dev/shm/lat_interp'
 # Fraction of control frames in which the EPS governor's bound was actually

@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from openpilot.selfdrive.controls.lib import long_shaping
+from openpilot.selfdrive.controls.lib import long_shaping as ls
 
 from openpilot.selfdrive.controls.lib.long_shaping import (
   AccelJerkShaper, LeadGrace,
@@ -410,3 +411,54 @@ class TestTheStopGovernorOnlyActsWhileClosing:
     and belongs to the solver, exactly as it does for a fast lead."""
     g = self._gov()
     assert self._settle(g, 8.0, 3.0, 3.0, 25.0) == pytest.approx(25.0)
+
+
+class TestWhoIsDecidingTheLongitudinal:
+  """FunnyPilot v3.6.7 — `long_source_code`, the dev panel's SRC readout.
+
+  IT IS A CLASSIFIER, NOT A REPORT, and the whole content is the ORDER. Five
+  things can be the binding constraint and more than one is usually "active" at
+  once; getting the priority wrong produces a readout that is plausible on
+  every frame and wrong on the ones that matter.
+  """
+
+  def test_the_lead_outranks_every_cap(self):
+    # A speed governor lowering v_cruise while the MPC's lead obstacle is the
+    # nearest one has not changed what the car is doing — the lead was already
+    # holding us under that cap. Reporting SCCM there would send someone
+    # looking at the corner code for a following problem.
+    for gov in ("cruise", "sccVision", "sccMap", "speedLimitAssist"):
+      assert ls.long_source_code("lead0", gov, 12.0, 20.0) == ls.SRC_LEAD
+      assert ls.long_source_code("lead1", gov, None, 20.0) == ls.SRC_LEAD
+
+  def test_the_stop_governor_is_credited_only_when_its_cap_is_the_one_in_force(self):
+    # Engaged and binding.
+    assert ls.long_source_code("cruise", "cruise", 14.0, 14.0) == ls.SRC_STOP
+    # Engaged but something else took v_cruise lower: not its constraint.
+    assert ls.long_source_code("cruise", "sccMap", 20.0, 14.0) == ls.SRC_SCC_M
+    # Not engaged at all.
+    assert ls.long_source_code("cruise", "cruise", None, 14.0) == ls.SRC_CRUISE
+
+  def test_each_governor_reports_itself(self):
+    assert ls.long_source_code("cruise", "sccVision", None, 20.0) == ls.SRC_SCC_V
+    assert ls.long_source_code("cruise", "sccMap", None, 20.0) == ls.SRC_SCC_M
+    assert ls.long_source_code("cruise", "speedLimitAssist", None, 20.0) == ls.SRC_SLA
+
+  def test_the_model_plan_reports_as_e2e_and_only_when_nothing_caps(self):
+    assert ls.long_source_code("e2e", "cruise", None, 20.0) == ls.SRC_E2E
+    # A governor winning the min() is the more specific answer.
+    assert ls.long_source_code("e2e", "sccMap", None, 20.0) == ls.SRC_SCC_M
+
+  def test_holding_the_set_speed_is_cruise(self):
+    assert ls.long_source_code("cruise", "cruise", None, 20.0) == ls.SRC_CRUISE
+
+  def test_it_never_raises_on_junk(self):
+    # It runs inside the publish path of a 20 Hz control process, so a bad
+    # input must degrade to a reading rather than take plannerd down.
+    for bad in (None, "", "wat", 3, object()):
+      assert ls.long_source_code(bad, bad, bad, bad) in ls.SRC_NAMES
+
+  def test_every_code_has_a_name(self):
+    # The UI looks the code up in SRC_NAMES; a code with no entry draws "?".
+    codes = {v for k, v in vars(ls).items() if k.startswith("SRC_") and isinstance(v, int)}
+    assert codes == set(ls.SRC_NAMES)

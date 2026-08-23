@@ -213,8 +213,23 @@ class TestTheDevUiChannel:
 
   # v3.6.4 adds field 15 (the last pass's worst lane departure, metres);
   # v3.6.5 adds field 16, the count of bends recorded that the route geometry
-  # never listed.
-  ROW = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7, 0.31, 5)
+  # never listed; v3.6.7 adds 17-20 (SCC-V's cap, the model's corroboration,
+  # the stop governor's cap, and which constraint is binding).
+  #
+  # THE TAIL IS DERIVED FROM DEBUG_INACTIVE RATHER THAN RETYPED. The first
+  # version of this fixture was a hand-written 16-tuple and it went stale the
+  # moment v3.6.7 grew the format — which is exactly how v3.6.3 shipped a
+  # minimap that died a few seconds into every drive, and the reason
+  # test_dev_panel's contract test drives the real producer. A fixture that
+  # cannot notice the format changed is testing the author's memory of it.
+  _HEAD = (3, 118.0, 14.5, 210.0, 1.95, 2, 1, 16.2, 0.75, 41, 2.4, 0.3, 118.0, 7, 0.31, 5,
+           13.0, 0.42, 11.0, 3)
+  ROW = _HEAD[:len(scc_shm.DEBUG_INACTIVE)]
+
+  def test_the_fixture_is_the_full_width_of_the_channel(self):
+    # Anti-vacuous: a truncated fixture would make every case below test a
+    # short row, which the reader rejects outright.
+    assert len(self.ROW) == len(scc_shm.DEBUG_INACTIVE)
 
   def test_round_trip(self, paths):
     scc_shm.write_scc_debug_shm(self.ROW)
@@ -225,6 +240,12 @@ class TestTheDevUiChannel:
     assert out[8] == pytest.approx(0.75, abs=0.01)
     assert out[14] == pytest.approx(0.31, abs=0.01)
     assert out[15] == 5
+    # v3.6.7 — the longitudinal tail, by index, so an insertion upstream shows
+    # up here as a wrong value rather than as a silently relabelled neighbour.
+    assert out[16] == pytest.approx(13.0, abs=0.01)
+    assert out[17] == pytest.approx(0.42, abs=0.01)
+    assert out[18] == pytest.approx(11.0, abs=0.01)
+    assert out[19] == 3
 
   def test_a_short_row_reads_inactive(self, paths):
     """A writer that has not been upgraded yet must read as "no data", not as

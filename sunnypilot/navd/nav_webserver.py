@@ -225,7 +225,10 @@ _CODE_MARKERS = [
   ("def _corners_from_store", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "learned bends enter the corner list"),
   ("def is_unmanageable", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "bends the cap cannot fix"),
   ("def read_corner_warning_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "preemptive curve warning channel"),
-  ("class SccOrphanElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "ORPH dev-UI readout"),
+  ("class LongTrackingElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "TRK dev-UI readout"),
+  ("class SccCorroborationElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "CORR dev-UI readout"),
+  ("def long_source_code", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "SRC classified by the planner"),
+  ("BOTTOM_ROWS", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/__init__.py", "two-row dev panel"),
   # v3.6.6
   ("class StopGovernor", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop-and-go lead speed cap"),
   ("self.stop_gov.update", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "stop governor reaches v_cruise"),

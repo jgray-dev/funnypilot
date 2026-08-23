@@ -21,6 +21,8 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 
 # LongV2 components (speed-domain governors only; following is owned by the
 # MPC as of v3.2.6e — see selfdrive/controls/lib/longitudinal_planner.py)
+from openpilot.selfdrive.controls.lib.long_shaping import long_source_code
+from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.fric import get_fric
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_vision_v2 import SCCVisionV2
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_map_v2 import SCCMapV2, read_gps
@@ -341,7 +343,28 @@ class LongitudinalPlannerSP:
     write_corner_warning_shm(self._scc_map_v2.corner_warning)
 
     # v3.6.2: the dev-UI payload. Diagnostic only — see long_v2/scc_shm.py.
-    write_scc_debug_shm(self._scc_map_v2.debug_row(self._scc_map_authority))
+    #
+    # v3.6.7 — IT CARRIES THE LONGITUDINAL SIDE NOW TOO. SCC-V's own cap and
+    # corroboration sit beside SCC-M's, because after this release the question
+    # on the panel is which of the two is right rather than what SCC-M alone is
+    # doing; and the stop governor plus `long_source_code` answer "what is
+    # actually deciding the longitudinal", which is a selection rule and must
+    # therefore be classified HERE rather than re-derived by the UI.
+    #
+    # `getattr` on the base-planner attributes because `LongitudinalPlanner`
+    # INHERITS from this class — `self` has them on the car and does not in a
+    # test that constructs the SP half alone. A missing one degrades to "not
+    # constraining", which is the reading that changes nothing.
+    _mpc = getattr(self, 'mpc', None)
+    _stop = getattr(self, 'stop_gov', None)
+    _stop_cap = getattr(_stop, 'cap', None) if _stop is not None else None
+    write_scc_debug_shm(self._scc_map_v2.debug_row(
+      self._scc_map_authority,
+      self._scc_vision_v2.output_v_target,
+      self._scc_vision_v2.corroboration,
+      _stop_cap if _stop_cap is not None else CAP_INACTIVE,
+      long_source_code(getattr(_mpc, 'source', 'cruise'), str(self.source),
+                       _stop_cap, getattr(self, '_v_cruise_last', 0.0))))
 
     # v3.5.0: the learned corner count + whether it is governing right now.
     write_learn_shm(self._scc_map_v2.learned_count, self._scc_map_v2.is_active,

@@ -910,8 +910,17 @@ class SCCMapV2:
       self.output_v_target = CAP_INACTIVE
       self.output_a_target = 0.0
 
-  def debug_row(self, authority: float = 0.0):
-    """The dev-UI payload, in scc_shm's documented field order."""
+  def debug_row(self, authority: float = 0.0, scc_v: float = 0.0,
+                corroboration: float = 0.0, stop_cap: float = 0.0,
+                source: int = 0):
+    """The dev-UI payload, in scc_shm's documented field order.
+
+    v3.6.7 — the last four come from OUTSIDE SCC-M v2 (SCC-V's own cap and
+    corroboration, the stop governor, and which constraint is binding) and are
+    passed in rather than reached for. This object has no business knowing
+    about the vision controller or the base planner, and one channel carrying
+    the whole panel beats four channels the UI has to keep in sync.
+    """
     gov = None
     for c in self.corners:
       if abs(c.lat - self.gov_lat) < 1e-7 and abs(c.lon - self.gov_lon) < 1e-7:
@@ -928,7 +937,9 @@ class SCCMapV2:
             int(bool(self.gas_gating_active)),
             cap, authority, self.learned_count,
             self.last_pass[0], self.last_pass[1], self.last_pass[2], self.pass_count,
-            self.last_pass[3], self.orphan_count)
+            self.last_pass[3], self.orphan_count,
+            scc_v if scc_v < CAP_INACTIVE else 0.0, corroboration,
+            stop_cap if stop_cap < CAP_INACTIVE else 0.0, int(source))
 
   def _reset(self):
     self.state = "INACTIVE"

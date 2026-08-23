@@ -256,3 +256,72 @@ class StopGovernor:
       self.cap = max(target, self.cap - STOP_GOV_FALL_RATE * self.dt)
     self.cap = min(self.cap, v_cruise)
     return min(v_cruise, self.cap)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# FunnyPilot v3.6.7 — WHO IS DECIDING THE LONGITUDINAL, AS ONE NUMBER.
+#
+# There are five things that can be the binding constraint on this stack and
+# they live in four different files: the MPC's lead obstacle, the MPC's cruise
+# obstacle, the model's own plan in blended mode, whichever speed governor won
+# the min(), and the stop governor. The dev UI must not re-derive that — two
+# copies of a selection rule drift the moment either is tuned, and a readout
+# that disagrees with the controller is worse than no readout (the v3.5.0 rule
+# that put `gov_lat`/`gov_lon` on the wire in the first place).
+#
+# So the planner classifies it, here, in a pure function that can be tested,
+# and publishes the code. ORDER IS THE WHOLE CONTENT OF THIS FUNCTION and it
+# runs from the most immediate authority outward:
+#
+#   LEAD   the MPC's lead obstacle is nearest — nothing upstream matters,
+#          because a cruise cap only ever lowers a target the lead is already
+#          holding us under
+#   STOP   the stop governor is what put v_cruise where it is
+#   SCCV / SCCM / SLA   a speed governor won the min()
+#   E2E    blended mode, the model's own plan is binding
+#   CRZ    nothing is binding; we are holding the set speed
+SRC_CRUISE = 0
+SRC_LEAD = 1
+SRC_SCC_V = 2
+SRC_SCC_M = 3
+SRC_SLA = 4
+SRC_STOP = 5
+SRC_E2E = 6
+
+SRC_NAMES = {SRC_CRUISE: "CRZ", SRC_LEAD: "LEAD", SRC_SCC_V: "SCCV",
+             SRC_SCC_M: "SCCM", SRC_SLA: "SLA", SRC_STOP: "STOP",
+             SRC_E2E: "E2E"}
+
+# How close the stop governor's cap has to be to the cruise target actually
+# used before we credit it with the constraint. It writes v_cruise through a
+# min(), so equality is the test; the tolerance is float slack, not a band.
+_SRC_EPS = 1e-3
+
+
+def long_source_code(mpc_source: str, gov_source: str, stop_cap, v_cruise: float) -> int:
+  """Classify the binding longitudinal constraint. Pure; never raises.
+
+  mpc_source: `LongitudinalPlanner.mpc.source` ('lead0'/'lead1'/'cruise'/'e2e')
+  gov_source: the SP planner's own source ('cruise'/'sccVision'/'sccMap'/
+              'speedLimitAssist'), i.e. which governor won the min()
+  stop_cap:   `StopGovernor.cap`, None when it is not constraining
+  v_cruise:   the cruise target as finally handed to the MPC
+  """
+  m = str(mpc_source)
+  if m in ("lead0", "lead1"):
+    return SRC_LEAD
+  try:
+    if stop_cap is not None and float(stop_cap) <= float(v_cruise) + _SRC_EPS:
+      return SRC_STOP
+  except (TypeError, ValueError):
+    pass
+  g = str(gov_source)
+  if g == "sccVision":
+    return SRC_SCC_V
+  if g == "sccMap":
+    return SRC_SCC_M
+  if g == "speedLimitAssist":
+    return SRC_SLA
+  if m == "e2e":
+    return SRC_E2E
+  return SRC_CRUISE

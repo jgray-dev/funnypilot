@@ -10,8 +10,10 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement,
   SccCornersElement, SccRadiusElement, SccCornerSpeedElement, SccDistanceElement,
   SccALatElement, SccVisitsElement, SccGateElement, SccCapElement,
-  SccAuthorityElement, SccLearnedElement, SccLastPassElement, SccPassCountElement,
-  SccLaneDepartElement, SccOrphanElement,
+  SccAuthorityElement, SccLearnedElement, SccLastPassElement,
+  SccLaneDepartElement, SccVisionCapElement, SccCorroborationElement,
+  LongSourceElement, LongAccelElement, LongTrackingElement, StopGovernorElement,
+  LeadElement,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -34,7 +36,22 @@ class DeveloperUiRenderer(Widget):
   DEV_UI_BOTTOM = 1
   DEV_UI_RIGHT = 2
   DEV_UI_BOTH = 3
-  BOTTOM_BAR_HEIGHT = 61
+  # FunnyPilot v3.6.7 — TWO ROWS. v3.6.7 moved the actuator's tracking of the
+  # plan, the stop-and-go governor and the vision/map fusion, and none of them
+  # had a readout; adding five elements to a single bar would have shrunk the
+  # nine already there, because `_draw_bottom_dev_ui` divides a FIXED width
+  # between however many it is handed.
+  #
+  # ARITHMETIC, NOT EYE (the v3.5.0 rule). Each row is ROW_H = 61 px, which is
+  # what one row has always been, so 2 x 61 = 122. The bottom horizon band is
+  # `chrome.BAND_BOT_H` = 138 px, so the whole panel still sits INSIDE the scrim
+  # that exists to make text legible over road — 16 px of margin, and the band
+  # is what the panel is drawn against rather than something it has to clear.
+  # `get_bottom_dev_ui_offset()` returns the full 122, so the long-status dot
+  # and the driver-state widget move up by exactly one extra row.
+  ROW_H = 61
+  BOTTOM_ROWS = 2
+  BOTTOM_BAR_HEIGHT = ROW_H * BOTTOM_ROWS
 
   def __init__(self):
     super().__init__()
@@ -58,8 +75,16 @@ class DeveloperUiRenderer(Widget):
     self.scc_learned = SccLearnedElement()
     self.scc_last_pass = SccLastPassElement()
     self.scc_lane_depart = SccLaneDepartElement()
-    self.scc_orphan = SccOrphanElement()
-    self.scc_pass_count = SccPassCountElement()
+    # v3.6.7 — SCC-V beside SCC-M, because after the fusion change the question
+    # on this panel is which of the two is right rather than what SCC-M alone
+    # is doing; plus the longitudinal row, which is what v3.6.7 actually moved.
+    self.scc_vision_cap = SccVisionCapElement()
+    self.scc_corroboration = SccCorroborationElement()
+    self.long_source = LongSourceElement()
+    self.long_accel = LongAccelElement()
+    self.long_tracking = LongTrackingElement()
+    self.stop_gov = StopGovernorElement()
+    self.lead = LeadElement()
 
   @staticmethod
   def get_bottom_dev_ui_offset() -> int:
@@ -158,30 +183,52 @@ class DeveloperUiRenderer(Widget):
 
   def _draw_bottom_dev_ui(self, rect: rl.Rectangle) -> None:
     sm = ui_state.sm
-    bar_height = 61
-    y = int(rect.y + rect.height - bar_height)
+    m = ui_state.is_metric
+    y = int(rect.y + rect.height - self.BOTTOM_BAR_HEIGHT)
 
-    rl.draw_rectangle(int(rect.x), y, int(rect.width), bar_height,
+    rl.draw_rectangle(int(rect.x), y, int(rect.width), self.BOTTOM_BAR_HEIGHT,
                       rl.Color(0, 0, 0, 100))
 
-    # THE BOTTOM BAR IS THE LEARNING SIDE. Unconditional, every frame, in a
-    # fixed order: a bar built conditionally re-centres itself whenever a source
-    # goes quiet, and a readout that moves is a readout you stop trusting.
-    elements = [
-      self.scc_corners.update(sm, ui_state.is_metric),
-      self.scc_a_lat.update(sm, ui_state.is_metric),
-      self.scc_visits.update(sm, ui_state.is_metric),
-      self.scc_gate.update(sm, ui_state.is_metric),
-      self.scc_last_pass.update(sm, ui_state.is_metric),
-      self.scc_lane_depart.update(sm, ui_state.is_metric),
-      self.scc_pass_count.update(sm, ui_state.is_metric),
-      self.scc_orphan.update(sm, ui_state.is_metric),
-      self.scc_learned.update(sm, ui_state.is_metric),
+    # TWO ROWS, BOTH UNCONDITIONAL, BOTH IN A FIXED ORDER. A row built
+    # conditionally re-centres itself whenever a source goes quiet, and a
+    # readout that moves is a readout you stop trusting (the v3.5.9 station
+    # rule). Nothing here is allowed to drop out; an element with nothing to
+    # say prints "-" and holds its slot.
+    #
+    # TOP ROW — WHAT IS DECIDING THE LONGITUDINAL, which is what v3.6.7
+    # changed. Deliberately the sparser of the two: it is the row you read at a
+    # glance while driving, and it earns the width.
+    #
+    # BOTTOM ROW — SCC. Vision's own cap and the model's own corroboration sit
+    # at the head of it, ahead of SCC-M's numbers, because after v3.6.7 vision
+    # is what decides whether any of the rest gets to act.
+    rows = [
+      [
+        self.long_source.update(sm, m),
+        self.long_accel.update(sm, m),
+        self.long_tracking.update(sm, m),
+        self.lead.update(sm, m),
+        self.stop_gov.update(sm, m),
+      ],
+      [
+        self.scc_vision_cap.update(sm, m),
+        self.scc_corroboration.update(sm, m),
+        self.scc_corners.update(sm, m),
+        self.scc_a_lat.update(sm, m),
+        self.scc_visits.update(sm, m),
+        self.scc_gate.update(sm, m),
+        self.scc_last_pass.update(sm, m),
+        self.scc_lane_depart.update(sm, m),
+        self.scc_learned.update(sm, m),
+      ],
     ]
 
-    if not elements:
-      return
+    for row_i, elements in enumerate(rows):
+      if not elements:
+        continue
+      self._draw_bottom_row(rect, y + row_i * self.ROW_H, elements)
 
+  def _draw_bottom_row(self, rect: rl.Rectangle, row_y: int, elements: list) -> None:
     font_size = 38
     element_widths = []
     for element in elements:
@@ -190,10 +237,9 @@ class DeveloperUiRenderer(Widget):
 
     total_element_width = sum(element_widths)
     num_gaps = len(elements) + 1
-    available_width = rect.width
-    gap_width = (available_width - total_element_width) / num_gaps
+    gap_width = (rect.width - total_element_width) / num_gaps
 
-    center_y = y + bar_height // 2
+    center_y = row_y + self.ROW_H // 2
     current_x = rect.x + gap_width
 
     for i, element in enumerate(elements):

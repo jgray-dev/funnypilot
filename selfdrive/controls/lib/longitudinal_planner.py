@@ -94,6 +94,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.shaper = AccelJerkShaper(self.dt, a_init=init_a)
     self.lead_grace = LeadGrace(self.dt)
     self.stop_gov = StopGovernor(self.dt)
+    self._v_cruise_last = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -254,6 +255,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # so it can only ever slow the car; the MPC still owns the stop itself.
     v_cruise = self.stop_gov.update(bool(lead_one.status), lead_one.dRel,
                                     lead_one.vLead, v_ego, v_cruise)
+    # v3.6.7 — the cruise target AS THE MPC RECEIVES IT, recorded for the dev
+    # panel's source classifier. Taken here rather than earlier because every
+    # governor above has already had its say; comparing the stop governor's cap
+    # against a target it has not been applied to yet would credit it with a
+    # constraint it did not win.
+    self._v_cruise_last = float(v_cruise)
 
     personality = sm['selfdriveState'].personality
     self.mpc.set_weights(prev_accel_constraint, personality=personality)

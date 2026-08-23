@@ -235,8 +235,77 @@ fork has ever touched — it is in the actuator layer, in opendbc, under the
   lag, so every bound was re-derived at 1.2 s; and the direction-clamp mutation
   survived twice more until a test drove `_calculate_lookahead_jerk` DIRECTLY
   with a forced `cmd_rate` — the integrator's own smoothing had been hiding it.
+- **THE DEV PANEL WAS REBUILT AROUND THIS RELEASE, SECOND PASS, SAME BRANCH.**
+  Owner: "update the DEV UI values to reflect our current work... I just want
+  more insight into how your code is performing." The panel was SCC-M v2's
+  instrument from v3.6.2 and v3.6.7 moved three things it could not see at all
+  — the actuator's tracking of the plan, the stop-and-go governor, and which of
+  SCC-V and SCC-M is deciding.
+  * `developer_ui/__init__.py` — **THE BOTTOM BAR IS TWO ROWS.** Each row
+    divides a FIXED width between however many elements it is handed, so five
+    more on one bar would have shrunk the nine already there. ARITHMETIC, NOT
+    EYE: `ROW_H` 61 (what one row has always been) x `BOTTOM_ROWS` 2 = 122,
+    against `chrome.BAND_BOT_H` 138 — the whole panel still sits INSIDE the
+    scrim that makes text legible over road, with 16 px spare, and the long
+    dot at `height - 20 - 16 - 122` clears the bar's top edge by 20 px.
+    TOP ROW is the longitudinal (SRC/ACC/TRK/LEAD/STOP) and is deliberately the
+    sparser one — it is the row read at a glance while driving. BOTTOM ROW is
+    SCC, led by SCC-V's own numbers because after this release vision is what
+    decides whether the rest gets to act.
+  * NEW **TRK**, and it is the one number that validates v3.6.7.
+    `carOutput.actuatorsOutput.accel` minus `carControl.actuators.accel` — a
+    MEASUREMENT, not a second copy of the jerk law: the controller assigns the
+    second to `accel_cmd` and publishes the first straight out of
+    `jerk_limited_integrator`, so the difference IS the lag this release
+    removes. It read 0.54 on a 2 m/s^3 brake ramp before and near zero after.
+    Low-passed at `_TRK_TAU` 0.4 s rather than max-held, because the quantity
+    of interest is the SUSTAINED ramp error — a max-hold would show the step
+    response, which is the lag doing its job. `_TRK_DT_MAX` 0.25 so a stalled
+    frame cannot teleport it, the same property `tokens.Eased` carries, and
+    stepped exactly once per frame for the same reason.
+  * NEW **SRC** — which of five possible constraints is binding, CLASSIFIED BY
+    THE PLANNER (`long_shaping.long_source_code`) and merely looked up by the
+    UI. The order is the whole content: LEAD outranks every cap (a governor
+    lowering v_cruise under a lead that is already holding us has changed
+    nothing, and reporting SCCM there sends you reading corner code for a
+    following problem), then STOP but only where its cap is the one in force,
+    then the governors, then E2E, then cruise. **Flapping LEAD <-> CRZ IS the
+    following wave, seen directly.**
+  * NEW **STOP** (the governor's cap, or `off`), **LEAD** (gap and closing
+    rate — the wave cannot be read without the gap), **ACC** (the demand TRK is
+    measured against; a large TRK against a FLAT ACC is a different fault and
+    is not the tracking lag), **SCCV** (vision's own cap beside SCC-M's, since
+    the point of the fusion change is that the two can disagree) and **CORR**
+    — the model's own corroboration, shown raw. **CORR IS THE FALSIFIABLE PART
+    OF THE VETO RETUNE**: it is what `VISION_DISAGREE_TH` 0.30 is compared
+    against, so if it idles ABOVE 0.30 on plain straight road the veto still
+    cannot fire and the THRESHOLD is what needs to move — not the budget and
+    not the geometry.
+  * LRN/NPAS/ORPH merged into one `12/3/1` triple. No information lost, three
+    slots recovered, and they are read together anyway.
+  * **A REAL DEFECT, FOUND BY THE NEW TESTS AND NOT BY REVIEW.** `elements.py`
+    carried a HAND-TYPED 16-tuple as the resting payload for when the lazy
+    `scc_shm` import fails. Appending four fields made every element reading
+    index 16..19 raise `IndexError` down that path — IN THE UI PROCESS, AT
+    60 Hz. It is v3.6.3's five-name unpack one layer further out, and the fix
+    is the same: take the producer's own `DEBUG_INACTIVE`. `test_scc_shm`'s
+    round-trip fixture was the SAME MISTAKE and failed for the same reason; it
+    derives its width from the channel now.
+  * `fp_sccdbg` 16 -> 20 fields, APPENDED not interleaved, and a short line
+    still reads INACTIVE rather than defaulting the tail — version skew must
+    lose the whole panel, never invent a zero that looks live.
+  * TESTS: **1074 green**, ruff clean. NEW
+    `onroad/tests/test_dev_panel.py` (25) — it drives the REAL element objects
+    with stubbed pyray rather than scanning source, which is what caught the
+    IndexError; plus `TestWhoIsDecidingTheLongitudinal` (7) and the widened
+    channel cases. TEN guards mutation-tested, all caught.
+    PROCESS NOTE: the first cut installed its OWN `pyray` stub, won the
+    collection race by alphabetical order, and broke `test_hud_logic`'s import
+    with `module 'pyray' has no attribute 'Font'` — a failure in a file this
+    release does not touch. `sys.modules` is process-wide; one stub, one owner,
+    and it reuses `test_hud_imports._stub_graphics` now.
 - `FUNNYPILOT_VERSION` -> 3.6.7, `EXPECTED_VERSION` -> "3.6.7", branch
-  `funnypilot-3.6.7`. Four new `_CODE_MARKERS`; all 128 resolve.
+  `funnypilot-3.6.7`. Eight new `_CODE_MARKERS`; all 131 resolve.
 - ON-ROAD VERIFICATION: (1) **the following wave is the headline** — behind a
   lead the car should now hold a gap instead of sawing between too-close and
   too-far. If it still waves, the actuator lag is exonerated and the next
@@ -246,6 +315,11 @@ fork has ever touched — it is in the actuator layer, in opendbc, under the
   (4) SCC-M should stop slowing at the merge that prompted this; if it still
   does, check AUTH — a live number there means the veto did not fire and the
   model IS seeing curvature, which is a different problem from bad map data.
+  **AND THE PANEL NOW ANSWERS EACH OF THOSE DIRECTLY**: TRK near zero through a
+  brake ramp is (1)-(3); SRC holding LEAD instead of flapping is the wave;
+  STOP coming on into a queue and staying `off` as a lead pulls away is the
+  stop governor and its launch bug; CORR under 0.30 at the merge is the veto
+  being ABLE to fire there.
 
 ### v3.6.6 Changes (based on funnypilot-3.6.5)
 
