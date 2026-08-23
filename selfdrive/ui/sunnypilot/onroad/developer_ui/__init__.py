@@ -8,10 +8,8 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement,
-  SccCornersElement, SccRadiusElement, SccCornerSpeedElement, SccDistanceElement,
-  SccALatElement, SccVisitsElement, SccGateElement, SccCapElement,
-  SccAuthorityElement, SccLearnedElement, SccLastPassElement,
-  SccLaneDepartElement, SccVisionCapElement, SccCorroborationElement,
+  SccCornerSpeedElement, SccGateElement, SccCapElement, SccAuthorityElement,
+  SccVisionCapElement, SccCorroborationElement,
   LongSourceElement, LongAccelElement, LongTrackingElement, StopGovernorElement,
   LeadElement,
 )
@@ -36,21 +34,25 @@ class DeveloperUiRenderer(Widget):
   DEV_UI_BOTTOM = 1
   DEV_UI_RIGHT = 2
   DEV_UI_BOTH = 3
-  # FunnyPilot v3.6.7 — TWO ROWS. v3.6.7 moved the actuator's tracking of the
-  # plan, the stop-and-go governor and the vision/map fusion, and none of them
-  # had a readout; adding five elements to a single bar would have shrunk the
-  # nine already there, because `_draw_bottom_dev_ui` divides a FIXED width
-  # between however many it is handed.
+  # ONE BOTTOM ROW AND ONE RIGHT COLUMN. THAT IS THE WHOLE PANEL, AND IT IS A
+  # BUDGET RATHER THAN A DEFAULT — eleven slots, and every one of them has to
+  # earn its place against the road it is drawn over.
   #
-  # ARITHMETIC, NOT EYE (the v3.5.0 rule). Each row is ROW_H = 61 px, which is
-  # what one row has always been, so 2 x 61 = 122. The bottom horizon band is
-  # `chrome.BAND_BOT_H` = 138 px, so the whole panel still sits INSIDE the scrim
-  # that exists to make text legible over road — 16 px of margin, and the band
-  # is what the panel is drawn against rather than something it has to clear.
-  # `get_bottom_dev_ui_offset()` returns the full 122, so the long-status dot
-  # and the driver-state widget move up by exactly one extra row.
+  # A second row was tried in v3.6.7 and REMOVED at the owner's instruction. It
+  # is worth recording why the trade is real in both directions: a row divides
+  # a FIXED width between however many elements it is handed, so the only two
+  # ways to add a readout are to shrink every other readout or to take more of
+  # the windscreen. The answer here is neither — it is to show fewer things.
+  #
+  # WHAT WENT, AND THE COST, STATED PLAINLY: the SCC-M v2 LEARNING instruments
+  # (CORN, R, DIST, ALAT, VIS, PASS, LANE, LRN/NPAS/ORPH). Those diagnose
+  # whether the corner store is filling and whether the geometry is finding
+  # bends — real questions, and v3.6.4/v3.6.5 added several of them for exactly
+  # that. They are not longitudinal BEHAVIOUR, which is what this panel is now
+  # for. The data is still published on `fp_sccdbg` and the elements are one
+  # commit away if a learning question comes back.
   ROW_H = 61
-  BOTTOM_ROWS = 2
+  BOTTOM_ROWS = 1
   BOTTOM_BAR_HEIGHT = ROW_H * BOTTOM_ROWS
 
   def __init__(self):
@@ -59,25 +61,16 @@ class DeveloperUiRenderer(Widget):
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self.dev_ui_mode = self.DEV_UI_OFF
 
-    # FunnyPilot v3.6.2 — the dev UI is SCC-M v2's instrument panel now. The
-    # v3.3.8 turn-in oscillation elements (EPS/LIM/TBAR/BUMP) and the lateral
-    # readouts went with the investigation that closed; keeping a screen full
-    # of numbers nobody reads is how a debug tool stops being one.
-    self.scc_corners = SccCornersElement()
-    self.scc_radius = SccRadiusElement()
+    # FunnyPilot v3.6.7 — THE PANEL DIAGNOSES LONGITUDINAL BEHAVIOUR AND
+    # NOTHING ELSE. v3.6.2 made it SCC-M v2's instrument, the way v3.3.8 had
+    # made it the turn-in oscillation's; both times the right move at the end
+    # was to delete the numbers whose question had been answered rather than to
+    # keep accumulating rows. Eleven readouts, each one naming a failure this
+    # release can actually produce.
     self.scc_corner_speed = SccCornerSpeedElement()
-    self.scc_distance = SccDistanceElement()
-    self.scc_a_lat = SccALatElement()
-    self.scc_visits = SccVisitsElement()
     self.scc_gate = SccGateElement()
     self.scc_cap = SccCapElement()
     self.scc_authority = SccAuthorityElement()
-    self.scc_learned = SccLearnedElement()
-    self.scc_last_pass = SccLastPassElement()
-    self.scc_lane_depart = SccLaneDepartElement()
-    # v3.6.7 — SCC-V beside SCC-M, because after the fusion change the question
-    # on this panel is which of the two is right rather than what SCC-M alone
-    # is doing; plus the longitudinal row, which is what v3.6.7 actually moved.
     self.scc_vision_cap = SccVisionCapElement()
     self.scc_corroboration = SccCorroborationElement()
     self.long_source = LongSourceElement()
@@ -140,16 +133,24 @@ class DeveloperUiRenderer(Widget):
     x = int(rect.x + rect.width - container_width - RIGHT_COL_MARGIN)
     y = int(rect.y + UI_BORDER_SIZE * 1.5)
 
-    # THE RIGHT COLUMN IS THE CORNER WE ARE BRAKING FOR: what we measured, what
-    # speed that implies, how far away it is, and how much of it survived the
-    # fusion. Fixed order and fixed length — the column must not reflow, or a
-    # value dropping out slides every other one and the screen becomes
-    # unreadable at a glance (the v3.5.9 station rule).
+    # THE RIGHT COLUMN IS THE CORNER ARGUMENT, TOP TO BOTTOM: the speed we chose
+    # for the bend, what SCC-M is asking of the car, what SCC-V is asking, the
+    # model's own reading of the road, and how much of SCC-M's ask survived.
+    #
+    # IT READS AS ONE SENTENCE AND THAT IS THE POINT after v3.6.7. CVSP and CAP
+    # are SCC-M; SCCV and CORR are SCC-V; AUTH is the verdict between them. A
+    # low CORR with a live CAP and AUTH 0 is the vision veto doing exactly what
+    # this release added it for — bad map data at a merge, overruled by a
+    # camera looking down an empty road.
+    #
+    # Fixed order and fixed length — the column must not reflow, or a value
+    # dropping out slides every other one and the screen becomes unreadable at
+    # a glance (the v3.5.9 station rule).
     elements = [
-      self.scc_radius.update(sm, ui_state.is_metric),
       self.scc_corner_speed.update(sm, ui_state.is_metric),
-      self.scc_distance.update(sm, ui_state.is_metric),
       self.scc_cap.update(sm, ui_state.is_metric),
+      self.scc_vision_cap.update(sm, ui_state.is_metric),
+      self.scc_corroboration.update(sm, ui_state.is_metric),
       self.scc_authority.update(sm, ui_state.is_metric),
     ]
 
@@ -189,46 +190,27 @@ class DeveloperUiRenderer(Widget):
     rl.draw_rectangle(int(rect.x), y, int(rect.width), self.BOTTOM_BAR_HEIGHT,
                       rl.Color(0, 0, 0, 100))
 
-    # TWO ROWS, BOTH UNCONDITIONAL, BOTH IN A FIXED ORDER. A row built
-    # conditionally re-centres itself whenever a source goes quiet, and a
-    # readout that moves is a readout you stop trusting (the v3.5.9 station
-    # rule). Nothing here is allowed to drop out; an element with nothing to
-    # say prints "-" and holds its slot.
+    # THE BOTTOM ROW IS THE LONGITUDINAL LOOP, LEFT TO RIGHT IN THE ORDER THE
+    # CAUSE RUNS: who is deciding, what they asked for, whether the actuator
+    # delivered it, what we are following, and whether the stop governor is in.
+    # SRC/ACC/TRK read together as the whole of v3.6.7 — a moving ACC with TRK
+    # near zero is the actuator keeping up with the plan, which is precisely
+    # what the predictive-tuning feed-forward was added to make true.
     #
-    # TOP ROW — WHAT IS DECIDING THE LONGITUDINAL, which is what v3.6.7
-    # changed. Deliberately the sparser of the two: it is the row you read at a
-    # glance while driving, and it earns the width.
-    #
-    # BOTTOM ROW — SCC. Vision's own cap and the model's own corroboration sit
-    # at the head of it, ahead of SCC-M's numbers, because after v3.6.7 vision
-    # is what decides whether any of the rest gets to act.
-    rows = [
-      [
-        self.long_source.update(sm, m),
-        self.long_accel.update(sm, m),
-        self.long_tracking.update(sm, m),
-        self.lead.update(sm, m),
-        self.stop_gov.update(sm, m),
-      ],
-      [
-        self.scc_vision_cap.update(sm, m),
-        self.scc_corroboration.update(sm, m),
-        self.scc_corners.update(sm, m),
-        self.scc_a_lat.update(sm, m),
-        self.scc_visits.update(sm, m),
-        self.scc_gate.update(sm, m),
-        self.scc_last_pass.update(sm, m),
-        self.scc_lane_depart.update(sm, m),
-        self.scc_learned.update(sm, m),
-      ],
+    # UNCONDITIONAL, EVERY FRAME, FIXED ORDER. A row built behind an `if`
+    # re-centres itself whenever a source goes quiet, and a readout that moves
+    # is a readout you stop trusting (the v3.5.9 station rule). Nothing here
+    # may drop out; an element with nothing to say prints "-" and holds its
+    # slot.
+    elements = [
+      self.long_source.update(sm, m),
+      self.long_accel.update(sm, m),
+      self.long_tracking.update(sm, m),
+      self.lead.update(sm, m),
+      self.stop_gov.update(sm, m),
+      self.scc_gate.update(sm, m),
     ]
 
-    for row_i, elements in enumerate(rows):
-      if not elements:
-        continue
-      self._draw_bottom_row(rect, y + row_i * self.ROW_H, elements)
-
-  def _draw_bottom_row(self, rect: rl.Rectangle, row_y: int, elements: list) -> None:
     font_size = 38
     element_widths = []
     for element in elements:
@@ -239,7 +221,7 @@ class DeveloperUiRenderer(Widget):
     num_gaps = len(elements) + 1
     gap_width = (rect.width - total_element_width) / num_gaps
 
-    center_y = row_y + self.ROW_H // 2
+    center_y = y + self.ROW_H // 2
     current_x = rect.x + gap_width
 
     for i, element in enumerate(elements):

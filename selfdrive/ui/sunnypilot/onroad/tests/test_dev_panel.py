@@ -12,6 +12,7 @@ the same stubbing `test_long_status_dot.py` uses, and then the ACTUAL element
 objects are driven with fake `sm` messages. An AST scan would not have caught
 the things this catches.
 """
+import ast
 import importlib.util
 import math
 import pathlib
@@ -83,10 +84,9 @@ def _quiet_shm(monkeypatch):
 
 _ROW_ELEMENTS = [
   'LongSourceElement', 'LongAccelElement', 'LongTrackingElement',
-  'LeadElement', 'StopGovernorElement',
-  'SccVisionCapElement', 'SccCorroborationElement', 'SccCornersElement',
-  'SccALatElement', 'SccVisitsElement', 'SccGateElement',
-  'SccLastPassElement', 'SccLaneDepartElement', 'SccLearnedElement',
+  'LeadElement', 'StopGovernorElement', 'SccGateElement',
+  'SccCornerSpeedElement', 'SccCapElement', 'SccVisionCapElement',
+  'SccCorroborationElement', 'SccAuthorityElement',
 ]
 
 
@@ -272,17 +272,6 @@ class TestTheVisionReadouts:
     assert E.SccCapElement().update(_sm(), False).value == "40"
 
 
-class TestTheLearningTriple:
-  def test_it_carries_all_three_numbers(self, _quiet_shm):
-    _quiet_shm['row'] = _debug(f9=12, f13=3, f15=1)
-    assert E.SccLearnedElement().update(_sm(), False).value == "12/3/1"
-
-  def test_orphans_colour_it(self, _quiet_shm):
-    _quiet_shm['row'] = _debug(f9=12, f13=3, f15=0)
-    assert E.SccLearnedElement().update(_sm(), False).color == E._GREEN
-    _quiet_shm['row'] = _debug(f9=12, f13=3, f15=4)
-    assert E.SccLearnedElement().update(_sm(), False).color == E._AMBER
-
 
 class TestAuthStillReadsAsARestingDash:
   """v3.6.7's fourth item, kept pinned now that AUTH shares a panel with more
@@ -316,7 +305,6 @@ class TestThePayloadIsLongEnoughForEverythingThatReadsIt:
   """
 
   def _max_index(self):
-    import ast
     tree = ast.parse(_ELEMENTS.read_text())
     idx = []
     for node in ast.walk(tree):
@@ -327,8 +315,17 @@ class TestThePayloadIsLongEnoughForEverythingThatReadsIt:
     return idx
 
   def test_the_scan_actually_finds_the_reads(self):
-    # Anti-vacuous: a scan that matches nothing passes the real check trivially.
-    assert len(self._max_index()) >= 10
+    # Anti-vacuous: a scan that matches nothing passes the real check
+    # trivially. Bounded below by the number of SHM-backed elements rather
+    # than by a number typed once — every element on the SCC side reads at
+    # least one field, so the scan must see at least that many.
+    shm_elements = ('SccCornerSpeedElement', 'SccGateElement', 'SccCapElement',
+                    'SccAuthorityElement', 'SccVisionCapElement',
+                    'SccCorroborationElement', 'LongSourceElement',
+                    'StopGovernorElement')
+    src = _ELEMENTS.read_text()
+    assert all(f'class {n}' in src for n in shm_elements)
+    assert len(self._max_index()) >= len(shm_elements)
 
   def test_the_resting_payload_covers_every_index_read(self):
     assert max(self._max_index()) < len(E._SCC_INACTIVE)
@@ -378,15 +375,22 @@ class TestTheWireFormatContract:
     assert scc_shm.read_scc_debug_shm() == scc_shm.DEBUG_INACTIVE
 
 
-class TestTheTwoRowGeometry:
+class TestTheSingleRowGeometry:
   """ARITHMETIC, NOT EYE — none of this can be rendered off-device, and the
   v3.5.0 draft that pushed a column under the minimap put five 120 px elements
-  on a 104 px pitch and ran the last one off the screen."""
+  on a 104 px pitch and ran the last one off the screen.
+
+  ONE ROW AND ONE COLUMN IS A DELIBERATE CEILING. A row divides a fixed width
+  between however many elements it is handed, so every readout added shrinks
+  every readout already there; a second row was tried in v3.6.7 and removed
+  because the alternative cost is windscreen. These tests exist so the next
+  addition has to displace something rather than quietly grow the panel.
+  """
 
   def _devui_src(self):
     return _DEVUI.read_text()
 
-  def test_the_bar_is_exactly_its_rows(self):
+  def test_the_bar_is_one_row(self):
     src = self._devui_src()
     ns = {}
     for line in src.splitlines():
@@ -395,7 +399,7 @@ class TestTheTwoRowGeometry:
         if t.startswith(k + ' ='):
           ns[k] = t.split('=', 1)[1].strip()
     assert ns['ROW_H'] == '61'
-    assert ns['BOTTOM_ROWS'] == '2'
+    assert ns['BOTTOM_ROWS'] == '1'
     assert ns['BOTTOM_BAR_HEIGHT'] == 'ROW_H * BOTTOM_ROWS'
 
   def test_the_bar_fits_inside_the_bottom_horizon_band(self):
@@ -406,36 +410,64 @@ class TestTheTwoRowGeometry:
       if line.startswith('BAND_BOT_H'):
         band = int(line.split('=')[1].split('#')[0].strip())
     assert band is not None
-    assert 61 * 2 <= band
+    assert 61 <= band
 
-  def test_both_rows_are_built_unconditionally(self):
-    # The v3.5.9 station rule: a row assembled behind an `if` re-centres every
-    # element in it whenever a source goes quiet. Structural, not textual —
-    # v3.6.6 wrote a guard a docstring could break by matching on text.
+  def _elements_of(self, fn_name, var):
     import ast
     tree = ast.parse(self._devui_src())
     fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == '_draw_bottom_dev_ui')
-    rows = next((n for n in ast.walk(fn)
-                 if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'rows'), None)
-    assert rows is not None, "the row table moved; re-point this guard"
-    assert isinstance(rows.value, ast.List) and len(rows.value.elts) == 2
-    for row in rows.value.elts:
-      assert isinstance(row, ast.List) and len(row.elts) >= 5
-      for call in row.elts:
-        assert isinstance(call, ast.Call), "an element must be an unconditional update() call"
+              if isinstance(n, ast.FunctionDef) and n.name == fn_name)
+    assign = next((n for n in ast.walk(fn)
+                   if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == var), None)
+    assert assign is not None, f"{var} moved; re-point this guard"
+    assert isinstance(assign.value, ast.List)
+    return assign.value.elts
 
-  def test_the_longitudinal_row_leads_with_what_v367_changed(self):
-    import ast
-    tree = ast.parse(self._devui_src())
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == '_draw_bottom_dev_ui')
-    rows = next(n for n in ast.walk(fn)
-                if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'rows')
-    top = [ast.unparse(c.func) for c in rows.value.elts[0].elts]
-    assert 'self.long_tracking.update' in top
-    assert 'self.long_source.update' in top
-    assert 'self.stop_gov.update' in top
-    bottom = [ast.unparse(c.func) for c in rows.value.elts[1].elts]
-    assert 'self.scc_vision_cap.update' in bottom
-    assert 'self.scc_corroboration.update' in bottom
+  def test_the_bar_is_one_flat_unconditional_list(self):
+    # Structural, not textual — v3.6.6 wrote a guard a docstring could break by
+    # matching on text. A nested list here would be a second row sneaking back.
+    els = self._elements_of('_draw_bottom_dev_ui', 'elements')
+    assert 4 <= len(els) <= 7, "the bar is a budget; displace something first"
+    for call in els:
+      assert isinstance(call, ast.Call), "an element must be an unconditional update() call"
+
+  def test_the_column_is_five_and_unconditional(self):
+    els = self._elements_of('_draw_right_dev_ui', 'elements')
+    assert len(els) == 5, "five is what RIGHT_TOP_OFFSET + 5 * RIGHT_PITCH fits"
+    for call in els:
+      assert isinstance(call, ast.Call)
+
+  def test_the_column_pitch_still_fits_the_content_area(self):
+    # RIGHT_TOP_OFFSET + n * RIGHT_PITCH must land inside a 1020 px content
+    # area, which is what the v3.5.0 draft got wrong by eye.
+    src = self._devui_src()
+    vals = {}
+    for line in src.splitlines():
+      for k in ('RIGHT_TOP_OFFSET', 'RIGHT_PITCH'):
+        if line.startswith(k + ' ='):
+          vals[k] = int(line.split('=')[1].split('#')[0].strip())
+    n = len(self._elements_of('_draw_right_dev_ui', 'elements'))
+    assert 30 + vals['RIGHT_TOP_OFFSET'] + n * vals['RIGHT_PITCH'] <= 1020
+
+  def test_the_bar_is_the_longitudinal_loop(self):
+    labels = [ast.unparse(c.func) for c in self._elements_of('_draw_bottom_dev_ui', 'elements')]
+    for want in ('self.long_source.update', 'self.long_accel.update',
+                 'self.long_tracking.update', 'self.stop_gov.update',
+                 'self.lead.update'):
+      assert want in labels
+
+  def test_the_column_is_the_corner_argument(self):
+    labels = [ast.unparse(c.func) for c in self._elements_of('_draw_right_dev_ui', 'elements')]
+    # SCC-M's ask, SCC-V's ask, the model's own reading, and the verdict.
+    for want in ('self.scc_cap.update', 'self.scc_vision_cap.update',
+                 'self.scc_corroboration.update', 'self.scc_authority.update'):
+      assert want in labels
+
+  def test_the_learning_readouts_are_gone(self):
+    # The owner's instruction, pinned: this panel is longitudinal behaviour.
+    # Re-adding one is fine — it has to displace something, not append.
+    src = _ELEMENTS.read_text()
+    for gone in ('SccCornersElement', 'SccRadiusElement', 'SccDistanceElement',
+                 'SccALatElement', 'SccVisitsElement', 'SccLearnedElement',
+                 'SccLastPassElement', 'SccLaneDepartElement'):
+      assert f'class {gone}' not in src

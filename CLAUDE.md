@@ -237,21 +237,27 @@ fork has ever touched — it is in the actuator layer, in opendbc, under the
   with a forced `cmd_rate` — the integrator's own smoothing had been hiding it.
 - **THE DEV PANEL WAS REBUILT AROUND THIS RELEASE, SECOND PASS, SAME BRANCH.**
   Owner: "update the DEV UI values to reflect our current work... I just want
-  more insight into how your code is performing." The panel was SCC-M v2's
-  instrument from v3.6.2 and v3.6.7 moved three things it could not see at all
-  — the actuator's tracking of the plan, the stop-and-go governor, and which of
-  SCC-V and SCC-M is deciding.
-  * `developer_ui/__init__.py` — **THE BOTTOM BAR IS TWO ROWS.** Each row
-    divides a FIXED width between however many elements it is handed, so five
-    more on one bar would have shrunk the nine already there. ARITHMETIC, NOT
-    EYE: `ROW_H` 61 (what one row has always been) x `BOTTOM_ROWS` 2 = 122,
-    against `chrome.BAND_BOT_H` 138 — the whole panel still sits INSIDE the
-    scrim that makes text legible over road, with 16 px spare, and the long
-    dot at `height - 20 - 16 - 122` clears the bar's top edge by 20 px.
-    TOP ROW is the longitudinal (SRC/ACC/TRK/LEAD/STOP) and is deliberately the
-    sparser one — it is the row read at a glance while driving. BOTTOM ROW is
-    SCC, led by SCC-V's own numbers because after this release vision is what
-    decides whether the rest gets to act.
+  more insight into how your code is performing", then, on seeing the first
+  cut: "absolutely do NOT have 2 rows... one bottom row and one right side
+  column. Pick the most important ones to diagnose longitudinal behavior, and
+  ditch the rest." The panel was SCC-M v2's instrument from v3.6.2 and v3.6.7
+  moved three things it could not see at all — the actuator's tracking of the
+  plan, the stop-and-go governor, and which of SCC-V and SCC-M is deciding.
+  * **ELEVEN SLOTS, AND THAT IS A BUDGET RATHER THAN A DEFAULT.** A row divides
+    a FIXED width between however many elements it is handed, so the only two
+    ways to add a readout are to shrink every other readout or to take more of
+    the windscreen. The first cut took the second option (`BOTTOM_ROWS` 2, 122
+    px, arithmetically fine inside `chrome.BAND_BOT_H` 138) and was REVERTED at
+    the owner's instruction. The rule that replaces it: **a new readout has to
+    DISPLACE one, not append**, pinned by `test_the_bar_is_one_flat_
+    unconditional_list` and the column-count guard.
+  * **BOTTOM ROW — THE LONGITUDINAL LOOP**, left to right in the order cause
+    runs: `SRC` `ACC` `TRK` `LEAD` `STOP` `GATE`.
+  * **RIGHT COLUMN — THE CORNER ARGUMENT**, top to bottom: `CVSP` `CAP` `SCCV`
+    `CORR` `AUTH`. It reads as one sentence, which is the point after this
+    release: CVSP/CAP are SCC-M's ask, SCCV/CORR are SCC-V's, AUTH is the
+    verdict between them. A low CORR with a live CAP and AUTH 0 IS the vision
+    veto doing what v3.6.7 added it for.
   * NEW **TRK**, and it is the one number that validates v3.6.7.
     `carOutput.actuatorsOutput.accel` minus `carControl.actuators.accel` — a
     MEASUREMENT, not a second copy of the jerk law: the controller assigns the
@@ -281,8 +287,17 @@ fork has ever touched — it is in the actuator layer, in opendbc, under the
     against, so if it idles ABOVE 0.30 on plain straight road the veto still
     cannot fire and the THRESHOLD is what needs to move — not the budget and
     not the geometry.
-  * LRN/NPAS/ORPH merged into one `12/3/1` triple. No information lost, three
-    slots recovered, and they are read together anyway.
+  * **DELETED, AND THE COST STATED RATHER THAN GLOSSED**: `SccCornersElement`
+    (CORN), `SccRadiusElement` (R), `SccDistanceElement` (DIST),
+    `SccALatElement` (ALAT), `SccVisitsElement` (VIS), `SccLastPassElement`
+    (PASS), `SccLaneDepartElement` (LANE) and LRN/NPAS/ORPH. Those answer "is
+    the store filling and is the geometry finding bends" — a real question, and
+    what v3.6.4/v3.6.5 added several of them for; **it is just not longitudinal
+    BEHAVIOUR, which is what the owner scoped this panel to.** In particular
+    v3.6.5's own verification note ("watch ORPH", "LANE should sit at 0 dead
+    centre") can no longer be followed from the screen. Every field is STILL
+    PUBLISHED on `fp_sccdbg`, so re-adding an element is a few lines — it just
+    has to displace something.
   * **A REAL DEFECT, FOUND BY THE NEW TESTS AND NOT BY REVIEW.** `elements.py`
     carried a HAND-TYPED 16-tuple as the resting payload for when the lazy
     `scc_shm` import fails. Appending four fields made every element reading
@@ -293,12 +308,17 @@ fork has ever touched — it is in the actuator layer, in opendbc, under the
     derives its width from the channel now.
   * `fp_sccdbg` 16 -> 20 fields, APPENDED not interleaved, and a short line
     still reads INACTIVE rather than defaulting the tail — version skew must
-    lose the whole panel, never invent a zero that looks live.
-  * TESTS: **1074 green**, ruff clean. NEW
-    `onroad/tests/test_dev_panel.py` (25) — it drives the REAL element objects
+    lose the whole panel, never invent a zero that looks live. The format was
+    NOT shrunk back when the readouts were cut: an unread field costs nothing,
+    and re-narrowing a positional wire format is how index [8] silently starts
+    meaning something else.
+  * TESTS: **1070 green**, ruff clean. NEW
+    `onroad/tests/test_dev_panel.py` (28) — it drives the REAL element objects
     with stubbed pyray rather than scanning source, which is what caught the
     IndexError; plus `TestWhoIsDecidingTheLongitudinal` (7) and the widened
-    channel cases. TEN guards mutation-tested, all caught.
+    channel cases. FOURTEEN guards mutation-tested, all caught, including a
+    second row sneaking back and a deleted element returning without
+    displacing one.
     PROCESS NOTE: the first cut installed its OWN `pyray` stub, won the
     collection race by alphabetical order, and broke `test_hud_logic`'s import
     with `module 'pyray' has no attribute 'Font'` — a failure in a file this

@@ -206,7 +206,7 @@ _CODE_MARKERS = [
   ("gas_gating_active", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "the gas gate reaches the throttle clip"),
   ("def window_around_ego", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/road_geometry.py", "forward horizon measured from the car"),
   ("def write_scc_debug_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "dev UI payload channel"),
-  ("class SccCornersElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "dev UI is SCC-M v2 instruments"),
+  ("class LongSourceElement", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/developer_ui/elements.py", "SRC dev-UI readout"),
   ("class SideSignal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/side_signals.py", "blinker + blind spot on the edges"),
   ("def draw_side_signal", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/chrome.py", "side glow band"),
   # v3.6.4
