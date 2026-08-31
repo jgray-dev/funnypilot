@@ -21,6 +21,8 @@ openpilot environment.
 """
 import numpy as np
 
+from openpilot.selfdrive.controls.lib.lead_physics import LEAD_DECEL_MAX
+
 # Jerk toward more accel (throttle apply / brake release), m/s^3.
 # Passenger-comfortable range is ~0.9-2.5 m/s^3; personality picks the point.
 JERK_UP_DEFAULT = 1.8
@@ -97,6 +99,8 @@ class LeadGrace:
 
   def __init__(self, dt: float):
     self.dt = dt
+    self._dn = 0
+    self.stopping_lead = False
     self.reset()
 
   def reset(self) -> None:
@@ -200,6 +204,48 @@ STOP_GOV_FALL_RATE = 3.0
 STOP_GOV_CLOSE_ON = 1.0    # m/s of overspeed on the lead to ENGAGE
 STOP_GOV_CLOSE_OFF = 0.2   # ...and to keep holding once engaged
 
+# ── FunnyPilot v3.6.8: a lead COMMITTED TO STOPPING, not merely already slow ──
+#
+# `STOP_GOV_LEAD_V` 6.0 meant the governor could not act on a car braking for a
+# red light until it was ALREADY down to 6 m/s — by which point most of the
+# geometry has been spent and the MPC is the only thing left. Reported as "too
+# close to lead cars when approaching a stop or slowing down, to the point I'm
+# taking over braking before the longitudinal stack even begins acting on the
+# lead's deceleration".
+#
+# WHAT MAKES ARMING EARLIER SAFE IS THE ENVELOPE, NOT A THRESHOLD. v3.6.6 was
+# right that a general follow-distance governor competing with the solver is the
+# stacked-authority mistake v3.2.6e removed, so the discriminator has to be
+# "this lead is stopping", not "this lead is slower than me". Where the lead is
+# provably braking, the honest geometry is not its CURRENT speed but WHERE IT
+# WILL STOP:
+#
+#     d_eff = d_rel + v_lead^2 / (2 * decel_lead)      # the lead's stop point
+#     cap   = sqrt(2 * STOP_GOV_A * (d_eff - GAP))     # ...and ours behind it
+#
+# THAT EXPRESSION SELF-LIMITS, which is the whole safety argument and it is
+# structural rather than tuned. A lead easing off gently projects its stop a
+# long way ahead, so the cap comes out far above cruise and changes nothing:
+# measured, a lead at 29 m/s braking 0.8 m/s^2 with a 50 m gap projects a stop
+# 576 m away and yields a 45 m/s cap — no effect at any legal speed. The cap
+# only descends to meet us when the stop is genuinely close. A lead braking
+# 2.5 m/s^2 from 20 m/s first binds around a 45 m gap and tightens from there.
+#
+# DECEL_MIN 1.2 m/s^2 is "a brake application", comfortably above coasting
+# (~0.3-0.5) and above ordinary traffic modulation. It is a gate on ARMING; the
+# envelope above is what decides whether anything actually happens.
+STOP_GOV_DECEL_MIN = 1.2
+# ...and how hard we are willing to believe the lead is braking when projecting
+# its stop. Imported rather than retyped: `aLeadK` is a Kalman output and an
+# uncapped spike would project the lead's stop right on top of us for one
+# frame, which is the brake jab lead_physics.py already bounds for the MPC.
+STOP_GOV_DECEL_MAX = LEAD_DECEL_MAX
+# Consecutive frames of observed braking before the lead counts as committed.
+# Separate from CONFIRM_N because that debounces the TRACK and this debounces
+# the CLAIM ABOUT IT; a lead can be solidly tracked and still be one noisy
+# accel sample away from looking like it is stopping.
+STOP_GOV_DECEL_N = 4
+
 
 class StopGovernor:
   """Cap the cruise speed at what still stops comfortably behind a slow lead.
@@ -210,23 +256,73 @@ class StopGovernor:
 
   def __init__(self, dt: float):
     self.dt = dt
+    self._dn = 0
+    self.stopping_lead = False
     self.reset()
 
   def reset(self) -> None:
+    """Drop the CAP. Deliberately does not clear the braking observation.
+
+    v3.6.8 — `_dn` counts frames of observed lead braking, and the arming test
+    reads the result of that count. Clearing it here made the two circular: the
+    governor could not arm without the count, and the count was wiped on every
+    frame it was not armed. Found by `test_a_braking_lead_arms_it_well_above_
+    the_crawl_threshold`, which is the whole reason to test the arming path
+    rather than only the envelope.
+    """
     self._n = 0
     self.cap = None          # None = not constraining
 
-  def raw_cap(self, d_rel: float, v_lead: float) -> float:
-    """The stopping envelope, before confirmation or rate limiting."""
+  def _forget_lead(self) -> None:
+    """Everything reset() drops, plus what we believed about the lead itself.
+    Used when the track is gone — a new lead is not the old one."""
+    self.reset()
+    self._dn = 0
+    self.stopping_lead = False
+
+  def raw_cap(self, d_rel: float, v_lead: float, decel_lead: float = 0.0) -> float:
+    """The stopping envelope, before confirmation or rate limiting.
+
+    v3.6.8 — `decel_lead` > 0 means the lead is committed to stopping, and the
+    envelope is then measured to WHERE IT WILL STOP rather than to where it is.
+    Passing 0 (the default) is exactly the pre-v3.6.8 expression, so every
+    caller that has no opinion about the lead's braking gets the old answer.
+    """
     if not (np.isfinite(d_rel) and np.isfinite(v_lead)):
       return float('inf')
     vl = max(float(v_lead), 0.0)
-    s = max(0.0, float(d_rel) - STOP_GOV_GAP_M)
-    return float(np.sqrt(vl * vl + 2.0 * STOP_GOV_A * s))
+    d = float(d_rel)
+    here = float(np.sqrt(vl * vl + 2.0 * STOP_GOV_A * max(0.0, d - STOP_GOV_GAP_M)))
+    if not (np.isfinite(decel_lead) and decel_lead >= STOP_GOV_DECEL_MIN):
+      return here
+    dec = min(float(decel_lead), STOP_GOV_DECEL_MAX)
+    # The lead's own stopping distance, added to the gap: this is where the back
+    # of it comes to rest, which is the thing we actually have to stop behind.
+    d_stop = d + (vl * vl) / (2.0 * dec)
+    there = float(np.sqrt(2.0 * STOP_GOV_A * max(0.0, d_stop - STOP_GOV_GAP_M)))
+    # THE MIN IS LOAD-BEARING AND IT WAS FOUND BY A TEST, NOT BY REVIEW. The two
+    # forms cross over: at range the projection is much tighter, because a
+    # bounded roll-out replaces the `v_lead^2` credit; up close it is LOOSER,
+    # because it credits us with room the lead only earns by continuing to
+    # move. Believing a lead is stopping must never be a reason to go faster at
+    # it, so the answer is whichever is smaller, and that property is
+    # structural rather than a happy consequence of the constants.
+    return min(here, there)
 
   def update(self, lead_status: bool, d_rel: float, v_lead: float,
-             v_ego: float, v_cruise: float) -> float:
-    slow = bool(lead_status) and np.isfinite(v_lead) and float(v_lead) <= STOP_GOV_LEAD_V
+             v_ego: float, v_cruise: float, a_lead: float = 0.0) -> float:
+    tracked = bool(lead_status) and np.isfinite(v_lead)
+    # v3.6.8 — a lead is "committed to stopping" only after DECEL_N consecutive
+    # frames of real braking. Counted rather than filtered so the requirement is
+    # a duration and not a magnitude: a single hard sample must not arm it, and
+    # a lead braking steadily but modestly must.
+    if not tracked:
+      self._forget_lead()
+      return v_cruise
+    braking = np.isfinite(a_lead) and -float(a_lead) >= STOP_GOV_DECEL_MIN
+    self._dn = self._dn + 1 if braking else 0
+    self.stopping_lead = self._dn >= STOP_GOV_DECEL_N
+    slow = float(v_lead) <= STOP_GOV_LEAD_V or self.stopping_lead
     # Hysteresis on the engage threshold, not on the cap: which question is
     # being asked must not flicker.
     margin = STOP_GOV_CLOSE_OFF if self.cap is not None else STOP_GOV_CLOSE_ON
@@ -239,13 +335,17 @@ class StopGovernor:
     if self._n < STOP_GOV_CONFIRM_N:
       return v_cruise
 
-    raw = self.raw_cap(d_rel, v_lead)
+    raw = self.raw_cap(d_rel, v_lead, -float(a_lead) if self.stopping_lead else 0.0)
     # THE FADE IS ON THE LEAD'S SPEED, NOT ON THE CAP. Weighting the cap itself
     # toward v_cruise would make a distant slow lead look faster than it is;
     # weighting the AUTHORITY leaves the geometry honest and simply gives it
     # less say as the lead speeds up and the problem becomes the MPC's again.
+    # ...and NOT faded at all for a lead that is committed to stopping: the
+    # fade exists because a lead merely crawling may be about to accelerate
+    # away, which is not true of one under the brakes. Fading a committed
+    # stopper would remove the authority exactly where v3.6.8 adds it.
     w = 1.0
-    if float(v_lead) > STOP_GOV_FADE_V:
+    if not self.stopping_lead and float(v_lead) > STOP_GOV_FADE_V:
       span = max(1e-3, STOP_GOV_LEAD_V - STOP_GOV_FADE_V)
       w = float(np.clip((STOP_GOV_LEAD_V - float(v_lead)) / span, 0.0, 1.0))
     target = min(v_cruise, raw + (1.0 - w) * max(0.0, v_cruise - raw))

@@ -1,815 +1,790 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>FunnyPilot</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="color-scheme" content="dark"/>
+<title>FunnyPilot</title>
 
-    body {
-      background: #111;
-      color: #ddd;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+<!--
+  FunnyPilot v3.6.8 — the device dashboard.
 
-    /* ── Top bar ── */
-    #topbar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      background: #1a1a1a;
-      border-bottom: 1px solid #2a2a2a;
-      flex-shrink: 0;
-    }
-    #topbar h1 {
-      font-size: 15px;
-      font-weight: 700;
-      color: #e94560;
-      letter-spacing: 0.3px;
-    }
-    /* v3.4.5: running version, read from FUNNYPILOT_VERSION on the device.
-       The spacer (not h1's flex) pushes the buttons right, so the version
-       sits with the title instead of drifting across the bar. */
-    #fp-version {
-      font-size: 11px;
-      font-weight: 600;
-      color: #9aa0a6;
-      background: #242424;
-      border: 1px solid #2f2f2f;
-      border-radius: 999px;
-      padding: 2px 8px;
-      white-space: nowrap;
-    }
-    #fp-version.stale { color: #f0932b; border-color: #5a4520; }
-    #topbar .spacer { flex: 1; }
-    #conn-status {
-      font-size: 11px;
-      color: #555;
-    }
-    #conn-status.on  { color: #2ecc71; }
-    #conn-status.off { color: #e74c3c; }
+  DESIGN NOTES, because the choices here are constrained rather than free:
 
-    #flash-btn {
-      background: #e94560;
-      color: #fff;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #flash-btn:active { background: #c0392b; }
+  * PASTELS THAT KEEP THE CAR'S SEMANTICS. The onroad HUD's tokens are
+    saturated because they have to survive a sunlit windscreen; a phone in a
+    dark car does not, and the same values read as neon here. So the ROLES are
+    the HUD's — green engaged, cyan lateral, amber longitudinal, red stop — and
+    the VALUES are lightened, desaturated versions of them: mint, sky, apricot,
+    rose. A driver still learns one green and one red.
+    A FIFTH HUE, LILAC, IS RESERVED FOR BOOKMARKS and does nothing else. A
+    bookmark tick has to be findable on top of any of the four authority
+    colours, so it cannot be one of them.
+    Every accent was checked against the ground rather than eyeballed: the
+    lowest is rose at 9.8:1 and the highest text at 15.8:1.
+  * NO WEBFONTS. This page is served by the car over the local network and
+    there is no guarantee the browser can reach a font CDN — a @font-face that
+    silently falls back is worse than a system stack chosen on purpose. Numbers
+    are monospace with `tabular-nums` throughout so telemetry does not jitter
+    as digits change.
+  * COMMITTED TO DARK. This is an instrument read at night, sitting in a car,
+    next to a screen that is already dark. Every colour is painted explicitly
+    so nothing borrows a host background.
+  * THE RIBBON IS A CANVAS, NOT DOM. An hour of drive is 3600 buckets; that is
+    3600 elements and a layout pass the phone cannot afford. One canvas, one
+    paint per change, redrawn on resize.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
+<style>
+:root{
+  --ink:#0E1116; --panel:#161B23; --raise:#1E242E; --line:#2A313D;
+  --text:#E7EBF1; --dim:#99A4B4; --faint:#667287;
+  --live:#8FE3B8; --lat:#93D4F5; --warn:#F6C795; --halt:#F3A7A7; --mark:#C6B4F2;
+  --on-live:#0B2318;
+  --auth-manual:#4E596B; --auth-lat:#93D4F5; --auth-long:#F6C795; --auth-full:#8FE3B8;
+  --r-s:6px; --r-m:10px; --r-l:16px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --rail:236px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--ink); color:var(--text); font-family:var(--sans);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--live);outline-offset:2px;border-radius:var(--r-s)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.lbl{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:600}
 
-    #diag-btn {
-      background: #2a2f3a;
-      color: #cdd6e0;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #diag-btn:active { background: #1f242c; }
+/* ── shell ─────────────────────────────────────────────────────────────── */
+#app{display:flex;height:100%}
+#rail{
+  width:var(--rail);flex:0 0 var(--rail);background:var(--panel);
+  border-right:1px solid var(--line);display:flex;flex-direction:column;
+  padding:20px 14px;gap:4px;
+}
+#brand{display:flex;align-items:baseline;gap:8px;padding:6px 10px 18px}
+#brand b{font-size:19px;letter-spacing:-.02em}
+#brand span{font-family:var(--mono);font-size:12px;color:var(--live)}
+.navbtn{
+  display:flex;align-items:center;gap:11px;padding:10px 12px;border:0;
+  background:transparent;border-radius:var(--r-m);cursor:pointer;
+  color:var(--dim);text-align:left;width:100%;font-weight:500;
+}
+.navbtn:hover{background:var(--raise);color:var(--text)}
+.navbtn[aria-current="page"]{background:var(--raise);color:var(--text)}
+.navbtn[aria-current="page"] .dot{background:var(--live)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 7px}
+#railfoot{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--line)}
+#railfoot .row{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);padding:3px 0}
 
-    /* ── Diagnostics modal ── */
-    #diag-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.7);
-      z-index: 200;
-      align-items: flex-end;
-      justify-content: center;
-    }
-    #diag-overlay.active { display: flex; }
-    #diag-modal {
-      background: #1c1c1c;
-      border-radius: 14px 14px 0 0;
-      padding: 20px 16px 32px;
-      width: 100%;
-      max-width: 520px;
-      max-height: 85dvh;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    #diag-list {
-      flex: 1;
-      overflow-y: auto;
-      border-radius: 8px;
-      background: #141414;
-      border: 1px solid #2a2a2a;
-      min-height: 60px;
-      -webkit-overflow-scrolling: touch;
-    }
-    .diag-row { padding: 10px 12px; border-bottom: 1px solid #1f1f1f; }
-    .diag-row:last-child { border-bottom: none; }
-    .diag-head { display: flex; align-items: center; gap: 8px; }
-    .diag-pill {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.4px;
-      padding: 3px 7px;
-      border-radius: 4px;
-      flex-shrink: 0;
-      min-width: 48px;
-      text-align: center;
-    }
-    .diag-pill.pass { background: #16361f; color: #2ecc71; }
-    .diag-pill.fail { background: #3a1518; color: #e74c3c; }
-    .diag-pill.warn { background: #3a2f12; color: #f1c40f; }
-    .diag-pill.info { background: #20262e; color: #7f8c9a; }
-    .diag-name { font-size: 13px; color: #ddd; font-weight: 500; flex: 1; word-break: break-word; }
-    .diag-summary { font-size: 11px; color: #888; text-align: right; word-break: break-word; }
-    .diag-output {
-      margin-top: 6px;
-      font-family: "Cascadia Code", "Fira Code", monospace;
-      font-size: 11px;
-      color: #9aa4ad;
-      white-space: pre-wrap;
-      word-break: break-all;
-      background: #0e0e0e;
-      border-radius: 5px;
-      padding: 7px 9px;
-      max-height: 150px;
-      overflow-y: auto;
-    }
-    .diag-cmd { color: #5a6470; }
-    .btn-secondary {
-      flex: 1;
-      background: #2a2f3a;
-      color: #cdd6e0;
-      border: none;
-      padding: 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 700;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .btn-secondary:active { background: #1f242c; }
-    .btn-secondary:disabled { background: #1a1d22; color: #555; cursor: default; }
-    #diag-status { font-size: 12px; color: #888; min-height: 16px; text-align: center; }
-    #diag-status.ok  { color: #2ecc71; }
-    #diag-status.err { color: #e74c3c; }
+#main{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+.page{display:none;padding:28px 32px 64px;max-width:1180px;margin:0 auto}
+.page.on{display:block}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 4px;font-weight:650}
+h1+.sub{color:var(--dim);margin:0 0 26px;font-size:14px}
+h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);
+   margin:30px 0 12px;font-weight:650}
 
-    /* ── Triage logs modal (v3.2.7) ── */
-    #logs-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.7);
-      z-index: 200;
-      align-items: flex-end;
-      justify-content: center;
-    }
-    #logs-overlay.active { display: flex; }
-    #logs-modal {
-      background: #1c1c1c;
-      border-radius: 14px 14px 0 0;
-      padding: 20px 16px 32px;
-      width: 100%;
-      max-width: 520px;
-      max-height: 85dvh;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    #logs-files { display: flex; gap: 8px; flex-wrap: wrap; }
-    .log-file-btn {
-      background: #2a2f3a;
-      color: #cdd6e0;
-      border: none;
-      padding: 8px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .log-file-btn.selected { background: #e94560; color: #fff; }
-    #logs-view {
-      flex: 1;
-      overflow-y: auto;
-      font-family: "Cascadia Code", "Fira Code", monospace;
-      font-size: 10.5px;
-      color: #9aa4ad;
-      white-space: pre-wrap;
-      word-break: break-all;
-      background: #0e0e0e;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 8px 10px;
-      min-height: 120px;
-      -webkit-overflow-scrolling: touch;
-    }
-    #mark-btn {
-      background: #7a3ce8;
-      color: #fff;
-      border: none;
-      padding: 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 700;
-      flex: 1;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #mark-btn:active { background: #6430c0; }
-    #logs-status { font-size: 12px; color: #888; min-height: 16px; text-align: center; }
-    #logs-status.ok  { color: #2ecc71; }
-    #logs-status.err { color: #e74c3c; }
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-l);padding:20px}
+.grid{display:grid;gap:14px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 
-    /* ── Terminal ── */
-    #terminal-container { flex: 1; padding: 4px; overflow: hidden; min-height: 0; }
+.stat .lbl{margin-bottom:7px}
+.stat .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:27px;
+         letter-spacing:-.02em;line-height:1.1}
+.stat .u{font-size:13px;color:var(--dim);margin-left:3px}
+.ok{color:var(--live)} .warn{color:var(--warn)} .bad{color:var(--halt)} .mut{color:var(--dim)}
 
-    /* ── Modal overlay ── */
-    #modal-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.7);
-      z-index: 200;
-      align-items: flex-end;
-      justify-content: center;
-    }
-    #modal-overlay.active { display: flex; }
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 16px;border-radius:var(--r-m);border:1px solid var(--line);
+  background:var(--raise);cursor:pointer;font-weight:550;font-size:14px;
+  transition:border-color .12s,background .12s;
+}
+.btn:hover{border-color:var(--faint)}
+.btn:disabled{opacity:.42;cursor:not-allowed}
+.btn.p{background:var(--live);color:var(--on-live);border-color:transparent}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.d{color:var(--halt);border-color:#3E2B30}
+.btn.d:hover{background:#2B1D21;border-color:var(--halt)}
+.btn.sm{padding:6px 11px;font-size:13px}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap}
 
-    /* ── Modal sheet ── */
-    #modal {
-      background: #1c1c1c;
-      border-radius: 14px 14px 0 0;
-      padding: 20px 16px 32px;
-      width: 100%;
-      max-width: 520px;
-      max-height: 80dvh;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
+/* ── meter ─────────────────────────────────────────────────────────────── */
+.meter{height:7px;border-radius:99px;background:#0A0D11;overflow:hidden;margin-top:10px;display:flex}
+.meter i{display:block;height:100%}
 
-    #modal-header, #diag-mheader, #logs-mheader {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    #modal h2, #diag-modal h2, #logs-modal h2 {
-      font-size: 16px;
-      font-weight: 700;
-      color: #eee;
-    }
-    #modal-close, #diag-close, #logs-close {
-      background: #2a2a2a;
-      border: none;
-      color: #888;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      cursor: pointer;
-      font-size: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #modal-close:active, #diag-close:active, #logs-close:active { background: #333; }
+/* ── drives ────────────────────────────────────────────────────────────── */
+#toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+#q{flex:1;min-width:180px;padding:9px 13px;border-radius:var(--r-m);
+   border:1px solid var(--line);background:var(--panel)}
+#q::placeholder{color:var(--faint)}
+select{padding:9px 11px;border-radius:var(--r-m);border:1px solid var(--line);background:var(--panel)}
 
-    /* ── Branch list ── */
-    #branch-list {
-      flex: 1;
-      overflow-y: auto;
-      border-radius: 8px;
-      background: #141414;
-      border: 1px solid #2a2a2a;
-      min-height: 0;
-      -webkit-overflow-scrolling: touch;
-    }
+.drive{
+  display:flex;align-items:center;gap:16px;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r-m);margin-bottom:9px;cursor:pointer;
+  transition:border-color .12s;
+}
+.drive:hover{border-color:var(--faint)}
+.drive .when{flex:1;min-width:0}
+.drive .when b{display:block;font-size:15px;font-weight:600}
+.drive .when small{color:var(--dim);font-size:12.5px;font-family:var(--mono)}
+.drive .meta{display:flex;gap:18px;align-items:center;flex:0 0 auto}
+.drive .meta div{text-align:right}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;
+      background:var(--raise);color:var(--dim);border:1px solid var(--line);margin-left:5px}
 
-    .branch-item {
-      display: flex;
-      flex-direction: column;
-      padding: 12px 14px;
-      border-bottom: 1px solid #1f1f1f;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-      transition: background 0.1s;
-      user-select: none;
-    }
-    .branch-item:last-child { border-bottom: none; }
-    .branch-item:active { background: #222; }
-    .branch-item.selected {
-      background: #1e2a1e;
-      border-left: 3px solid #2ecc71;
-    }
-    .branch-item.selected .branch-name { color: #2ecc71; }
+/* ── playback ──────────────────────────────────────────────────────────── */
+#pbTop{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+#pbTop h1{margin:0}
+video{width:100%;background:#000;border-radius:var(--r-m);display:block;aspect-ratio:526/330}
+#novid{
+  aspect-ratio:526/330;display:none;align-items:center;justify-content:center;
+  background:#000;border-radius:var(--r-m);color:var(--dim);text-align:center;padding:26px;font-size:14px;
+}
+#ribbonWrap{margin-top:14px;position:relative}
+#ribbon{width:100%;height:112px;display:block;border-radius:var(--r-m);
+        background:var(--panel);border:1px solid var(--line);cursor:crosshair;touch-action:none}
+#tip{
+  position:absolute;pointer-events:none;background:#080B10;border:1px solid var(--line);
+  border-radius:var(--r-s);padding:7px 10px;font-family:var(--mono);font-size:11.5px;
+  white-space:pre;opacity:0;transition:opacity .1s;z-index:5;
+}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:11px;font-size:12px;color:var(--dim)}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend i{width:11px;height:11px;border-radius:3px;display:block}
 
-    .branch-name {
-      font-size: 14px;
-      font-weight: 500;
-      color: #ddd;
-      word-break: break-all;
-    }
-    .branch-date {
-      font-size: 11px;
-      color: #555;
-      margin-top: 2px;
-    }
+/* ── terminal + verify ─────────────────────────────────────────────────── */
+#term{height:min(62vh,560px);background:#0A0D11;border:1px solid var(--line);
+      border-radius:var(--r-m);padding:10px}
+.chk{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.chk:last-child{border-bottom:0}
+.tag{flex:0 0 62px;text-align:center;padding:2px 0;border-radius:var(--r-s);
+     font-size:10.5px;font-weight:700;letter-spacing:.06em}
+.tag.pass{background:#16291F;color:var(--live)} .tag.fail{background:#2C1B1F;color:var(--halt)}
+.tag.warn{background:#2C2519;color:var(--warn)} .tag.info{background:var(--raise);color:var(--dim)}
+pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-all;
+    margin:5px 0 0;color:var(--dim);max-height:150px;overflow:auto}
 
-    .branch-loading {
-      padding: 20px 14px;
-      color: #555;
-      font-size: 13px;
-      text-align: center;
-    }
+/* ── modal + toast ─────────────────────────────────────────────────────── */
+#veil{position:fixed;inset:0;background:#0A0D11D9;display:none;align-items:center;
+      justify-content:center;padding:20px;z-index:40}
+#veil.on{display:flex}
+#modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-l);
+       padding:24px;max-width:520px;width:100%;max-height:82vh;overflow:auto}
+#modal h3{margin:0 0 8px;font-size:18px}
+#modal p{color:var(--dim);margin:0 0 18px;font-size:14px}
+#brlist{max-height:44vh;overflow:auto;margin:0 0 18px;border:1px solid var(--line);
+        border-radius:var(--r-m)}
+.br{padding:11px 14px;cursor:pointer;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:13px}
+.br:last-child{border-bottom:0}
+.br:hover{background:var(--raise)}
+.br[aria-selected="true"]{background:var(--raise);box-shadow:inset 3px 0 0 var(--live)}
+.br small{display:block;font-family:var(--sans);color:var(--faint);font-size:11px;margin-top:2px}
+.br.showall{font-family:var(--sans);color:var(--live);text-align:center}
+#toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,90px);
+       background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);
+       padding:11px 18px;z-index:60;transition:transform .22s;font-size:14px;max-width:90vw}
+#toast.on{transform:translate(-50%,0)}
+.empty{text-align:center;color:var(--faint);padding:52px 20px}
 
-    /* ── Modal actions ── */
-    #modal-actions, #diag-actions, #logs-actions {
-      display: flex;
-      gap: 10px;
-    }
-    .btn-primary {
-      flex: 1;
-      background: #e94560;
-      color: #fff;
-      border: none;
-      padding: 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 700;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .btn-primary:active { background: #c0392b; }
-    .btn-primary:disabled { background: #5a1e2a; color: #888; cursor: default; }
-
-    #modal-status {
-      font-size: 12px;
-      color: #888;
-      min-height: 16px;
-      text-align: center;
-    }
-    #modal-status.ok  { color: #2ecc71; }
-    #modal-status.err { color: #e74c3c; }
-  </style>
+@media (max-width:760px){
+  :root{--rail:0}
+  #app{flex-direction:column-reverse}
+  #rail{width:auto;flex:0 0 auto;flex-direction:row;border-right:0;border-top:1px solid var(--line);
+        padding:6px 6px calc(6px + env(safe-area-inset-bottom));gap:2px;overflow-x:auto}
+  #brand,#railfoot{display:none}
+  .navbtn{flex-direction:column;gap:4px;font-size:11px;padding:8px 4px;min-width:66px;justify-content:center}
+  .page{padding:20px 16px 40px}
+  h1{font-size:22px}
+  .drive{flex-wrap:wrap;gap:10px}
+  .drive .meta{width:100%;justify-content:space-between}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
 </head>
 <body>
+<div id="app">
+  <nav id="rail">
+    <div id="brand"><b>FunnyPilot</b><span id="ver">—</span></div>
+    <button class="navbtn" data-go="overview" aria-current="page"><i class="dot"></i>Overview</button>
+    <button class="navbtn" data-go="drives"><i class="dot"></i>Drives</button>
+    <button class="navbtn" data-go="terminal"><i class="dot"></i>Terminal</button>
+    <button class="navbtn" data-go="verify"><i class="dot"></i>Verify</button>
+    <div id="railfoot">
+      <div class="row"><span>Branch</span><span class="num" id="fBranch">—</span></div>
+      <div class="row"><span>Free</span><span class="num" id="fFree">—</span></div>
+      <div class="row"><span>Drives</span><span class="num" id="fDrives">—</span></div>
+    </div>
+  </nav>
 
-<div id="topbar">
-  <h1>FunnyPilot</h1>
-  <span id="fp-version" title="running version">…</span>
-  <span class="spacer"></span>
-  <span id="conn-status">connecting</span>
-  <button id="logs-btn" class="btn-secondary" style="flex:none;padding:7px 14px;font-size:13px;" onclick="openLogsModal()">Logs</button>
-  <button id="diag-btn" onclick="openDiagModal()">Verify</button>
-  <button id="flash-btn" onclick="openFlashModal()">Flash</button>
+  <main id="main">
+    <!-- OVERVIEW -->
+    <section class="page on" id="p-overview">
+      <h1>Device</h1>
+      <p class="sub">Everything about this car, in one place.</p>
+      <div class="grid g4">
+        <div class="card stat"><div class="lbl">Version</div><div class="v" id="sVer">—</div></div>
+        <div class="card stat"><div class="lbl">Branch</div><div class="v" id="sBranch" style="font-size:17px">—</div></div>
+        <div class="card stat"><div class="lbl">Drives</div><div class="v" id="sDrives">—</div></div>
+        <div class="card stat"><div class="lbl">Free space</div><div class="v" id="sFree">—</div></div>
+      </div>
+
+      <h2>Storage</h2>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--dim)">
+          <span>Recordings <b class="num" id="stDrives" style="color:var(--text)">—</b></span>
+          <span>Other <b class="num" id="stOther" style="color:var(--text)">—</b></span>
+          <span>Free <b class="num" id="stFree" style="color:var(--text)">—</b></span>
+        </div>
+        <div class="meter">
+          <i id="mDrives" style="background:var(--lat)"></i>
+          <i id="mOther" style="background:var(--faint)"></i>
+        </div>
+      </div>
+
+      <h2>Actions</h2>
+      <div class="card btnrow">
+        <button class="btn p" id="bFlash">Flash a branch</button>
+        <button class="btn" id="bMaps">Update maps</button>
+        <button class="btn" id="bRestart">Restart openpilot</button>
+        <button class="btn d" id="bReboot">Reboot device</button>
+      </div>
+    </section>
+
+    <!-- DRIVES -->
+    <section class="page" id="p-drives">
+      <h1>Drives</h1>
+      <p class="sub">Recorded on this device. Nothing is uploaded anywhere.</p>
+      <div id="toolbar">
+        <input id="q" placeholder="Filter by date…" autocomplete="off"/>
+        <select id="sortBy">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+          <option value="big">Largest first</option>
+          <option value="long">Longest first</option>
+        </select>
+        <button class="btn sm" id="bRefresh">Refresh</button>
+      </div>
+      <div id="driveList"><div class="empty">Loading…</div></div>
+    </section>
+
+    <!-- PLAYBACK -->
+    <section class="page" id="p-play">
+      <div id="pbTop">
+        <button class="btn sm" id="bBack">← Drives</button>
+        <h1 id="pbTitle" style="font-size:19px">—</h1>
+        <div style="flex:1"></div>
+        <select id="camSel"></select>
+        <button class="btn sm" id="bDlVid">Video</button>
+        <button class="btn sm" id="bDlData">Data</button>
+        <button class="btn sm" id="bDlAll">All</button>
+        <button class="btn sm d" id="bDel">Delete</button>
+      </div>
+      <video id="vid" controls playsinline preload="metadata"></video>
+      <div id="novid"></div>
+      <div id="ribbonWrap">
+        <canvas id="ribbon"></canvas>
+        <div id="tip"></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--auth-full)"></i>Full openpilot</span>
+        <span><i style="background:var(--auth-lat)"></i>Lateral only</span>
+        <span><i style="background:var(--auth-long)"></i>Longitudinal only</span>
+        <span><i style="background:var(--auth-manual)"></i>Manual</span>
+        <span><i style="background:var(--mark)"></i>Bookmark</span>
+        <span id="pbPending" class="mut"></span>
+      </div>
+      <div class="grid g4" style="margin-top:18px">
+        <div class="card stat"><div class="lbl">At playhead</div><div class="v" id="kSpeed">—<span class="u">mph</span></div></div>
+        <div class="card stat"><div class="lbl">Accel</div><div class="v" id="kAccel">—<span class="u">m/s²</span></div></div>
+        <div class="card stat"><div class="lbl">Lead gap</div><div class="v" id="kLead">—<span class="u">m</span></div></div>
+        <div class="card stat"><div class="lbl">Control</div><div class="v" id="kAuth" style="font-size:17px">—</div></div>
+      </div>
+      <div class="grid g4" style="margin-top:14px">
+        <div class="card stat"><div class="lbl">Duration</div><div class="v" id="kDur">—</div></div>
+        <div class="card stat"><div class="lbl">Distance</div><div class="v" id="kDist">—<span class="u">mi</span></div></div>
+        <div class="card stat"><div class="lbl">Bookmarks</div><div class="v" id="kMarks">—</div></div>
+        <div class="card stat"><div class="lbl">Size</div><div class="v" id="kSize">—</div></div>
+      </div>
+    </section>
+
+    <!-- TERMINAL -->
+    <section class="page" id="p-terminal">
+      <h1>Terminal</h1>
+      <p class="sub">A real shell on the device, over your local network.</p>
+      <div id="term"></div>
+    </section>
+
+    <!-- VERIFY -->
+    <section class="page" id="p-verify">
+      <h1>Verify</h1>
+      <p class="sub">Read-only checks that the running code is what you think it is.</p>
+      <div class="btnrow" style="margin-bottom:16px">
+        <button class="btn p" id="bRun">Run checks</button>
+        <button class="btn" id="bCopy">Copy report</button>
+      </div>
+      <div class="card" id="checks"><div class="empty">Not run yet.</div></div>
+    </section>
+  </main>
 </div>
 
-<div id="terminal-container"></div>
-
-<div id="modal-overlay">
-  <div id="modal">
-    <div id="modal-header">
-      <h2>Flash Branch</h2>
-      <button id="modal-close" onclick="closeFlashModal()">✕</button>
-    </div>
-
-    <div id="branch-list">
-      <div class="branch-loading">Loading branches…</div>
-    </div>
-
-    <div id="modal-actions">
-      <button class="btn-primary" id="flash-confirm" onclick="doFlash()" disabled>Flash &amp; Reboot</button>
-    </div>
-    <div id="modal-status"></div>
-  </div>
-</div>
-
-<div id="diag-overlay">
-  <div id="diag-modal">
-    <div id="diag-mheader">
-      <h2>Code Verification</h2>
-      <button id="diag-close" onclick="closeDiagModal()">✕</button>
-    </div>
-
-    <div id="diag-list">
-      <div class="branch-loading">Running checks…</div>
-    </div>
-
-    <div id="diag-actions">
-      <button class="btn-secondary" id="diag-copy" onclick="copyDiag()" disabled>Copy Output</button>
-      <button class="btn-primary" id="diag-run" onclick="runDiag()">Run Again</button>
-    </div>
-    <div id="diag-status"></div>
-  </div>
-</div>
-
-<div id="logs-overlay">
-  <div id="logs-modal">
-    <div id="logs-mheader">
-      <h2>Triage Logs</h2>
-      <button id="logs-close" onclick="closeLogsModal()">✕</button>
-    </div>
-
-    <div id="logs-files"><span class="branch-loading">Loading…</span></div>
-    <div id="logs-view">Select a log file above. lat_interp = 1 Hz onroad recorder (interp health, live tuning), code_identity = boot + 10-min code snapshots, marks = your flagged moments.</div>
-
-    <div id="logs-actions" style="display:flex;gap:10px;">
-      <button id="mark-btn" onclick="markIssue()">⚑ Mark issue now</button>
-      <button class="btn-secondary" id="logs-copy" onclick="copyLogs()" disabled>Copy</button>
-      <button class="btn-secondary" id="logs-refresh" onclick="refreshLogs()">Refresh</button>
-    </div>
-    <div id="logs-status"></div>
-  </div>
-</div>
+<div id="veil"><div id="modal"></div></div>
+<div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script>
-  // ── Terminal ──────────────────────────────────────────────────────────────
-  const term = new Terminal({
-    theme: { background: '#111', foreground: '#ddd', cursor: '#e94560' },
-    fontSize: 13,
-    fontFamily: '"Cascadia Code", "Fira Code", monospace',
-    cursorBlink: true,
-    scrollback: 5000,
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const MS = 2.2369362920544; // m/s -> mph
+const bytes = b => { if(!b) return "0 B"; const u=["B","KB","MB","GB","TB"];
+  const i=Math.min(Math.floor(Math.log(b)/Math.log(1024)),4);
+  return (b/Math.pow(1024,i)).toFixed(i?1:0)+" "+u[i]; };
+const clock = s => { s=Math.max(0,Math.round(s)); const h=Math.floor(s/3600),m=Math.floor(s%3600/60);
+  return h ? `${h}:${String(m).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
+           : `${m}:${String(s%60).padStart(2,"0")}`; };
+
+let toastT;
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),3400); }
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(!r.ok) throw new Error((await r.text()) || r.statusText);
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
+}
+
+/* ── navigation ───────────────────────────────────────────────────────── */
+function go(name){
+  $$(".page").forEach(p => p.classList.toggle("on", p.id === "p-"+name));
+  $$(".navbtn").forEach(b => b.setAttribute("aria-current", b.dataset.go===name ? "page":"false"));
+  $("#main").scrollTop = 0;
+  if(name === "terminal") setTimeout(fitTerm, 60);
+  if(name === "drives") loadDrives();
+}
+$$(".navbtn").forEach(b => b.onclick = () => go(b.dataset.go));
+
+/* ── overview ─────────────────────────────────────────────────────────── */
+async function loadOverview(){
+  try{
+    const v = await api("/api/version");
+    $("#ver").textContent = v.version || "?";
+    $("#sVer").textContent = v.version || "?";
+    $("#sVer").className = "v " + (v.version === v.expected ? "ok" : "warn");
+    $("#sBranch").textContent = v.branch || "?";
+    $("#fBranch").textContent = v.branch || "?";
+  }catch{ /* offline is a state, not an error worth shouting about */ }
+  try{
+    const s = await api("/api/storage");
+    const pct = t => s.total ? (100*t/s.total).toFixed(1)+"%" : "0%";
+    $("#sFree").textContent = bytes(s.free);
+    $("#fFree").textContent = bytes(s.free);
+    $("#stDrives").textContent = bytes(s.drives);
+    $("#stOther").textContent = bytes(Math.max(0, s.used - s.drives));
+    $("#stFree").textContent  = bytes(s.free);
+    $("#mDrives").style.width = pct(s.drives);
+    $("#mOther").style.width  = pct(Math.max(0, s.used - s.drives));
+  }catch{}
+}
+
+/* ── drives ───────────────────────────────────────────────────────────── */
+let DRIVES = [];
+async function loadDrives(force){
+  if(DRIVES.length && !force) return render();
+  $("#driveList").innerHTML = '<div class="empty">Loading…</div>';
+  try{
+    const d = await api("/api/drives");
+    DRIVES = d.drives;
+    $("#sDrives").textContent = DRIVES.length;
+    $("#fDrives").textContent = DRIVES.length;
+    render();
+  }catch(e){ $("#driveList").innerHTML = `<div class="empty">Could not read drives.<br>${e.message}</div>`; }
+}
+$("#bRefresh").onclick = () => loadDrives(true);
+$("#q").oninput = render;
+$("#sortBy").onchange = render;
+
+function render(){
+  const q = $("#q").value.trim().toLowerCase();
+  const key = $("#sortBy").value;
+  let rows = DRIVES.filter(d => !q || label(d).toLowerCase().includes(q));
+  const t = d => d.started_at || d.mtime || 0;
+  rows.sort((a,b) => key==="old" ? t(a)-t(b) : key==="big" ? b.bytes-a.bytes
+                   : key==="long" ? b.n_segments-a.n_segments : t(b)-t(a));
+  if(!rows.length){ $("#driveList").innerHTML = '<div class="empty">No drives match.</div>'; return; }
+  $("#driveList").innerHTML = rows.map(d => `
+    <div class="drive" data-r="${encodeURIComponent(d.route)}" tabindex="0" role="button">
+      <div class="when">
+        <b>${label(d)}</b>
+        <small>${d.route}</small>
+      </div>
+      <div class="meta">
+        <div><div class="lbl">Length</div><div class="num">${clock(d.duration_est)}</div></div>
+        <div><div class="lbl">Size</div><div class="num">${bytes(d.bytes)}</div></div>
+        <div><div class="lbl">Cameras</div><div class="num">${d.cameras.length||"—"}</div></div>
+        <div>${d.has_timeline ? '<span class="pill">indexed</span>' : ""}</div>
+      </div>
+    </div>`).join("");
+  $$("#driveList .drive").forEach(el => {
+    const open = () => openDrive(decodeURIComponent(el.dataset.r));
+    el.onclick = open;
+    el.onkeydown = e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } };
   });
-  const fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.open(document.getElementById('terminal-container'));
-  fitAddon.fit();
-  window.addEventListener('resize', () => fitAddon.fit());
+}
+function label(d){
+  const t = d.started_at || d.mtime;
+  if(!t) return d.route;
+  return new Date(t*1000).toLocaleString(undefined,
+    {weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+}
 
-  // ── Running version (v3.4.5) ──────────────────────────────────────────────
-  // Shows what the device is ACTUALLY running, from FUNNYPILOT_VERSION on
-  // disk. Highlighted when it disagrees with the version this web UI was
-  // shipped with — that mismatch is exactly the "the flash looked fine but
-  // the old code is still running" failure this fork has hit before.
-  async function loadVersion() {
-    const el = document.getElementById('fp-version');
-    try {
-      const d = await fetch('/api/version').then(r => r.json());
-      const running = (d.version || '').trim();
-      el.textContent = running ? `v${running}` : 'v?';
-      if (running && d.expected && running !== d.expected) {
-        el.classList.add('stale');
-        el.title = `running ${running}, this UI ships with ${d.expected}`;
-      } else {
-        el.title = `running ${running || 'unknown'}`;
-      }
-    } catch (e) {
-      el.textContent = 'v?';
-      el.title = `version unavailable: ${e.message}`;
-    }
-  }
-  loadVersion();
+/* ── playback ─────────────────────────────────────────────────────────── */
+let PB = null, hls = null, poll = null;
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────
-  let ws = null;
-  let reconnectTimer = null;
-
-  function connect() {
-    clearTimeout(reconnectTimer);
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = () => {
-      const s = document.getElementById('conn-status');
-      s.textContent = 'connected';
-      s.className = 'on';
-      sendResize();
-    };
-    ws.onmessage = (e) => {
-      term.write(e.data instanceof ArrayBuffer ? new Uint8Array(e.data) : e.data);
-    };
-    ws.onclose = () => {
-      const s = document.getElementById('conn-status');
-      s.textContent = 'disconnected';
-      s.className = 'off';
-      reconnectTimer = setTimeout(connect, 3000);
-    };
-    ws.onerror = () => ws.close();
-  }
-
-  function sendResize() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const buf = new Uint8Array(5);
-    buf[0] = 0xFF;
-    buf[1] = term.cols & 0xFF;  buf[2] = (term.cols >> 8) & 0xFF;
-    buf[3] = term.rows & 0xFF;  buf[4] = (term.rows >> 8) & 0xFF;
-    ws.send(buf);
-  }
-
-  term.onData((data) => {
-    if (ws && ws.readyState === WebSocket.OPEN)
-      ws.send(new TextEncoder().encode(data));
+async function openDrive(route){
+  if(poll){ clearTimeout(poll); poll = null; }
+  const meta = DRIVES.find(d => d.route === route) || {};
+  PB = { route, tl:null, dur:0, cams:[] };
+  $("#pbTitle").textContent = label(meta.route ? meta : {route});
+  $("#kSize").textContent = bytes(meta.bytes || 0);
+  ["#kSpeed","#kAccel","#kLead","#kAuth","#kDur","#kDist","#kMarks"].forEach(s => {
+    const el = $(s); el.childNodes[0].nodeValue = "—";
   });
-  term.onResize(sendResize);
-  connect();
+  $("#pbPending").textContent = "";
+  go("play");
 
-  // ── Flash modal ───────────────────────────────────────────────────────────
-  let selectedBranch = null;
+  try{
+    const det = await api(`/api/drives/${encodeURIComponent(route)}`);
+    PB.cams = det.cameras;
+    $("#camSel").innerHTML = det.cameras.map(c =>
+      `<option value="${c.key}" ${c.playable?"":"disabled"}>${c.label}${c.playable?"":" — download only"}</option>`
+    ).join("") || "<option>No video</option>";
+  }catch{}
 
-  function openFlashModal() {
-    selectedBranch = null;
-    document.getElementById('flash-confirm').disabled = true;
-    document.getElementById('modal-status').textContent = '';
-    document.getElementById('modal-status').className = '';
-    document.getElementById('modal-overlay').classList.add('active');
-    loadBranches();
+  attachVideo(route);
+  loadTimeline(route);
+  drawRibbon();
+}
+
+function attachVideo(route){
+  const v = $("#vid"), no = $("#novid");
+  const src = `/api/drives/${encodeURIComponent(route)}/hls.m3u8`;
+  if(hls){ hls.destroy(); hls = null; }
+  v.style.display = "block"; no.style.display = "none";
+
+  // NOTHING IS TRANSCODED. loggerd already writes one-minute H.264 MPEG-TS
+  // segments, which is exactly an HLS media segment, so the server hands the
+  // browser a text playlist over the files it already has.
+  if(window.Hls && Hls.isSupported()){
+    hls = new Hls({ maxBufferLength:30, maxMaxBufferLength:60, backBufferLength:30 });
+    hls.loadSource(src); hls.attachMedia(v);
+    hls.on(Hls.Events.ERROR,(_,d)=>{ if(d.fatal) showNoVideo("This drive has no playable video."); });
+  } else if(v.canPlayType("application/vnd.apple.mpegurl")){
+    v.src = src;              // Safari and iOS play HLS natively
+    v.onerror = () => showNoVideo("This drive has no playable video.");
+  } else {
+    showNoVideo("Your browser can't play HLS and hls.js didn't load. The drive is still downloadable, and the timeline below works.");
   }
+  v.ontimeupdate = () => { drawRibbon(); readout(v.currentTime); };
+}
+function showNoVideo(msg){
+  $("#vid").style.display = "none";
+  const n = $("#novid"); n.style.display = "flex"; n.textContent = msg;
+}
 
-  function closeFlashModal() {
-    document.getElementById('modal-overlay').classList.remove('active');
-  }
+async function loadTimeline(route){
+  try{
+    const tl = await api(`/api/drives/${encodeURIComponent(route)}/timeline`);
+    if(!PB || PB.route !== route) return;          // the user moved on
+    PB.tl = tl;
+    PB.dur = tl.duration_s || 0;
+    $("#kDur").childNodes[0].nodeValue = clock(PB.dur);
+    $("#kDist").childNodes[0].nodeValue = (tl.distance_m/1609.34).toFixed(1);
+    $("#kMarks").childNodes[0].nodeValue = tl.marks.length;
+    drawRibbon(); readout($("#vid").currentTime || 0);
 
-  async function loadBranches() {
-    const list = document.getElementById('branch-list');
-    list.innerHTML = '<div class="branch-loading">Loading…</div>';
-    try {
-      const branches = await fetch('/api/branches').then(r => r.json());
-      list.innerHTML = '';
-      if (!branches.length) {
-        list.innerHTML = '<div class="branch-loading">No branches found</div>';
-        return;
-      }
-      for (const b of branches) {
-        const item = document.createElement('div');
-        item.className = 'branch-item';
-        item.dataset.name = b.name;
-        const date = b.date ? b.date.slice(0, 10) : '';
-        item.innerHTML =
-          `<span class="branch-name">${b.name}</span>` +
-          (date ? `<span class="branch-date">${date}</span>` : '');
-        item.addEventListener('click', () => selectBranch(b.name));
-        list.appendChild(item);
-      }
-    } catch (e) {
-      list.innerHTML = `<div class="branch-loading">Error: ${e.message}</div>`;
+    // The server parses a bounded number of segments per request so a first
+    // visit to a long drive cannot occupy the CPU. Ask again for the rest.
+    if(tl.pending && tl.pending.length){
+      $("#pbPending").textContent = `indexing ${tl.pending.length} more segment${tl.pending.length>1?"s":""}…`;
+      poll = setTimeout(() => loadTimeline(route), 900);
+    } else {
+      $("#pbPending").textContent = "";
     }
-  }
+  }catch(e){ $("#pbPending").textContent = "no timeline for this drive"; }
+}
 
-  function selectBranch(name) {
-    selectedBranch = name;
-    document.querySelectorAll('.branch-item').forEach(el => {
-      el.classList.toggle('selected', el.dataset.name === name);
+/* THE RIBBON. One canvas: an authority band, a speed trace, an accel trace,
+   bookmark ticks and the playhead. Drawn from a typed row array rather than
+   DOM nodes because an hour of drive is 3600 buckets. */
+const AUTH_COL = () => [css("--auth-manual"), css("--auth-lat"), css("--auth-long"), css("--auth-full")];
+function drawRibbon(){
+  const c = $("#ribbon"); if(!c) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = c.clientWidth, h = c.clientHeight;
+  if(!w || !h) return;
+  if(c.width !== w*dpr || c.height !== h*dpr){ c.width = w*dpr; c.height = h*dpr; }
+  const g = c.getContext("2d");
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,w,h);
+
+  const tl = PB && PB.tl, dur = (PB && PB.dur) || 0;
+  if(!tl || !tl.rows.length || !dur){
+    g.fillStyle = css("--faint"); g.font = "12px "+css("--sans");
+    g.textAlign = "center"; g.fillText("no timeline yet", w/2, h/2);
+    return;
+  }
+  const BAND = 26, PAD_T = 16, TRACE_H = h - BAND - PAD_T - 8;
+  const x = t => (t/dur)*w;
+  const cols = AUTH_COL();
+
+  // authority band — one rect per contiguous run, not per bucket
+  let run = tl.rows[0][1], start = tl.rows[0][0];
+  const flush = (endT) => {
+    g.fillStyle = cols[run] || cols[0];
+    g.fillRect(x(start), PAD_T, Math.max(1, x(endT+1)-x(start)), BAND);
+  };
+  for(const r of tl.rows){
+    if(r[1] !== run){ flush(r[0]-1); run = r[1]; start = r[0]; }
+  }
+  flush(tl.rows[tl.rows.length-1][0]);
+
+  // speed + accel traces
+  const vMax = Math.max(1, ...tl.rows.map(r => r[3]));
+  const yTop = PAD_T + BAND + 8;
+  const trace = (idx, colour, scale, base) => {
+    g.beginPath(); g.strokeStyle = colour; g.lineWidth = 1.4; g.lineJoin = "round";
+    tl.rows.forEach((r,i) => {
+      const px = x(r[0]), py = base - scale(r[idx]);
+      i ? g.lineTo(px,py) : g.moveTo(px,py);
     });
-    document.getElementById('flash-confirm').disabled = false;
-  }
+    g.stroke();
+  };
+  trace(2, css("--lat"), v => (v/vMax)*TRACE_H, yTop + TRACE_H);
+  // accel: zero in the middle third, braking downward
+  const aBase = yTop + TRACE_H*0.55;
+  g.strokeStyle = css("--line"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0,aBase); g.lineTo(w,aBase); g.stroke();
+  trace(5, css("--warn"), a => Math.max(-TRACE_H*0.45, Math.min(TRACE_H*0.45, a*(TRACE_H*0.45/3))), aBase);
 
-  async function doFlash() {
-    if (!selectedBranch) return;
-    const statusEl = document.getElementById('modal-status');
-    const btn = document.getElementById('flash-confirm');
-    btn.disabled = true;
-    statusEl.textContent = `Flashing ${selectedBranch}…`;
-    statusEl.className = '';
-    try {
-      const resp = await fetch('/api/flash', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ branch: selectedBranch }),
+  // bookmarks — the reserved fifth hue, so a tick is findable on top of
+  // any of the four authority colours beneath it.
+  g.fillStyle = css("--mark");
+  for(const m of tl.marks){ g.fillRect(x(m)-1, 4, 2, PAD_T+BAND-4); }
+
+  // playhead
+  const t = $("#vid").currentTime || 0;
+  g.strokeStyle = css("--text"); g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(x(t), 0); g.lineTo(x(t), h); g.stroke();
+}
+
+function rowAt(t){
+  const tl = PB && PB.tl; if(!tl || !tl.rows.length) return null;
+  const b = Math.round(t);
+  let lo = 0, hi = tl.rows.length-1, best = tl.rows[0];
+  while(lo <= hi){ const m = (lo+hi)>>1;
+    if(tl.rows[m][0] === b) return tl.rows[m];
+    if(tl.rows[m][0] < b){ best = tl.rows[m]; lo = m+1; } else hi = m-1; }
+  return best;
+}
+const AUTH_NAME = ["Manual","Lateral only","Longitudinal only","Full openpilot"];
+function readout(t){
+  const r = rowAt(t); if(!r) return;
+  const set = (sel, val, cls) => { const el=$(sel); el.childNodes[0].nodeValue = val;
+                                   el.className = "v" + (cls?" "+cls:""); };
+  set("#kSpeed", (r[2]*MS).toFixed(0));
+  set("#kAccel", r[5].toFixed(2), r[5] < -0.2 ? "warn" : "");
+  set("#kLead", r[6] >= 0 ? r[6].toFixed(0) : "—", r[6] >= 0 && r[6] < 12 ? "bad" : "");
+  const a = $("#kAuth"); a.childNodes[0].nodeValue = AUTH_NAME[r[1]];
+  a.style.color = AUTH_COL()[r[1]];
+}
+
+(function ribbonInput(){
+  const c = $("#ribbon"), tip = $("#tip");
+  const seekAt = e => {
+    if(!PB || !PB.dur) return null;
+    const box = c.getBoundingClientRect();
+    const px = (e.touches ? e.touches[0].clientX : e.clientX) - box.left;
+    return Math.max(0, Math.min(PB.dur, (px/box.width)*PB.dur));
+  };
+  c.addEventListener("pointermove", e => {
+    const t = seekAt(e); if(t === null) return;
+    const r = rowAt(t); if(!r){ tip.style.opacity = 0; return; }
+    tip.textContent = `${clock(t)}\n${(r[2]*MS).toFixed(0)} mph  ${r[5].toFixed(2)} m/s²\n${AUTH_NAME[r[1]]}`;
+    tip.style.opacity = 1;
+    const box = c.getBoundingClientRect();
+    tip.style.left = Math.min(box.width-140, Math.max(0, (t/PB.dur)*box.width + 10)) + "px";
+    tip.style.top = "6px";
+  });
+  c.addEventListener("pointerleave", () => tip.style.opacity = 0);
+  c.addEventListener("pointerdown", e => {
+    const t = seekAt(e); if(t === null) return;
+    $("#vid").currentTime = t; drawRibbon(); readout(t);
+  });
+  addEventListener("resize", drawRibbon);
+})();
+
+$("#bBack").onclick = () => { if(hls){hls.destroy(); hls=null;} $("#vid").removeAttribute("src");
+                              if(poll){clearTimeout(poll); poll=null;} go("drives"); };
+const dl = what => { if(PB) location.href =
+  `/api/drives/${encodeURIComponent(PB.route)}/download?what=${what}`; };
+$("#bDlVid").onclick = () => dl("video");
+$("#bDlData").onclick = () => dl("data");
+$("#bDlAll").onclick = () => dl("all");
+$("#camSel").onchange = () => {
+  const cam = PB.cams.find(c => c.key === $("#camSel").value);
+  if(cam && !cam.playable)
+    toast(`${cam.label} is ${cam.file} — full-resolution HEVC. Use Download to pull it.`);
+};
+
+$("#bDel").onclick = () => {
+  if(!PB) return;
+  confirmModal("Delete this drive?",
+    "Every segment, video and log is removed from the device. This frees the space immediately and cannot be undone.",
+    async () => {
+      try{
+        const r = await api(`/api/drives/${encodeURIComponent(PB.route)}`, {method:"DELETE"});
+        toast(`Deleted ${r.segments} segments, freed ${bytes(r.bytes)}`);
+        DRIVES = DRIVES.filter(d => d.route !== PB.route);
+        closeModal(); go("drives"); render(); loadOverview();
+      }catch(e){ toast("Delete failed: " + e.message); }
+    });
+};
+
+/* ── modal ────────────────────────────────────────────────────────────── */
+function closeModal(){ $("#veil").classList.remove("on"); }
+$("#veil").onclick = e => { if(e.target.id === "veil") closeModal(); };
+addEventListener("keydown", e => { if(e.key === "Escape") closeModal(); });
+
+function confirmModal(title, body, onYes, yesLabel){
+  $("#modal").innerHTML = `<h3>${title}</h3><p>${body}</p>
+    <div class="btnrow" style="justify-content:flex-end">
+      <button class="btn" id="mNo">Cancel</button>
+      <button class="btn d" id="mYes">${yesLabel || "Delete"}</button></div>`;
+  $("#veil").classList.add("on");
+  $("#mNo").onclick = closeModal;
+  $("#mYes").onclick = onYes;
+}
+
+/* ── device actions ───────────────────────────────────────────────────── */
+async function deviceAction(action, title, body, label){
+  confirmModal(title, body, async () => {
+    try{ const r = await api("/api/device/"+action, {method:"POST"}); toast(r.message); }
+    catch(e){ toast("Failed: " + e.message); }
+    closeModal();
+  }, label);
+}
+$("#bReboot").onclick = () => deviceAction("reboot", "Reboot the device?",
+  "The car will be unavailable for about a minute.", "Reboot");
+$("#bRestart").onclick = () => deviceAction("restart", "Restart openpilot?",
+  "Ends the current drive's recording and brings the stack back up.", "Restart");
+$("#bMaps").onclick = () => deviceAction("maps", "Refresh offline maps?",
+  "The existing map database is removed first and re-downloaded, so do this on wifi and leave the device parked until it finishes.", "Refresh");
+
+/* ── flashing ─────────────────────────────────────────────────────────── */
+$("#bFlash").onclick = async () => {
+  $("#modal").innerHTML = `<h3>Flash a branch</h3><p>Loading branches…</p>`;
+  $("#veil").classList.add("on");
+  try{
+    const d = await api("/api/branches");
+    // THE SERVER ALREADY SORTS NEWEST FIRST by commit date, so "recent" is just
+    // the head of the list. Ten is what fits without the modal scrolling, and
+    // the rest are one click away — the full list had grown past a screenful,
+    // which turned picking last week's build into a scrolling exercise.
+    const RECENT = 10;
+    let all = false, picked = null;
+    const draw = () => {
+      const shown = all ? d.branches : d.branches.slice(0, RECENT);
+      const more = d.branches.length - shown.length;
+      $("#brlist").innerHTML = shown.map(b => `
+        <div class="br" data-b="${b.name}" role="option"
+             aria-selected="${picked === b.name}">${b.name}
+          <small>${b.date ? new Date(b.date).toLocaleDateString(undefined,
+                 {month:"short",day:"numeric",year:"numeric"}) : ""}</small></div>`).join("")
+        + (more > 0 ? `<div class="br showall" id="brMore">Show all ${d.branches.length} branches
+             <small>${more} older</small></div>` : "");
+      $$("#brlist .br[data-b]").forEach(el => el.onclick = () => {
+        picked = el.dataset.b; $("#mGo").disabled = false; draw();
       });
-      const data = await resp.json();
-      if (resp.ok) {
-        statusEl.textContent = 'Flashing — device will reboot shortly.';
-        statusEl.className = 'ok';
-        setTimeout(closeFlashModal, 3000);
-      } else {
-        statusEl.textContent = data.error || 'Flash failed';
-        statusEl.className = 'err';
-        btn.disabled = false;
-      }
-    } catch (e) {
-      statusEl.textContent = e.message;
-      statusEl.className = 'err';
-      btn.disabled = false;
-    }
-  }
+      const more_el = $("#brMore");
+      if(more_el) more_el.onclick = () => { all = true; draw(); };
+    };
+    $("#modal").innerHTML = `<h3>Flash a branch</h3>
+      <p>The device checks out the branch and reboots. Most recent first.</p>
+      <div id="brlist"></div>
+      <div class="btnrow" style="justify-content:flex-end">
+        <button class="btn" id="mNo">Cancel</button>
+        <button class="btn p" id="mGo" disabled>Flash</button></div>`;
+    $("#mNo").onclick = closeModal;
+    draw();
+    $("#mGo").onclick = async () => {
+      $("#mGo").disabled = true; $("#mGo").textContent = "Flashing…";
+      try{ await api("/api/flash", {method:"POST", headers:{"Content-Type":"application/json"},
+                                   body: JSON.stringify({branch: picked})});
+           toast("Flashing "+picked+" — the device will reboot."); }
+      catch(e){ toast("Flash failed: " + e.message); }
+      closeModal();
+    };
+  }catch(e){ $("#modal").innerHTML = `<h3>Flash a branch</h3><p>Could not list branches: ${e.message}</p>`; }
+};
 
-  // Close on backdrop tap
-  document.getElementById('modal-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('modal-overlay')) closeFlashModal();
-  });
+/* ── verify ───────────────────────────────────────────────────────────── */
+let REPORT = "";
+$("#bRun").onclick = async () => {
+  $("#checks").innerHTML = '<div class="empty">Running…</div>';
+  try{
+    const d = await api("/api/diagnostics", {method:"POST"});
+    REPORT = d.checks.map(c => `[${c.level.toUpperCase()}] ${c.name}\n$ ${c.cmd}\n${c.output}\n`).join("\n");
+    $("#checks").innerHTML = d.checks.map(c => `
+      <div class="chk"><span class="tag ${c.level}">${c.level.toUpperCase()}</span>
+        <div style="flex:1;min-width:0"><b>${c.name}</b>
+        <pre>${(c.output||"").replace(/[<>&]/g, m => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]))}</pre></div></div>`).join("");
+  }catch(e){ $("#checks").innerHTML = `<div class="empty">Failed: ${e.message}</div>`; }
+};
+$("#bCopy").onclick = async () => {
+  if(!REPORT) return toast("Run the checks first.");
+  try{ await navigator.clipboard.writeText(REPORT); toast("Report copied."); }
+  catch{ const t=document.createElement("textarea"); t.value=REPORT; document.body.appendChild(t);
+         t.select(); document.execCommand("copy"); t.remove(); toast("Report copied."); }
+};
 
-  // ── Diagnostics modal ──────────────────────────────────────────────────────
-  let lastDiag = null;
+/* ── terminal ─────────────────────────────────────────────────────────── */
+let term, fit, sock;
+function fitTerm(){ try{ fit && fit.fit(); sendSize(); }catch{} }
+function sendSize(){
+  if(sock && sock.readyState === 1 && term)
+    sock.send(JSON.stringify({type:"resize", cols:term.cols, rows:term.rows}));
+}
+function bootTerm(){
+  if(term || !window.Terminal) return;
+  term = new Terminal({ fontFamily: css("--mono"), fontSize: 13, cursorBlink: true,
+    theme:{ background:"#0A0D11", foreground:css("--text"), cursor:css("--live") } });
+  fit = new FitAddon.FitAddon(); term.loadAddon(fit);
+  term.open($("#term")); fit.fit();
+  sock = new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws");
+  sock.binaryType = "arraybuffer";
+  sock.onopen = sendSize;
+  sock.onmessage = e => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
+  sock.onclose = () => term.write("\r\n\x1b[38;5;203m[disconnected]\x1b[0m\r\n");
+  term.onData(d => { if(sock.readyState === 1) sock.send(d); });
+  addEventListener("resize", fitTerm);
+}
 
-  function escHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  function openDiagModal() {
-    document.getElementById('diag-status').textContent = '';
-    document.getElementById('diag-status').className = '';
-    document.getElementById('diag-overlay').classList.add('active');
-    runDiag();
-  }
-
-  function closeDiagModal() {
-    document.getElementById('diag-overlay').classList.remove('active');
-  }
-
-  async function runDiag() {
-    const list = document.getElementById('diag-list');
-    const runBtn = document.getElementById('diag-run');
-    const copyBtn = document.getElementById('diag-copy');
-    const statusEl = document.getElementById('diag-status');
-    runBtn.disabled = true;
-    copyBtn.disabled = true;
-    statusEl.textContent = '';
-    statusEl.className = '';
-    list.innerHTML = '<div class="branch-loading">Running checks…</div>';
-    try {
-      const data = await fetch('/api/diagnostics', { method: 'POST' }).then(r => r.json());
-      if (data.error) throw new Error(data.error);
-      lastDiag = data.checks;
-      renderDiag(data.checks);
-      const fails = data.checks.filter(c => c.level === 'fail').length;
-      const warns = data.checks.filter(c => c.level === 'warn').length;
-      statusEl.textContent = fails ? `${fails} failed · ${warns} warning(s)`
-                           : warns ? `Critical checks passed · ${warns} warning(s)`
-                                   : 'All checks passed ✓';
-      statusEl.className = fails ? 'err' : 'ok';
-      copyBtn.disabled = false;
-    } catch (e) {
-      list.innerHTML = `<div class="branch-loading">Error: ${escHtml(e.message)}</div>`;
-    } finally {
-      runBtn.disabled = false;
-    }
-  }
-
-  function renderDiag(checks) {
-    const list = document.getElementById('diag-list');
-    list.innerHTML = '';
-    for (const c of checks) {
-      const row = document.createElement('div');
-      row.className = 'diag-row';
-      const out = (c.output || '').trim();
-      row.innerHTML =
-        '<div class="diag-head">' +
-          `<span class="diag-pill ${c.level}">${c.level.toUpperCase()}</span>` +
-          `<span class="diag-name">${escHtml(c.name)}</span>` +
-          `<span class="diag-summary">${escHtml(c.summary || '')}</span>` +
-        '</div>' +
-        (out ? `<div class="diag-output"><span class="diag-cmd">$ ${escHtml(c.cmd)}</span>\n${escHtml(out)}</div>` : '');
-      list.appendChild(row);
-    }
-  }
-
-  function diagReport() {
-    if (!lastDiag) return '';
-    const lines = ['FunnyPilot Diagnostics', '======================'];
-    for (const c of lastDiag) {
-      lines.push(`[${c.level.toUpperCase()}] ${c.name}${c.summary ? ' — ' + c.summary : ''}`);
-      lines.push(`  $ ${c.cmd}`);
-      const out = (c.output || '').trim();
-      if (out) for (const l of out.split('\n')) lines.push(`  ${l}`);
-      lines.push('');
-    }
-    return lines.join('\n');
-  }
-
-  async function copyDiag() {
-    const text = diagReport();
-    const statusEl = document.getElementById('diag-status');
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(text);
-      ok = true;
-    } catch (e) {
-      // Fallback for non-secure (http) contexts where the clipboard API is blocked
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
-      document.body.removeChild(ta);
-    }
-    statusEl.textContent = ok ? 'Copied to clipboard ✓ — paste it back to Claude' : 'Copy failed — long-press the output to select';
-    statusEl.className = ok ? 'ok' : 'err';
-  }
-
-  document.getElementById('diag-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('diag-overlay')) closeDiagModal();
-  });
-
-  // ── Triage logs modal (v3.2.7) ──────────────────────────────────────────
-  let logsCurrentName = null;
-  let logsCurrentText = '';
-
-  function openLogsModal() {
-    document.getElementById('logs-overlay').classList.add('active');
-    refreshLogs();
-  }
-  function closeLogsModal() {
-    document.getElementById('logs-overlay').classList.remove('active');
-  }
-
-  async function refreshLogs() {
-    const filesEl = document.getElementById('logs-files');
-    const statusEl = document.getElementById('logs-status');
-    statusEl.textContent = '';
-    statusEl.className = '';
-    try {
-      const data = await fetch('/api/logs').then(r => r.json());
-      if (data.error) throw new Error(data.error);
-      filesEl.innerHTML = '';
-      if (!data.files.length) {
-        filesEl.innerHTML = '<span class="branch-loading">No logs yet — drive once, then check back.</span>';
-        return;
-      }
-      for (const f of data.files) {
-        const b = document.createElement('button');
-        b.className = 'log-file-btn' + (f.name === logsCurrentName ? ' selected' : '');
-        b.textContent = `${f.name} (${(f.size / 1024).toFixed(0)}K)`;
-        b.onclick = () => loadLog(f.name);
-        filesEl.appendChild(b);
-      }
-      if (logsCurrentName && data.files.some(f => f.name === logsCurrentName)) loadLog(logsCurrentName);
-    } catch (e) {
-      filesEl.innerHTML = `<span class="branch-loading">Error: ${escHtml(e.message)}</span>`;
-    }
-  }
-
-  async function loadLog(name) {
-    logsCurrentName = name;
-    const view = document.getElementById('logs-view');
-    const copyBtn = document.getElementById('logs-copy');
-    document.querySelectorAll('.log-file-btn').forEach(b => b.classList.toggle('selected', b.textContent.startsWith(name + ' ')));
-    view.textContent = 'Loading…';
-    copyBtn.disabled = true;
-    try {
-      const data = await fetch(`/api/logs/${encodeURIComponent(name)}?tail_kb=128`).then(r => r.json());
-      if (data.error) throw new Error(data.error);
-      logsCurrentText = data.text || '(empty)';
-      view.textContent = (data.truncated ? `… (showing last 128K of ${(data.size / 1024).toFixed(0)}K)\n` : '') + logsCurrentText;
-      view.scrollTop = view.scrollHeight;
-      copyBtn.disabled = false;
-    } catch (e) {
-      view.textContent = 'Error: ' + e.message;
-    }
-  }
-
-  async function copyLogs() {
-    const header = `FunnyPilot triage log: ${logsCurrentName}\ncopied: ${new Date().toISOString()}\n---\n`;
-    const text = header + logsCurrentText;
-    const statusEl = document.getElementById('logs-status');
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(text);
-      ok = true;
-    } catch (e) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
-      document.body.removeChild(ta);
-    }
-    statusEl.textContent = ok ? 'Copied ✓ — paste it back to Claude' : 'Copy failed — long-press the log to select';
-    statusEl.className = ok ? 'ok' : 'err';
-  }
-
-  async function markIssue() {
-    const statusEl = document.getElementById('logs-status');
-    const note = prompt('Optional note (what does it feel like right now?)') || '';
-    try {
-      const r = await fetch('/api/logs/mark', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ note }),
-      }).then(r => r.json());
-      if (r.error) throw new Error(r.error);
-      statusEl.textContent = 'Marked ✓ — timestamp saved to marks.jsonl';
-      statusEl.className = 'ok';
-      refreshLogs();
-    } catch (e) {
-      statusEl.textContent = 'Mark failed: ' + e.message;
-      statusEl.className = 'err';
-    }
-  }
-
-  document.getElementById('logs-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('logs-overlay')) closeLogsModal();
-  });
+/* ── boot ─────────────────────────────────────────────────────────────── */
+loadOverview();
+bootTerm();
+setInterval(loadOverview, 30000);
 </script>
 </body>
 </html>

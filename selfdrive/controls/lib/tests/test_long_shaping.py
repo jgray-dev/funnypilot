@@ -462,3 +462,153 @@ class TestWhoIsDecidingTheLongitudinal:
     # The UI looks the code up in SRC_NAMES; a code with no entry draws "?".
     codes = {v for k, v in vars(ls).items() if k.startswith("SRC_") and isinstance(v, int)}
     assert codes == set(ls.SRC_NAMES)
+
+
+class TestALeadCommittedToStopping:
+  """FunnyPilot v3.6.8 — the stop governor acts on a lead that is BRAKING, not
+  only on one that is already crawling.
+
+  THE PROPERTY THAT MAKES ARMING EARLIER SAFE IS THE ENVELOPE, NOT A THRESHOLD.
+  Where the lead is provably stopping, the geometry is measured to its stop
+  POINT; a lead easing off gently projects that point far away and the cap
+  comes out above any legal speed, so nothing happens. These tests pin that
+  self-limiting behaviour, because without it this is the stacked-authority
+  mistake v3.2.6e removed.
+  """
+
+  def _gov(self):
+    return ls.StopGovernor(0.05)
+
+  def _settle(self, gov, d, vl, ve, vc, a, n=8):
+    out = vc
+    for _ in range(n):
+      out = gov.update(True, d, vl, ve, vc, a)
+    return out
+
+  def test_a_gentle_lift_never_arms_it(self):
+    # -0.5 m/s^2 is coasting, not braking. Below DECEL_MIN, so not committed,
+    # and at 25 m/s the lead is far above STOP_GOV_LEAD_V too.
+    gov = self._gov()
+    assert self._settle(gov, 50.0, 25.0, 27.0, 30.0, -0.5) == 30.0
+    assert not gov.stopping_lead
+
+  def test_a_braking_lead_arms_it_well_above_the_crawl_threshold(self):
+    gov = self._gov()
+    self._settle(gov, 45.0, 16.0, 20.0, 25.0, -2.5)
+    assert gov.stopping_lead, "16 m/s is far above STOP_GOV_LEAD_V; only the braking arms it"
+    assert gov.cap is not None
+
+  def test_it_takes_several_frames_of_braking_to_commit(self):
+    # A duration, not a magnitude: one hard aLeadK sample must not arm it.
+    gov = self._gov()
+    for _ in range(ls.STOP_GOV_DECEL_N - 1):
+      gov.update(True, 45.0, 16.0, 20.0, 25.0, -3.0)
+      assert not gov.stopping_lead
+    gov.update(True, 45.0, 16.0, 20.0, 25.0, -3.0)
+    assert gov.stopping_lead
+
+  def test_one_clean_frame_disarms_the_claim(self):
+    # The CLAIM is cheap to withdraw and expensive to make, which is the right
+    # way round: withdrawing it only ever hands authority back to the MPC.
+    gov = self._gov()
+    self._settle(gov, 45.0, 16.0, 20.0, 25.0, -2.5)
+    assert gov.stopping_lead
+    gov.update(True, 45.0, 16.0, 20.0, 25.0, 0.0)
+    assert not gov.stopping_lead
+
+  def test_the_envelope_self_limits_on_a_highway_lead(self):
+    # MEASURED, and this is the whole safety argument. A lead at 29 m/s braking
+    # 0.8 m/s^2 fifty metres ahead projects its stop 576 m away; the cap that
+    # comes back is 45 m/s, i.e. above anything this car will ever be doing.
+    # ASSERTED AGAINST OUR OWN SPEED, which is the property that matters — a
+    # cap only does something when it falls below what we are doing. A number
+    # typed in here instead would pass or fail on where the constants happen to
+    # sit rather than on whether the governor stays out of ordinary following.
+    gov = self._gov()
+    # 0.8 m/s^2 is under DECEL_MIN, so the projection is not used at all.
+    assert gov.raw_cap(50.0, 29.0, 0.8) > 30.0
+    # Above DECEL_MIN it IS used, and still comes back non-binding: the lead's
+    # stop is 330 m away.
+    assert gov.raw_cap(50.0, 29.0, 1.5) > 30.0
+    # A lead braking gently from 20 m/s, 60 m ahead, while we do 20.
+    assert gov.raw_cap(60.0, 20.0, 1.2) > 20.0
+
+  def test_it_binds_where_the_geometry_says_it_must(self):
+    # Lead braking 2.5 m/s^2 from 20 m/s, us at 20. The cap should cross under
+    # our speed as the gap closes through the mid-40s, not at 6 m/s of lead
+    # speed with the road already spent.
+    gov = self._gov()
+    assert gov.raw_cap(60.0, 20.0, 2.5) > 20.0
+    assert gov.raw_cap(40.0, 20.0, 2.5) < 20.5
+
+  def test_a_projected_stop_is_never_looser_than_the_old_envelope(self):
+    # Believing a lead is stopping must only ever tighten the cap. If this
+    # ever inverts, the feature has become a way to go FASTER at a braking car.
+    gov = self._gov()
+    for d in (20.0, 40.0, 60.0, 100.0):
+      for vl in (5.0, 10.0, 20.0, 30.0):
+        for dec in (1.2, 2.0, 3.0, 4.0):
+          assert gov.raw_cap(d, vl, dec) <= gov.raw_cap(d, vl, 0.0) + 1e-9
+
+  def test_zero_decel_is_bit_identical_to_the_old_envelope(self):
+    gov = self._gov()
+    for d in (15.0, 45.0, 120.0):
+      for vl in (0.0, 4.0, 18.0):
+        assert gov.raw_cap(d, vl, 0.0) == pytest.approx(
+          math.sqrt(max(0.0, vl * vl + 2 * ls.STOP_GOV_A * max(0.0, d - ls.STOP_GOV_GAP_M))))
+
+  def test_a_committed_stopper_is_not_faded_out(self):
+    """The fade exists because a crawling lead may be about to accelerate away.
+    That is not true of one under the brakes, and fading it would remove the
+    authority exactly where this release adds it.
+
+    DRIVEN AT THE TOP OF THE FADE BAND ON PURPOSE. At v_lead 5.9 the weight is
+    (6.0 - 5.9) / 2.0 = 0.05, i.e. the cap is faded 95% of the way back to
+    cruise and does essentially nothing. A first version of this test used 5.5,
+    where the weight is 0.25 and the projected envelope is low enough to pass
+    the assertion either way — vacuous against the mutation it exists to
+    catch, which is the shape this repo has been bitten by repeatedly.
+    """
+    braking = self._gov()
+    out = self._settle(braking, 40.0, 5.9, 20.0, 25.0, -2.5, n=40)
+    assert braking.cap is not None
+    # Unfaded, the envelope at 40 m behind a lead 5.9 m/s from a stop is well
+    # under 20 m/s. Faded at w=0.05 it would sit just under cruise.
+    assert out < 20.0, "the fade is swallowing a committed stopper's cap"
+
+  def test_the_believed_lead_decel_is_clamped(self):
+    """DRIVEN THROUGH `raw_cap` DIRECTLY, because the cap's own rate limiter
+    hides it: FALL_RATE 3.0 m/s per second moves the published cap 0.15 m/s in
+    a frame, so a single absurd `aLeadK` sample is invisible at the output
+    while still being wrong at the envelope. Same lesson as v3.6.7's direction
+    clamp, which survived two mutations for exactly this reason.
+
+    `aLeadK` is an unclipped Kalman output on a radar track; a transient of
+    -20 m/s^2 would otherwise project the lead's stop right on top of us.
+    """
+    gov = self._gov()
+    at_cap = gov.raw_cap(40.0, 20.0, ls.STOP_GOV_DECEL_MAX)
+    for absurd in (8.0, 20.0, 200.0):
+      assert gov.raw_cap(40.0, 20.0, absurd) == pytest.approx(at_cap)
+    # ...and the clamp is doing real work: an unclamped 20 would be far lower.
+    unclamped = math.sqrt(2 * ls.STOP_GOV_A * (40.0 + 400.0 / 40.0 - ls.STOP_GOV_GAP_M))
+    assert unclamped < at_cap - 1.0
+
+  def test_it_still_only_acts_while_closing(self):
+    # The v3.6.7 launch guard is untouched: a braking lead we are already
+    # slower than is not our problem.
+    gov = self._gov()
+    assert self._settle(gov, 30.0, 16.0, 14.0, 25.0, -2.5) == 25.0
+    assert gov.cap is None
+
+  def test_it_can_only_ever_lower_the_cruise_target(self):
+    gov = self._gov()
+    for a in (0.0, -1.0, -2.5, -4.0, -9.0):
+      out = self._settle(gov, 35.0, 12.0, 20.0, 25.0, a)
+      assert out <= 25.0 + 1e-9
+
+  def test_garbage_never_raises_and_never_arms(self):
+    gov = self._gov()
+    for a in (float('nan'), float('inf'), float('-inf')):
+      gov.update(True, 40.0, 15.0, 20.0, 25.0, a)
+      assert not gov.stopping_lead

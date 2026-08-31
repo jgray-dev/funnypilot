@@ -254,7 +254,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # a model plan weighted 50x higher. Speed-domain and monotone in distance,
     # so it can only ever slow the car; the MPC still owns the stop itself.
     v_cruise = self.stop_gov.update(bool(lead_one.status), lead_one.dRel,
-                                    lead_one.vLead, v_ego, v_cruise)
+                                    lead_one.vLead, v_ego, v_cruise,
+                                    lead_one.aLeadK)
     # v3.6.7 — the cruise target AS THE MPC RECEIVES IT, recorded for the dev
     # panel's source classifier. Taken here rather than earlier because every
     # governor above has already had its say; comparing the stop governor's cap

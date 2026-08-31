@@ -119,6 +119,156 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.8 Changes (based on funnypilot-3.6.7)
+
+Two halves: three more longitudinal fixes, and the web UI rewritten as a
+dashboard with drive playback.
+
+- **A HYPOTHESIS WAS MEASURED AND KILLED BEFORE ANY CODE WAS WRITTEN, AND THAT
+  IS THE MOST USEFUL LINE IN THIS SECTION.** "Late to act on the lead's
+  deceleration" looked like `radard`'s `aLeadTau`: it resets to 1.5 INSTANTLY
+  when `|aLeadK| < 0.5` while decaying toward belief over 0.45 s, so one noisy
+  frame appears to throw away everything learned about a braking lead, and the
+  MPC's `a_lead * exp(-tau*t^2/2)` then disbelieves the deceleration. Simulated
+  against the real extrapolation over 1-3 m/s^2 of lead braking with realistic
+  Kalman noise: at hard rates `a_meas` never crosses the gate so the reset NEVER
+  FIRES, and at gentle rates the whole effect is **0.65 m of projected lead
+  position** — noise against a 40 m gap. The lead extrapolation is fine. Nothing
+  was changed there.
+- `opendbc_repo/.../hyundai/longitudinal/controller.py` — **THE `starting` STATE
+  SHARED A FLAT 0.5 m/s^3 UPPER JERK WITH EVERY OTHER NON-PID STATE, WHICH IS A
+  FULL SECOND OF DEAD TIME ON EVERY LAUNCH.** Reported as "hesitant to go after
+  stopping behind a lead car at a traffic light".
+  THE ARITHMETIC: `stopping` FORCES `desired_accel` to 0.0, so the command rests
+  at ~0 when the car stops. `starting` ramps it back up under this cap and exits
+  only at `v_ego > CP.vEgoStarting` = 0.1 m/s — **so the whole ramp is paid
+  before the car moves at all.** At 0.5 m/s^3, reaching the +0.5 m/s^2 that
+  actually moves the car takes **1.00 s**; +1.0 takes 2.00 s. At
+  `STARTING_UPPER_JERK` 2.0 those become 0.25 s and 0.55 s.
+  **2.0 IS NOT A NEW NUMBER** — it is exactly what the `pid` branch already
+  allows at this speed, so the allowance no longer STEPS at a boundary the car
+  crosses a tenth of a second later.
+  **THE FORK HAD ALREADY ESTABLISHED THIS PRINCIPLE ONE LAYER UP AND THIS LAYER
+  WAS QUIETLY UNDOING IT**: `longcontrol.starting_accel_rate` (v3.5.4) splits
+  the starting slew precisely because "NEGATIVE output is releasing the brake
+  (must stay brisk, or the car sits at a green light)", and then a flat cap here
+  bound the result anyway. Same shape as v3.6.7 — planner tuned, actuator
+  binding. `stopping` and `off` KEEP 0.5: there the cap governs brake release
+  while coming to rest, where slow is the point.
+- `selfdrive/controls/lib/long_shaping.py` — **THE STOP GOVERNOR ACTS ON A LEAD
+  THAT IS BRAKING, NOT ONLY ON ONE THAT IS ALREADY CRAWLING.** `STOP_GOV_LEAD_V`
+  6.0 meant it could not touch a car braking for a red light until that car was
+  already down to 6 m/s, by which point the geometry is spent. Reported as "too
+  close to lead cars when approaching a stop, to the point I'm taking over
+  braking before the stack even begins acting on the lead's deceleration".
+  **WHAT MAKES ARMING EARLIER SAFE IS THE ENVELOPE, NOT A THRESHOLD**, and that
+  matters because v3.6.6 was right that a general follow governor competing with
+  the solver is the stacked-authority mistake v3.2.6e removed. Where a lead is
+  provably braking, the honest geometry is not its current speed but WHERE IT
+  WILL STOP: `d_eff = d_rel + v_lead^2/(2*decel)`, then `sqrt(2*a*(d_eff-GAP))`.
+  **THAT SELF-LIMITS STRUCTURALLY.** A lead easing off projects its stop far
+  away and the cap comes back above any legal speed — measured, a lead at 29 m/s
+  braking 0.8 m/s^2 with a 50 m gap projects a stop 576 m out and yields a 45 m/s
+  cap, i.e. no effect. It only descends to meet us when the stop is genuinely
+  close. `STOP_GOV_DECEL_MIN` 1.2 is "a brake application", above coasting
+  (0.3-0.5) and ordinary traffic modulation; `STOP_GOV_DECEL_N` 4 makes it a
+  DURATION rather than a magnitude.
+  **TWO DEFECTS IN MY OWN FIRST CUT, BOTH FOUND BY TESTS AND NEITHER BY REVIEW.**
+  (1) `reset()` cleared the braking counter, and the arming test reads that
+  counter — circular, so the governor could never arm. `reset()` drops the CAP
+  now; `_forget_lead()` drops what we believed about the lead, and only when the
+  track is gone. (2) The projected envelope is TIGHTER at range and **LOOSER up
+  close** (it credits us with room the lead only earns by continuing to move),
+  so `raw_cap` returns `min(here, there)` — believing a lead is stopping must
+  never be a reason to go faster at it, and that is now structural rather than a
+  happy consequence of the constants.
+  The fade is skipped for a committed stopper: it exists because a crawling lead
+  may accelerate away, which is not true of one under the brakes.
+- **THE WEB UI IS A DASHBOARD NOW**, `sunnypilot/navd/drive_index.py` (NEW) plus
+  eight endpoints and a rewritten `nav_web/index.html`. Overview, Drives with
+  full playback, Terminal (unchanged), Verify.
+  * **`qcamera.ts` IS ALREADY AN HLS MEDIA SEGMENT, AND THAT IS THE WHOLE
+    DESIGN.** loggerd writes one-minute H.264 MPEG-TS files at 526x330 and
+    256 kbit/s (~1.9 MB/min) — the container and the segmentation HLS specifies.
+    So `hls_playlist()` is a text generator, the CPU cost of streaming a drive
+    is ZERO, and the browser seeks with ordinary range requests. Transcoding
+    HEVC on this SoC while it drives was the obvious approach and the wrong one.
+  * **THE MEMORY RULES ARE THE FEATURE.** Nothing is read whole: the catalogue
+    is `os.scandir` + `stat` and never opens a log; the timeline extractor
+    streams capnp events one at a time out of a zstd stream reader holding a
+    single `_Bucket` (`__slots__`, no per-sample lists), so peak RSS is
+    independent of drive length. Every expensive answer is cached ONCE as
+    `fp_timeline.json` INSIDE its own segment — derived, disposable, and deleted
+    with the segment, so there is no second index to keep in sync. Files go out
+    via `web.FileResponse` (sendfile); downloads stream an UNCOMPRESSED tar in
+    256 kB chunks, because the payload is already-compressed video and zstd.
+  * **DRIVING IS THE PRIORITY AND THIS PROCESS IS `always_run`.** Three guards:
+    `_never_5xx` turns any unhandled exception into JSON (a raise escaping a
+    handler is survivable; one escaping a task is not, so `_bg` wraps those);
+    `_EXECUTOR` is a **one-worker** pool at `nice(10)`, because the default
+    executor is sized to CPU count and one browser tab could put every core on
+    log decompression while the car decides when to brake; and `_onroad()` drops
+    the timeline PARSE BUDGET TO ZERO and refuses downloads outright while
+    moving. Cheap paths — listing, playback of indexed drives — stay open,
+    because a directory scan and a sendfile have no beneficiary from caution.
+    `_onroad()` fails toward NOT driving on purpose: reading it wrong the
+    cautious way locks the owner out of their driveway with no diagnosis, and
+    the car's real protection is the single niced worker.
+  * **`PURGE_DRIVE_DATA_ON_FLASH` -> False.** v3.5.8 set it True with an
+    explicit instruction: "FLIP THIS TO False once the dashcam viewer exists".
+    This is that moment — a flash that emptied realdata would now silently
+    delete the thing the feature exists to show, in the tail of a command whose
+    visible job is changing branches. Storage stays bounded by `deleter.py`'s
+    5 GB / 10% floor and by a per-drive delete with the sizes next to it.
+  * **A HOLE IN MY OWN PATH VALIDATOR, FOUND BY A TEST.** `_safe_segment_dir`
+    had the two obvious checks — pattern match, and resolved path contained in
+    the resolved root. A symlink at `realdata/evil--0` pointing at a SIBLING of
+    realdata passes both cleanly, because the resolved target's parent IS the
+    resolved root. That is a root-privileged `rmtree` aimed anywhere. The third
+    check (`os.path.islink`) is what closes it; loggerd writes real directories,
+    so a link here is never legitimate.
+  * **DESIGN**: pastel accents on a blue-biased deep neutral, keeping the onroad
+    HUD's SEMANTICS while dropping its saturation — the HUD's tokens are loud
+    because they fight a sunlit windscreen, and a phone in a dark car does not.
+    Mint engaged, sky lateral, apricot longitudinal, rose stop, and **a fifth
+    hue (lilac) reserved for bookmarks and nothing else**, because a tick has to
+    be findable on top of any of the four authority colours. Contrast computed
+    rather than eyeballed: lowest 9.8:1. NO WEBFONTS — the car serves this over
+    LAN and a font CDN that silently falls back is worse than a chosen system
+    stack. The authority ribbon is ONE CANVAS: an hour of drive is 3600 buckets
+    and that many DOM nodes is a layout pass the phone cannot afford.
+    The flash picker shows the **10 most recent branches with "show all"** —
+    the full list had grown past a screenful.
+  * A bucket's authority is its MOST MANUAL sample, not its mean. A second
+    holding one disengaged frame is a second the driver took over, and a
+    majority vote would paint it engaged — hiding exactly the moment somebody is
+    scrubbing to find.
+  * Bookmarks needed NO new plumbing: `bookmarkButton` already exists in
+    `log.capnp` and is in the qlog at decimation 1.
+- TESTS: **1136 green**, ruff clean. NEW `navd/tests/test_drive_index.py` (47),
+  `TestALeadCommittedToStopping` (12), `TestTheLaunchFromAStop` (6). THIRTEEN
+  guards mutation-tested, all caught.
+  **THREE PROCESS NOTES, ALL THE SAME FAMILY.** (1) A guard asserted `"glob" not
+  in ast.unparse(fn)` and failed on the word "glob" inside the function's own
+  docstring explaining why globbing is forbidden — the mirror of v3.5.8's
+  comment-satisfiable guard; it scans CALLS now. (2) Two handler guards matched
+  only `ast.FunctionDef` while every handler is `async def`, so they found
+  nothing; the paired anti-vacuous test is the only reason that surfaced.
+  (3) A smoke test pointed `REALDATA_ROOT` at a fixture tree and got an empty
+  catalogue: the constant was a DEFAULT ARGUMENT, bound when the `def` ran, so
+  it could never be redirected. Every entry point takes `root=None` and resolves
+  at call time now.
+- `FUNNYPILOT_VERSION` -> 3.6.8, `EXPECTED_VERSION` -> "3.6.8", branch
+  `funnypilot-3.6.8`. Four new `_CODE_MARKERS`; all 135 resolve.
+- ON-ROAD VERIFICATION: (1) **launch is the crisp one** — moving off behind a
+  lead at a light should start within a car length instead of after a beat. If
+  it is now too eager, `STARTING_UPPER_JERK` is the knob, not the planner.
+  (2) approaching a stopped queue, watch **STOP** on the dev panel: it should
+  come on while the lead is still moving at 15-20 m/s, which is the whole point
+  of this release. (3) if it engages behind a lead merely lifting off on the
+  highway, `STOP_GOV_DECEL_MIN` is the first knob — NOT the envelope, which is
+  what keeps it out of ordinary following.
+
 ### v3.6.7 Changes (based on funnypilot-3.6.6)
 
 Four owner reports. THREE OF THEM ARE ONE LAG, and it is not in any file this

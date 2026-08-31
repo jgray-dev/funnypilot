@@ -14,8 +14,24 @@ import re
 import termios
 import time
 import struct
+import concurrent.futures
+import functools
+import tarfile
+
 import aiohttp
 from aiohttp import web
+
+from openpilot.sunnypilot.navd import drive_index
+
+# Lazily degraded rather than imported hard: swaglog pulls in zmq, and this
+# module must stay importable (and this process must stay startable) even if
+# the logging stack is unhappy. A dashboard that cannot log is still a
+# dashboard; one that cannot start is a restart loop on a moving car.
+try:
+  from openpilot.common.swaglog import cloudlog
+except Exception:                                        # pragma: no cover
+  import logging
+  cloudlog = logging.getLogger("nav_webserver")
 
 REPO = "jgray-dev/funnypilot"
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
@@ -48,7 +64,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.7"
+EXPECTED_VERSION = "3.6.8"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -63,11 +79,23 @@ EXPECTED_VERSION = "3.6.7"
 # stable cuts and are kept; everything else goes, along with the disk it holds.
 KEEP_BRANCH_SUFFIX = "st"
 
-# DRIVE DATA. realdata is 60-70 GB of route segments with no consumer -- there
-# is no uploader configured and no viewer. FLIP THIS TO False once the
-# Cloudflare-backed dashcam viewer exists; at that point the data has a reader
-# and deleting it on every flash becomes destructive rather than tidy.
-PURGE_DRIVE_DATA_ON_FLASH = True
+# DRIVE DATA. v3.5.8 set this True because realdata was 60-70 GB of route
+# segments with NO CONSUMER -- no uploader, no viewer -- and left an explicit
+# instruction: "FLIP THIS TO False once the dashcam viewer exists; at that point
+# the data has a reader and deleting it on every flash becomes destructive
+# rather than tidy."
+#
+# v3.6.8 IS THAT MOMENT. The Drives section of this dashboard plays, charts and
+# downloads exactly these segments, so a flash that emptied realdata would now
+# delete the thing the feature exists to show -- and it would do it silently,
+# in the tail of a command whose visible job is to change branches.
+#
+# STORAGE IS STILL BOUNDED, JUST NOT BY THIS. `deleter.py` holds free space at
+# its 5 GB / 10% floor by evicting the oldest segments, and the dashboard has a
+# per-drive delete with the sizes shown next to it -- so the disk is managed by
+# something the owner can see and steer, rather than by a side effect of
+# flashing.
+PURGE_DRIVE_DATA_ON_FLASH = False
 _DRIVE_DATA_DIR = "/data/media/0/realdata"
 
 # FunnyPilot v3.3.3: the Verify list is CONSOLIDATED — one row per question
@@ -178,7 +206,12 @@ _CODE_MARKERS = [
   # v3.5.7
   ("power watchdog not kicked", "/data/openpilot/system/manager/manager.py", "AGNOS watchdog failure is logged"),
   # v3.5.8
-  ("PURGE_DRIVE_DATA_ON_FLASH", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash purges drive data"),
+  ("PURGE_DRIVE_DATA_ON_FLASH", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash drive-data policy"),
+  # v3.6.8
+  ("def _safe_segment_dir", "/data/openpilot/sunnypilot/navd/drive_index.py", "drive path validator"),
+  ("def hls_playlist", "/data/openpilot/sunnypilot/navd/drive_index.py", "playback without transcoding"),
+  ("STOP_GOV_DECEL_MIN", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop governor acts on a braking lead"),
+  ("STARTING_UPPER_JERK", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/controller.py", "launch jerk allowance"),
   ("KEEP_BRANCH_SUFFIX", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash prunes non-stable branches"),
   # v3.5.9
   ("MODEL_HORIZON_T", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "SCC-M vision-disagreement veto"),
@@ -740,8 +773,331 @@ async def handle_index(request: web.Request) -> web.Response:
   return web.Response(text="FunnyPilot Terminal Server", content_type="text/html")
 
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# FunnyPilot v3.6.8 — DRIVING IS THE PRIORITY, AND THIS PROCESS RUNS WHILE IT
+# HAPPENS.
+#
+# `terminal_server` is registered `always_run`, so everything below is live on
+# a moving car. That makes the dashboard's failure modes a vehicle concern
+# rather than a web concern, and there are exactly three that matter:
+#
+#   * IT MUST NOT TAKE ANYTHING DOWN WITH IT. Every handler runs behind
+#     `_never_5xx`, which turns any unhandled exception into a JSON error. A
+#     raise that escapes an aiohttp handler is survivable; one that escapes a
+#     background task is not, so `_bg` wraps those too.
+#   * IT MUST NOT TAKE MORE THAN ONE CORE. All blocking work goes through
+#     `_EXECUTOR`, which is a ONE-WORKER pool at the lowest priority the
+#     scheduler will give it. The default executor is sized to CPU count, which
+#     on this SoC means a single browser tab could put every core on log
+#     parsing while the car is deciding when to brake.
+#   * IT MUST NOT DO EXPENSIVE WORK WHILE DRIVING AT ALL. `_onroad()` reads the
+#     same `IsOnroad` param manager sets, and the two genuinely expensive
+#     endpoints — the first-time timeline parse and a multi-gigabyte download —
+#     refuse with a 503 and an explanation rather than competing. Serving an
+#     already-indexed drive stays allowed, because that is a sendfile and a
+#     cached JSON read.
+#
+# THE REFUSAL IS THE FEATURE. A dashboard that quietly degrades the car to stay
+# responsive has the priority backwards.
+# ════════════════════════════════════════════════════════════════════════════
+
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+  max_workers=1, thread_name_prefix="fp-web",
+  initializer=lambda: os.nice(10) if hasattr(os, "nice") else None)
+
+
+async def _run(fn, *args):
+  """Blocking work, off the event loop and onto the one niced worker."""
+  return await asyncio.get_running_loop().run_in_executor(
+    _EXECUTOR, functools.partial(fn, *args))
+
+
+def _onroad() -> bool:
+  """Is the car driving? False on any doubt.
+
+  FAILING TOWARD 'NOT DRIVING' IS THE RIGHT DIRECTION HERE and it is worth
+  saying why, because the instinct is the opposite. This flag gates whether the
+  dashboard may do expensive work; reading it wrong in the cautious direction
+  means the owner cannot download a drive from their driveway because Params is
+  unreadable, which is a bug they cannot diagnose. Reading it wrong the other
+  way costs one CPU-second on a niced thread. The car's own protection is the
+  single worker and the nice level, not this.
+  """
+  try:
+    from openpilot.common.params import Params
+    return bool(Params().get_bool("IsOnroad"))
+  except Exception:
+    return False
+
+
+_BUSY_MSG = "The car is driving. This waits until you are parked — driving comes first."
+
+
+@web.middleware
+async def _never_5xx(request: web.Request, handler):
+  """Nothing this server does may become an unhandled exception.
+
+  aiohttp would return a 500 and log a traceback, which is fine on a laptop.
+  Here the cost of a surprise is a process manager restarts in a loop while the
+  car is moving, so every failure is turned into an answer.
+  """
+  try:
+    return await handler(request)
+  except web.HTTPException:
+    raise
+  except asyncio.CancelledError:
+    raise
+  except Exception as e:
+    cloudlog.exception("nav_webserver handler failed: %s", request.rel_url)
+    return web.json_response({"error": type(e).__name__, "detail": str(e)[:400]}, status=500)
+
+
+def _bg(coro):
+  """Fire-and-forget, with the exception actually going somewhere.
+
+  A bare `create_task` whose coroutine raises produces a warning nobody sees on
+  a device with no console. This logs it instead.
+  """
+  async def wrapper():
+    try:
+      await coro
+    except Exception:
+      cloudlog.exception("nav_webserver background task failed")
+  return asyncio.ensure_future(wrapper())
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# FunnyPilot v3.6.8 — DRIVES: catalogue, playback, download, delete.
+#
+# THE MEMORY RULES ARE IN drive_index.py AND THESE HANDLERS EXIST TO NOT BREAK
+# THEM. Three things matter here and each one is a way this could have gone
+# wrong on a device that is driving a car:
+#
+#   * VIDEO AND LOG FILES GO OUT VIA `web.FileResponse`. aiohttp hands those to
+#     the kernel (sendfile), so a 2 GB drive download never becomes 2 GB of
+#     Python heap. Reading a file to build a Response is the obvious way to
+#     write this and it is the one that OOMs.
+#   * THE TIMELINE PARSE IS BOUNDED PER REQUEST (`TIMELINE_SEGMENTS_PER_CALL`)
+#     and runs in a THREAD, so the event loop keeps serving while a first visit
+#     to a long drive works through its segments. The response names what is
+#     still pending and the page asks again.
+#   * NOTHING IS PRECOMPUTED IN THE BACKGROUND. A drive is parsed the first
+#     time somebody looks at it and never again. Warming the whole disk on boot
+#     would be the same mistake v3.6.1 found in the autoupdater: work nobody
+#     asked for, competing with the car.
+# ════════════════════════════════════════════════════════════════════════════
+
+TIMELINE_SEGMENTS_PER_CALL = 4
+_DOWNLOAD_CHUNK = 256 * 1024
+
+
+def _route_arg(request: web.Request) -> str:
+  """The route name from the path, whitelisted here as well as in drive_index.
+
+  Two layers on purpose: this one keeps a malformed name from reaching any
+  filesystem call at all, and `_safe_segment_dir` is what actually decides
+  whether a resolved path is inside the root. Neither is redundant — the first
+  is a cheap reject, the second is the one that survives a symlink.
+  """
+  route = request.match_info.get("route", "")
+  if not route or not re.match(r"^[A-Za-z0-9|_-]{1,128}$", route):
+    raise web.HTTPBadRequest(text="bad route name")
+  return route
+
+
+async def handle_drives(request: web.Request) -> web.Response:
+  """The catalogue. A directory scan, off the event loop."""
+  routes = await _run(drive_index.scan_routes)
+  stats = await _run(drive_index.storage_stats)
+  return web.json_response({"drives": routes, "storage": stats})
+
+
+async def handle_storage(request: web.Request) -> web.Response:
+  stats = await _run(drive_index.storage_stats)
+  return web.json_response(stats)
+
+
+async def handle_drive_detail(request: web.Request) -> web.Response:
+  route = _route_arg(request)
+  segs = drive_index.route_segments(route)
+  if not segs:
+    raise web.HTTPNotFound(text="no such drive")
+  cams: dict[str, dict] = {}
+  for s in segs:
+    d = drive_index.segment_path(route, s)
+    if d is None:
+      continue
+    for fname, (key, label, playable) in drive_index.VIDEO_FILES.items():
+      if os.path.exists(os.path.join(d, fname)):
+        cams.setdefault(key, {"key": key, "label": label, "file": fname,
+                              "playable": playable, "segments": []})["segments"].append(s)
+  return web.json_response({
+    "route": route, "segments": segs,
+    "cameras": sorted(cams.values(), key=lambda c: not c["playable"]),
+    "started_at": drive_index.route_started_at(route),
+  })
+
+
+async def handle_drive_timeline(request: web.Request) -> web.Response:
+  route = _route_arg(request)
+  # Already-indexed segments are a cached JSON read and always allowed; the
+  # PARSE budget drops to zero while driving, so an unindexed drive comes back
+  # with everything pending instead of putting the CPU on log decompression.
+  limit = 0 if _onroad() else TIMELINE_SEGMENTS_PER_CALL
+  data = await _run(functools.partial(drive_index.route_timeline, route, limit=limit))
+  if not data["segments"]:
+    raise web.HTTPNotFound(text="no such drive")
+  return web.json_response(data)
+
+
+async def handle_drive_playlist(request: web.Request) -> web.Response:
+  """An HLS playlist over the segments that actually have a qcamera.ts.
+
+  A segment whose video is missing is SKIPPED rather than represented by a gap,
+  because a playlist entry pointing at a 404 stalls the player rather than
+  advancing past it. The timeline is the thing that keeps honest time.
+  """
+  route = _route_arg(request)
+  segs = [s for s in drive_index.route_segments(route)
+          if (d := drive_index.segment_path(route, s))
+          and os.path.exists(os.path.join(d, "qcamera.ts"))]
+  if not segs:
+    raise web.HTTPNotFound(text="no playable video for this drive")
+  body = drive_index.hls_playlist(route, segs)
+  return web.Response(text=body, content_type="application/vnd.apple.mpegurl",
+                      headers={"Cache-Control": "no-cache"})
+
+
+async def handle_drive_file(request: web.Request) -> web.FileResponse:
+  """One file out of one segment. `FileResponse` = sendfile + range support.
+
+  The allow-list is the video and log names loggerd writes and nothing else, so
+  this cannot be turned into a general file server for /data by asking for a
+  different name.
+  """
+  route = _route_arg(request)
+  try:
+    seg = int(request.match_info["seg"])
+  except (KeyError, ValueError):
+    raise web.HTTPBadRequest(text="bad segment") from None
+  name = request.match_info.get("name", "")
+  if name not in drive_index.VIDEO_FILES and name not in drive_index.LOG_FILES:
+    raise web.HTTPForbidden(text="not a servable file")
+  d = drive_index.segment_path(route, seg)
+  if d is None:
+    raise web.HTTPBadRequest(text="bad segment")
+  path = os.path.join(d, name)
+  if not os.path.isfile(path):
+    raise web.HTTPNotFound(text="no such file")
+  ct = "video/mp2t" if name.endswith(".ts") else "application/octet-stream"
+  return web.FileResponse(path, headers={"Content-Type": ct})
+
+
+async def handle_drive_download(request: web.Request) -> web.StreamResponse:
+  """A drive as one streamed tar. `what` = video | data | all.
+
+  STREAMED WITH A FIXED BUFFER AND NO COMPRESSION, and both of those are the
+  point. The payload is already-compressed video and zstd logs, so gzip would
+  spend the CPU of a whole drive to save nothing; and tar is written header-by-
+  header straight to the socket, so peak memory is one 256 kB chunk however
+  many gigabytes go out.
+  """
+  route = _route_arg(request)
+  if _onroad():
+    raise web.HTTPServiceUnavailable(text=_BUSY_MSG)
+  what = request.query.get("what", "all")
+  if what not in ("video", "data", "all"):
+    raise web.HTTPBadRequest(text="what must be video, data or all")
+  segs = drive_index.route_segments(route)
+  if not segs:
+    raise web.HTTPNotFound(text="no such drive")
+
+  wanted: list[str] = []
+  if what in ("video", "all"):
+    wanted += list(drive_index.VIDEO_FILES)
+  if what in ("data", "all"):
+    wanted += list(drive_index.LOG_FILES)
+
+  resp = web.StreamResponse(headers={
+    "Content-Type": "application/x-tar",
+    "Content-Disposition": f'attachment; filename="{route.replace("|", "_")}-{what}.tar"',
+  })
+  await resp.prepare(request)
+
+  def _hdr(name: str, size: int) -> bytes:
+    info = tarfile.TarInfo(name)
+    info.size = size
+    info.mtime = int(time.time())  # noqa: TID251 - tar headers are wall clock
+    return info.tobuf()
+
+  for s in segs:
+    d = drive_index.segment_path(route, s)
+    if d is None:
+      continue
+    for fname in wanted:
+      path = os.path.join(d, fname)
+      if not os.path.isfile(path):
+        continue
+      size = os.path.getsize(path)
+      await resp.write(_hdr(f"{route}--{s}/{fname}", size))
+      with open(path, "rb") as fh:
+        while chunk := fh.read(_DOWNLOAD_CHUNK):
+          await resp.write(chunk)
+      pad = (-size) % 512
+      if pad:
+        await resp.write(b"\0" * pad)
+  await resp.write(b"\0" * 1024)   # tar end-of-archive
+  await resp.write_eof()
+  return resp
+
+
+async def handle_drive_delete(request: web.Request) -> web.Response:
+  route = _route_arg(request)
+  removed, freed = await _run(drive_index.delete_route, route)
+  if not removed:
+    raise web.HTTPNotFound(text="no such drive")
+  return web.json_response({"ok": True, "segments": removed, "bytes": freed})
+
+
+# ── device actions ──────────────────────────────────────────────────────────
+#
+# ONE PLACE, ONE ALLOW-LIST, AND NO INTERPOLATION ANYWHERE. Every entry is a
+# fixed string; nothing from the request is ever part of a command. That is the
+# lesson of the v3.5.8 finding, where `branch` reached a root shell because it
+# was only checked with `startswith`.
+_DEVICE_ACTIONS = {
+  "reboot": ("Rebooting", "sudo reboot"),
+  "restart": ("Restarting openpilot", "sudo systemctl restart comma"),
+  "maps": ("Queued a map refresh", None),
+}
+
+
+async def handle_device_action(request: web.Request) -> web.Response:
+  action = request.match_info.get("action", "")
+  if action not in _DEVICE_ACTIONS:
+    raise web.HTTPBadRequest(text="unknown action")
+  label, cmd = _DEVICE_ACTIONS[action]
+
+  if action == "maps":
+    # Through Params, exactly as the settings screen does it, rather than by
+    # shelling out to mapd. v3.6.1's post-mortem is the reason this is a single
+    # explicit request: `OsmDbUpdatesCheck` DELETES the existing database
+    # before downloading a replacement, so it must be a thing the owner asks
+    # for once and not something a page poll can trigger repeatedly.
+    try:
+      from openpilot.common.params import Params
+      Params().put_bool("OsmDbUpdatesCheck", True)
+    except Exception as e:
+      raise web.HTTPInternalServerError(text=f"could not queue map update: {e}") from None
+    return web.json_response({"ok": True, "message": label})
+
+  _bg(_sh(cmd, timeout=30))
+  return web.json_response({"ok": True, "message": label})
+
+
 def main():
-  app = web.Application()
+  app = web.Application(middlewares=[_never_5xx])
   app.router.add_get("/", handle_index)
   app.router.add_get("/ws", handle_ws)
   app.router.add_get("/api/version", handle_version)
@@ -751,12 +1107,31 @@ def main():
   app.router.add_get("/api/logs", handle_logs_list)
   app.router.add_get("/api/logs/{name}", handle_logs_get)
   app.router.add_post("/api/logs/mark", handle_logs_mark)
+  # v3.6.8 — drives + device actions
+  app.router.add_get("/api/storage", handle_storage)
+  app.router.add_get("/api/drives", handle_drives)
+  app.router.add_get("/api/drives/{route}", handle_drive_detail)
+  app.router.add_delete("/api/drives/{route}", handle_drive_delete)
+  app.router.add_get("/api/drives/{route}/timeline", handle_drive_timeline)
+  app.router.add_get("/api/drives/{route}/hls.m3u8", handle_drive_playlist)
+  app.router.add_get("/api/drives/{route}/download", handle_drive_download)
+  app.router.add_get("/api/drives/{route}/seg/{seg}/{name}", handle_drive_file)
+  app.router.add_post("/api/device/{action}", handle_device_action)
   app.on_startup.append(_start_triage_background)
 
   if os.path.isdir(_STATIC_DIR):
     app.router.add_static("/static", _STATIC_DIR)
 
-  web.run_app(app, host="0.0.0.0", port=_PORT, reuse_address=True)
+  # ANY failure here exits the process rather than leaving a half-started
+  # server holding a port. `terminal_server` is `always_run`, so manager brings
+  # it back — a clean exit and a restart is a recoverable state, and a wedged
+  # process holding the CPU next to a moving car is not.
+  try:
+    web.run_app(app, host="0.0.0.0", port=_PORT, reuse_address=True,
+                handle_signals=True, print=None)
+  except Exception:
+    cloudlog.exception("nav_webserver exiting")
+    raise
 
 
 if __name__ == "__main__":

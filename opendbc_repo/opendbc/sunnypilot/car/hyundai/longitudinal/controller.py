@@ -18,6 +18,12 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 
 MIN_JERK = 0.5
 
+# v3.6.8 — the upper jerk allowance in the `starting` state. See
+# `_calculate_speed_based_jerk_limits` for the derivation; this is the same
+# number the `pid` branch allows at launch speed, so nothing steps at the
+# boundary between them.
+STARTING_UPPER_JERK = 2.0
+
 # ── FunnyPilot v3.6.7: the feed-forward the "predictive" scheme was missing ──
 #
 # WHAT PREDICTIVE ACTUALLY WAS. `_calculate_lookahead_jerk` sizes the jerk
@@ -139,11 +145,40 @@ class LongitudinalController:
         Tuple of (upper_limit, lower_limit) in m/s³
     """
 
-    # Upper jerk limit varies based on speed and control state
+    # Upper jerk limit varies based on speed and control state.
+    #
+    # FunnyPilot v3.6.8 — THE STARTING STATE GETS A REAL ALLOWANCE, AND THE
+    # FLAT 0.5 IT USED TO SHARE WITH EVERY OTHER NON-PID STATE WAS A FULL
+    # SECOND OF DEAD TIME ON EVERY LAUNCH. Reported as "hesitant to go after
+    # stopping behind a lead car at a traffic light".
+    #
+    # THE ARITHMETIC: `stopping` forces `desired_accel` to 0.0, so the command
+    # sits at ~0 when the car comes to rest. `starting` then ramps it up under
+    # this cap, and only exits at `v_ego > CP.vEgoStarting` = 0.1 m/s — so the
+    # ramp has to finish BEFORE the car moves at all. At 0.5 m/s^3, reaching
+    # the +0.5 m/s^2 that actually moves the car takes 1.00 s; reaching
+    # +1.0 takes 2.00 s. At 2.0 m/s^3 those become 0.25 s and 0.55 s.
+    #
+    # 2.0 IS NOT A NEW NUMBER: it is exactly what the `pid` branch below
+    # already allows at this speed, so the allowance no longer STEPS at the
+    # state boundary the car crosses a tenth of a second later.
+    #
+    # THE FORK ALREADY ESTABLISHED THIS PRINCIPLE ONE LAYER UP AND THIS LAYER
+    # WAS QUIETLY UNDOING IT. `longcontrol.starting_accel_rate` (v3.5.4) splits
+    # the starting slew precisely because "NEGATIVE output is releasing the
+    # brake (must stay brisk, or the car sits at a green light)" — and then a
+    # flat cap here bound the result anyway. Same shape as v3.6.7: the planner
+    # layer was tuned and the actuator layer was what actually limited it.
+    #
+    # `stopping` and `off` KEEP 0.5. In `stopping` this cap governs the ramp
+    # toward the forced 0.0, i.e. brake release while coming to rest, and that
+    # is a place where slow is the point.
     if long_control_state == LongCtrlState.pid:
       upper_limit = float(np.interp(velocity, [0.0, 5.0, 20.0], [2.0, 3.0, 2.0]))
+    elif long_control_state == LongCtrlState.starting:
+      upper_limit = STARTING_UPPER_JERK
     else:
-      upper_limit = 0.5  # Default for non-PID states
+      upper_limit = 0.5  # Default for the remaining non-PID states
 
     # Lower jerk limit varies based on speed
     lower_limit = float(np.interp(velocity, [0.0, 5.0, 20.0], [5.0, 3.5, 3.0]))

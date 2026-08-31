@@ -17,6 +17,7 @@ Import-light: stdlib plus the two modules under test.
 import os
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../../.."))
@@ -233,3 +234,65 @@ class TestTheFeedForwardMakesItPredictive:
     """FF_ALPHA is on a difference of a 20 Hz signal that is published to the
     car; unfiltered it would chatter the SCC12/SCC14 jerk field."""
     assert 0.0 < C.FF_ALPHA < 1.0
+
+
+class TestTheLaunchFromAStop:
+  """FunnyPilot v3.6.8 — the `starting` state's upper jerk allowance.
+
+  `stopping` forces the command to 0.0, so the car comes to rest with the
+  command there. `starting` then ramps it up under `_calculate_speed_based_
+  jerk_limits`, and exits only at `v_ego > CP.vEgoStarting` = 0.1 m/s — so the
+  whole ramp is paid BEFORE the car moves. At the old flat 0.5 m/s^3 that is a
+  full second of dead time on every launch, which is the reported "hesitant to
+  go after stopping behind a lead car at a traffic light".
+  """
+
+  def _upper(self, state, v=0.0):
+    return C.LongitudinalController._calculate_speed_based_jerk_limits(v, state)[0]
+
+  def test_the_starting_state_is_no_longer_the_flat_non_pid_default(self):
+    assert self._upper(LongCtrlState.starting) == C.STARTING_UPPER_JERK
+    assert C.STARTING_UPPER_JERK > 0.5
+
+  def test_nothing_steps_at_the_boundary_the_car_crosses_a_moment_later(self):
+    # `starting` ends at 0.1 m/s and `pid` takes over. If the two disagreed,
+    # the allowance would jump at exactly the moment the car begins to move.
+    assert self._upper(LongCtrlState.starting, 0.1) == pytest.approx(
+      self._upper(LongCtrlState.pid, 0.1), abs=0.05)
+
+  def test_stopping_keeps_the_slow_allowance(self):
+    # Here the cap governs brake release while coming to rest, which is a place
+    # where slow IS the point. Raising it would have been a silent second
+    # change riding along with the launch fix.
+    assert self._upper(LongCtrlState.stopping) == 0.5
+    assert self._upper(LongCtrlState.off) == 0.5
+
+  def test_the_dead_time_before_the_car_moves(self):
+    # MEASURED, both ways, so the claim in the comment is checked rather than
+    # asserted: how long to ramp the command to the +0.5 m/s^2 that actually
+    # moves the car.
+    def ramp_time(cap, target=0.5):
+      a, t = 0.0, 0.0
+      while a < target:
+        a += cap * STEP
+        t += STEP
+      return t
+    assert ramp_time(0.5) == pytest.approx(1.00, abs=0.03)
+    assert ramp_time(self._upper(LongCtrlState.starting)) < 0.30
+
+  def test_the_brake_allowance_is_untouched_in_every_state(self):
+    # This release moves the UPPER limit only. A launch fix that also loosened
+    # braking would be two changes wearing one name.
+    for st in (LongCtrlState.off, LongCtrlState.pid, LongCtrlState.starting,
+               LongCtrlState.stopping):
+      for v in (0.0, 5.0, 20.0, 30.0):
+        lower = C.LongitudinalController._calculate_speed_based_jerk_limits(v, st)[1]
+        assert lower == pytest.approx(float(np.interp(v, [0.0, 5.0, 20.0], [5.0, 3.5, 3.0])))
+
+  def test_a_launch_actually_gets_moving_through_the_real_controller(self):
+    # End to end: the planner asks for +1.0 and the controller must deliver
+    # something that moves the car inside half a second.
+    rig = _Rig(v_ego=0.0)
+    rig.c.long_control_state_last = LongCtrlState.starting
+    out = [rig.step(1.0, state=LongCtrlState.starting) for _ in range(10)]
+    assert out[-1] > 0.5, "half a second in and the command still cannot move the car"
