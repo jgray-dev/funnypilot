@@ -258,8 +258,33 @@ dashboard with drive playback.
   catalogue: the constant was a DEFAULT ARGUMENT, bound when the `def` ran, so
   it could never be redirected. Every entry point takes `root=None` and resolves
   at call time now.
+- **SECOND PASS, SAME BRANCH — WHY THE DRIVES TAB WAS EMPTY.** Reported after
+  the first flash. THE RECORDING PIPELINE WAS NEVER TOUCHED and that was checked
+  rather than assumed: `git log -- system/loggerd` has exactly ONE commit in
+  this repo's history, v3.2.9e, and it is 3597 insertions with ZERO deletions —
+  the vendored import. `cereal/services.py` and `hw.py` likewise. The log root
+  is `/data/media/0/realdata` and the catalogue parses every real name format,
+  dongle-prefixed or not.
+  **IT WAS `PURGE_DRIVE_DATA_ON_FLASH`, AND THE FIX COULD NOT FIX THE FLASH THAT
+  DELIVERED IT.** `/api/flash` runs on the code that is RUNNING at the time, so
+  flashing 3.6.8 executed **3.6.7's** handler — with the flag still True — and
+  its tail ran `find /data/media/0/realdata -mindepth 1 -maxdepth 1 -exec rm -rf
+  {} +`. Every flash from v3.5.8 to v3.6.7 did the same, so there has never been
+  drive data older than the last flash. From 3.6.8 onward there is.
+  **AND THE REAL DEFECT IS THAT THIS NEEDED DIAGNOSING AT ALL.** `scan_routes`
+  swallows OSError and returns `[]`, so a missing directory, an unreadable one,
+  an empty one and one full of unparseable names all render the same shrug —
+  the shape v3.6.5 named when the LANE signal's failure mode turned out to be
+  its own healthy reading. NEW `realdata_status()` says which, `/api/drives`
+  carries it only when the list is empty (it is worthless otherwise), and the
+  empty state names the cause and the next step. Six cases pinned.
 - `FUNNYPILOT_VERSION` -> 3.6.8, `EXPECTED_VERSION` -> "3.6.8", branch
   `funnypilot-3.6.8`. Four new `_CODE_MARKERS`; all 135 resolve.
+  THE VERSION IS DELIBERATELY NOT BUMPED for the second pass, per the v3.6.2 and
+  v3.6.5 precedent — `_eval_diag` matches `EXPECTED_VERSION` against the BRANCH
+  NAME, so the two move together. THE COST, STATED: a 3.6.8 device's version
+  readout cannot distinguish this code from what was flashed before it. Check
+  the git hash when triaging.
 - ON-ROAD VERIFICATION: (1) **launch is the crisp one** — moving off behind a
   lead at a light should start within a car length instead of after a beat. If
   it is now too eager, `STARTING_UPPER_JERK` is the knob, not the planner.

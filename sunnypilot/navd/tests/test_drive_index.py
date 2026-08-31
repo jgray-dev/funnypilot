@@ -388,3 +388,59 @@ class TestDrivingIsThePriority:
     nw = self._server()
     for _label, cmd in nw._DEVICE_ACTIONS.values():
       assert cmd is None or ("{" not in cmd and "%" not in cmd and "$" not in cmd)
+
+
+class TestAnEmptyCatalogueExplainsItself:
+  """v3.6.8, second pass — `scan_routes` returns [] for FOUR different causes.
+
+  A missing directory, an unreadable one, an empty one, and one full of files
+  that do not parse all render the same shrug. That is the shape v3.6.5 named
+  when the LANE signal's failure mode turned out to be its own healthy reading,
+  and it cost a round trip the first time the Drives tab came up empty. These
+  pin that the four are distinguishable.
+  """
+
+  def test_a_missing_directory_says_so(self, tmp_path):
+    st = di.realdata_status(str(tmp_path / "nope"))
+    assert st["exists"] is False and st["error"]
+
+  def test_an_empty_directory_is_not_an_error(self, root):
+    # "You have no recordings" is a true and unalarming answer, and must not
+    # be dressed up as a fault.
+    st = di.realdata_status(root)
+    assert st["exists"] and st["readable"]
+    assert st["entries"] == 0 and st["segments"] == 0
+    assert st["error"] is None
+
+  def test_a_populated_directory_counts_its_segments(self, root):
+    for n in range(3):
+      _seg(root, ROUTE, n)
+    os.makedirs(os.path.join(root, "boot"))
+    st = di.realdata_status(root)
+    assert st["entries"] == 4 and st["segments"] == 3 and st["error"] is None
+
+  def test_files_that_do_not_parse_are_called_out(self, root):
+    # The case that would otherwise read as "no recordings" while the disk is
+    # full of them — a naming format that stopped matching.
+    for n in ("weird_thing", "another"):
+      os.makedirs(os.path.join(root, n))
+    st = di.realdata_status(root)
+    assert st["entries"] == 2 and st["segments"] == 0
+    assert "none are named like segments" in st["error"]
+    assert st["sample"], "a sample is what makes a format change diagnosable"
+
+  def test_an_unreadable_directory_is_distinguished_from_an_empty_one(self, root):
+    if os.geteuid() == 0:
+      pytest.skip("root can read anything; this case needs an unprivileged uid")
+    os.chmod(root, 0o000)
+    try:
+      st = di.realdata_status(root)
+      assert st["exists"] and not st["readable"] and "cannot read" in st["error"]
+    finally:
+      os.chmod(root, 0o755)
+
+  def test_the_sample_is_bounded(self, root):
+    # It goes over the wire on every page load of an empty list.
+    for n in range(50):
+      os.makedirs(os.path.join(root, f"junk{n}"))
+    assert len(di.realdata_status(root)["sample"]) <= 5

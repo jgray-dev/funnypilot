@@ -399,13 +399,14 @@ async function loadOverview(){
 }
 
 /* ── drives ───────────────────────────────────────────────────────────── */
-let DRIVES = [];
+let DRIVES = [], EMPTY_WHY = null;
 async function loadDrives(force){
   if(DRIVES.length && !force) return render();
   $("#driveList").innerHTML = '<div class="empty">Loading…</div>';
   try{
     const d = await api("/api/drives");
     DRIVES = d.drives;
+    EMPTY_WHY = d.status || null;
     $("#sDrives").textContent = DRIVES.length;
     $("#fDrives").textContent = DRIVES.length;
     render();
@@ -422,7 +423,7 @@ function render(){
   const t = d => d.started_at || d.mtime || 0;
   rows.sort((a,b) => key==="old" ? t(a)-t(b) : key==="big" ? b.bytes-a.bytes
                    : key==="long" ? b.n_segments-a.n_segments : t(b)-t(a));
-  if(!rows.length){ $("#driveList").innerHTML = '<div class="empty">No drives match.</div>'; return; }
+  if(!rows.length){ $("#driveList").innerHTML = emptyState(q); return; }
   $("#driveList").innerHTML = rows.map(d => `
     <div class="drive" data-r="${encodeURIComponent(d.route)}" tabindex="0" role="button">
       <div class="when">
@@ -441,6 +442,22 @@ function render(){
     el.onclick = open;
     el.onkeydown = e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } };
   });
+}
+/* AN EMPTY LIST HAS FOUR CAUSES AND THEY LOOK IDENTICAL. Say which one, with
+   the next step, rather than showing the same shrug for a filter that matched
+   nothing and a directory the server cannot read. */
+function emptyState(q){
+  if(q) return '<div class="empty">No drives match “'+q+'”.</div>';
+  const s = EMPTY_WHY;
+  if(s && s.error)
+    return `<div class="empty"><b>${s.error}</b><br><br>
+      <span class="num">${s.root}</span><br>
+      ${s.entries} entries, ${s.segments} recognised as segments.</div>`;
+  return `<div class="empty"><b>No recordings on the device yet.</b><br><br>
+    Drives appear here after you drive. Note that flashing a branch from
+    <b>v3.5.8 through v3.6.7</b> emptied this directory as part of the flash —
+    including the flash that installed this dashboard. From v3.6.8 on it does
+    not, so recordings made from now on will stay.</div>`;
 }
 function label(d){
   const t = d.started_at || d.mtime;

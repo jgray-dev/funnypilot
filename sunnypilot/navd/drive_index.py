@@ -219,6 +219,44 @@ def scan_routes(root: str | None = None) -> list[dict]:
   return out
 
 
+def realdata_status(root: str | None = None) -> dict:
+  """WHY the catalogue is empty, when it is empty.
+
+  **AN EMPTY LIST HAS FOUR CAUSES AND `scan_routes` CANNOT TELL THEM APART.**
+  It swallows OSError and returns `[]` for a missing directory, an unreadable
+  one, a genuinely empty one, and one full of files that do not parse as
+  segments. On screen those are the same picture — which is the exact trap this
+  repo has hit before (v3.6.5's LANE signal, whose failure mode WAS its healthy
+  reading), and it cost a round trip to diagnose the first time the Drives tab
+  came up empty.
+
+  So the API says which. This is diagnosis, not control: nothing branches on
+  it, it is a directory stat and a listing head, and it is the difference
+  between "you have no recordings" and "I cannot read /data/media/0/realdata".
+  """
+  root = root or REALDATA_ROOT
+  st = {"root": root, "exists": False, "readable": False,
+        "entries": 0, "segments": 0, "error": None, "sample": []}
+  if not os.path.isdir(root):
+    st["error"] = "the log directory does not exist"
+    return st
+  st["exists"] = True
+  try:
+    names = os.listdir(root)
+  except OSError as e:
+    st["error"] = f"cannot read the log directory: {e.strerror}"
+    return st
+  st["readable"] = True
+  st["entries"] = len(names)
+  st["segments"] = sum(1 for n in names if parse_segment_name(n))
+  # A few names, so a format that stopped parsing is visible rather than
+  # inferred. Bounded because this goes over the wire on every page load.
+  st["sample"] = sorted(names)[:5]
+  if st["entries"] and not st["segments"]:
+    st["error"] = "the log directory has files, but none are named like segments"
+  return st
+
+
 def route_segments(route: str, root: str | None = None) -> list[int]:
   root = root or REALDATA_ROOT
   segs = []

@@ -910,7 +910,11 @@ async def handle_drives(request: web.Request) -> web.Response:
   """The catalogue. A directory scan, off the event loop."""
   routes = await _run(drive_index.scan_routes)
   stats = await _run(drive_index.storage_stats)
-  return web.json_response({"drives": routes, "storage": stats})
+  # `status` is only interesting when the list is empty, and that is precisely
+  # when it is worth everything: an empty catalogue has four causes and they
+  # look identical on screen. See drive_index.realdata_status.
+  status = await _run(drive_index.realdata_status) if not routes else None
+  return web.json_response({"drives": routes, "storage": stats, "status": status})
 
 
 async def handle_storage(request: web.Request) -> web.Response:
