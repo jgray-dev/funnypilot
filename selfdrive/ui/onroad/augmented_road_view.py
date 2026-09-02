@@ -9,6 +9,8 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud.follow_line import FollowLine
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
@@ -55,6 +57,10 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     self.model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
+    # FunnyPilot v3.7.0: the follow-distance hologram. Constructed here, drawn
+    # right after the model renderer so it borrows this frame's transform and
+    # path. No IO in its constructor, and it is behind safe_draw below.
+    self._follow_line = FollowLine()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
 
@@ -94,6 +100,12 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
+    # FunnyPilot v3.7.0: the follow-distance line goes ON the road, so it is
+    # drawn immediately after the path and before any chrome or readout can
+    # cover it. Same projection as the lead chevron — see hud/follow_line.py
+    # for why that is the accuracy argument, not a convenience.
+    if gui_app.sunnypilot_ui():
+      T.safe_draw("follow_line", self._follow_line.draw, self.model_renderer, ui_state.sm, self._content_rect)
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     # FunnyPilot v3.5.0: edge treatment sits between the model and the HUD —
     # ORDER IS LOAD-BEARING. The vignette darkens the frame edges first so the

@@ -34,6 +34,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import get_T_FOLLOW, STOP_DISTANCE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace, StopGovernor
@@ -95,6 +96,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.lead_grace = LeadGrace(self.dt)
     self.stop_gov = StopGovernor(self.dt)
     self._v_cruise_last = 0.0
+    self._follow_t = 0.0
+    self._follow_gap_m = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -267,6 +270,15 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=personality)
+    # FunnyPilot v3.7.0 — THE GAP WE ARE HOLDING TO, for the follow-distance
+    # hologram. At equilibrium behind a lead at our own speed the MPC's desired
+    # distance and the lead's stopped-equivalence term share the same v^2/(2C),
+    # so they cancel and what remains is exactly this: the time headway plus
+    # the standstill gap. Computed HERE because `get_T_FOLLOW` (personality +
+    # low-speed cushion) and `STOP_DISTANCE` are the controller's own numbers
+    # and long_mpc cannot be imported by the UI. Published by the SP half.
+    self._follow_t = float(get_T_FOLLOW(personality, v_ego=v_ego))
+    self._follow_gap_m = self._follow_t * float(v_ego) + float(STOP_DISTANCE)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

@@ -360,3 +360,43 @@ class TestTheCornerWarningChannel:
     reading a different quantity (the v3.5.0 rule)."""
     assert scc_shm.WARN_SHM_PATH not in (scc_shm.SHM_PATH, scc_shm.CORNERS_SHM_PATH,
                                    scc_shm.DEBUG_SHM_PATH, scc_shm.LEARN_SHM_PATH)
+
+
+class TestTheFollowChannel:
+  """v3.7.0 — /dev/shm/fp_follow, the gap the planner is holding to."""
+
+  def test_round_trip(self, paths):
+    scc_shm.write_follow_shm(38.4, 1.6, True)
+    gap, tf, lead = scc_shm.read_follow_shm()
+    assert gap == pytest.approx(38.4, abs=0.01)
+    assert tf == pytest.approx(1.6, abs=0.001)
+    assert lead is True
+
+  def test_no_lead_reads_false_but_keeps_the_gap(self):
+    scc_shm.write_follow_shm(38.4, 1.6, False)
+    gap, _tf, lead = scc_shm.read_follow_shm()
+    assert lead is False and gap > 0
+
+  def test_stale_reads_inactive_even_with_a_valid_gap(self, paths):
+    # A line drawn from a dead planner's last number would look exactly like a
+    # live one, so the timestamp is what decides.
+    import os
+    with open(scc_shm.FOLLOW_SHM_PATH, "w") as f:
+      f.write(f"38.40,1.600,1,{time.monotonic() - 5.0:.3f}")
+    assert scc_shm.read_follow_shm() == scc_shm.FOLLOW_INACTIVE
+    os.unlink(scc_shm.FOLLOW_SHM_PATH)
+
+  def test_missing_garbage_and_nan_all_read_inactive(self, paths):
+    import os
+    assert scc_shm.read_follow_shm() == scc_shm.FOLLOW_INACTIVE
+    for body in ("", "garbage", "1,2", f"nan,1.6,1,{time.monotonic():.3f}",
+                 f"-3.0,1.6,1,{time.monotonic():.3f}"):
+      with open(scc_shm.FOLLOW_SHM_PATH, "w") as f:
+        f.write(body)
+      assert scc_shm.read_follow_shm() == scc_shm.FOLLOW_INACTIVE
+    os.unlink(scc_shm.FOLLOW_SHM_PATH)
+
+  def test_it_is_its_own_file(self):
+    # The v3.5.0 rule: never widen a positional channel for an unrelated reader.
+    assert scc_shm.FOLLOW_SHM_PATH not in (scc_shm.SHM_PATH, scc_shm.DEBUG_SHM_PATH,
+                                           scc_shm.LEARN_SHM_PATH, scc_shm.CORNERS_SHM_PATH)

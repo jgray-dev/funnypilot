@@ -31,6 +31,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_effort import (
   lane_departure_m as _lane_departure_m)
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import (
   write_scc_shm, write_learn_shm, write_corners_shm, write_scc_debug_shm, write_corner_warning_shm,
+  write_follow_shm,
   read_eps_limited as _read_eps_limited, read_pitch_rate as _read_pitch_rate)
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
@@ -369,6 +370,14 @@ class LongitudinalPlannerSP:
     # v3.5.0: the learned corner count + whether it is governing right now.
     write_learn_shm(self._scc_map_v2.learned_count, self._scc_map_v2.is_active,
                     self._scc_map_v2.gov_confidence)
+
+    # v3.7.0: the gap the MPC is holding to, for the onroad follow-distance
+    # hologram. `getattr` for the same reason as the stop governor above — the
+    # base planner computes it and inherits from this class, so it is present
+    # on the car and absent in a test of the SP half alone; absent reads as
+    # "nothing to draw".
+    write_follow_shm(getattr(self, '_follow_gap_m', 0.0), getattr(self, '_follow_t', 0.0),
+                     bool(sm['radarState'].leadOne.status))
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

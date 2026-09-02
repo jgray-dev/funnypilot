@@ -82,7 +82,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.9"
+EXPECTED_VERSION = "3.7.0"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -231,6 +231,10 @@ _CODE_MARKERS = [
   # v3.6.9
   ("app[\"triage_boot\"]", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "port opens before housekeeping"),
   ("def _nice_worker", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "executor initializer cannot break the pool"),
+  # v3.7.0
+  ("def follow_line_segment", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/follow_line.py", "follow-distance hologram geometry"),
+  ("def write_follow_shm", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_shm.py", "planner publishes the held gap"),
+  ("_follow_gap_m", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "held gap = t_follow*v + STOP_DISTANCE"),
   ("STOP_GOV_DECEL_MIN", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop governor acts on a braking lead"),
   ("STARTING_UPPER_JERK", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/controller.py", "launch jerk allowance"),
   ("KEEP_BRANCH_SUFFIX", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash prunes non-stable branches"),

@@ -248,6 +248,56 @@ def write_learn_shm(count: int, active: bool, confidence: float) -> None:
     pass
 
 
+# ── FunnyPilot v3.7.0: the follow-distance hologram ─────────────────────────
+#
+# plannerd publishes the gap it is HOLDING TO — the distance at which the MPC
+# would sit behind a lead travelling at our speed — and the onroad HUD draws a
+# line across the road there. ITS OWN FILE, per the v3.5.0 rule: fp_scc and
+# fp_sccdbg both have positional readers whose contracts are pinned by tests,
+# and a widened channel is how index [4] silently starts meaning something else.
+#
+# WHY THE PLANNER AND NOT THE UI. The gap is `t_follow * v_ego + STOP_DISTANCE`,
+# and every term is the controller's: `get_T_FOLLOW` folds in the personality
+# and the low-speed cushion, `STOP_DISTANCE` lives in long_mpc.py, which imports
+# acados and cannot be imported by the UI at all. A UI carrying its own copy of
+# that arithmetic would disagree the first time either was tuned — the v3.5.0
+# rule that put gov_lat/gov_lon on the wire instead of an argmin in the HUD.
+FOLLOW_SHM_PATH = '/dev/shm/fp_follow'
+FOLLOW_INACTIVE = (0.0, 0.0, False)
+
+
+def write_follow_shm(gap_m: float, t_follow: float, lead_status: bool) -> None:
+  """"<gap_m>,<t_follow_s>,<lead 0|1>,<time.monotonic()>". Best-effort."""
+  try:
+    _atomic_write(FOLLOW_SHM_PATH,
+                  f"{float(gap_m):.2f},{float(t_follow):.3f},{int(bool(lead_status))},{time.monotonic():.3f}")
+  except Exception:
+    pass
+
+
+def read_follow_shm() -> tuple[float, float, bool]:
+  """(gap_m, t_follow_s, lead_tracked). FOLLOW_INACTIVE on any doubt.
+
+  STALE READS AS INACTIVE, and the line therefore FADES OUT if plannerd stops.
+  That is the right failure for a marker on the road: a line drawn from a dead
+  planner's last number would look exactly like a live one.
+  """
+  try:
+    with open(FOLLOW_SHM_PATH) as f:
+      parts = f.read().strip().split(',')
+    if len(parts) < 4:
+      return FOLLOW_INACTIVE
+    age = time.monotonic() - float(parts[3])
+    if not -1.0 < age <= STALE_S:
+      return FOLLOW_INACTIVE
+    gap, tf = float(parts[0]), float(parts[1])
+    if gap != gap or tf != tf or gap <= 0.0:  # NaN, or nothing to draw
+      return FOLLOW_INACTIVE
+    return gap, tf, bool(int(parts[2]))
+  except Exception:
+    return FOLLOW_INACTIVE
+
+
 def read_learn_shm() -> tuple[int, bool, float]:
   """(learned_corner_count, governing_now, confidence). LEARN_INACTIVE on any doubt."""
   try:

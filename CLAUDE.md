@@ -119,6 +119,87 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.7.0 Changes (based on funnypilot-3.6.9)
+
+One feature, owner-requested: a "holographic" follow-distance line on the road.
+NO CONTROL CODE CHANGES — the planner gains one published number and nothing it
+does with the car is different.
+
+- `selfdrive/ui/sunnypilot/onroad/hud/follow_line.py` — NEW. A line drawn
+  ACROSS THE ROAD, ON THE ROAD, at the gap the MPC is holding to behind the
+  lead. When the lead's chevron sits on the line we are at the distance the
+  planner wants; ahead of it we are closer, behind it further. It answers "is
+  the car about to close up or back off?" without a number.
+  * **THE DISTANCE IS THE PLANNER'S, NOT THE UI'S.** At equilibrium behind a
+    lead at our own speed the MPC's desired distance and the lead's
+    stopped-equivalence term share the same `v^2/(2*COMFORT_BRAKE)`, so they
+    cancel and the held gap is exactly `t_follow * v_ego + STOP_DISTANCE`.
+    `get_T_FOLLOW` folds in the personality and the low-speed cushion, and it
+    and `STOP_DISTANCE` live in `long_mpc.py`, which imports acados and cannot
+    be imported by the UI. So the base planner computes `_follow_gap_m`, the SP
+    half publishes it over NEW `/dev/shm/fp_follow` (its own file, per the
+    v3.5.0 rule), and the HUD draws it. Pinned on the AST with a check that the
+    expression carries NO `v^2` term — the equilibrium gap, not the
+    stopping-inclusive one.
+  * **"AS ACCURATE AS POSSIBLE" IS A GEOMETRY CLAIM AND IT IS MET THREE WAYS.**
+    (1) CURVATURE: the line is placed along the MODEL PATH to arc-length `gap`,
+    so it bends into a corner with the road, and it is oriented along the
+    path's NORMAL there — perpendicular to the LANE, not to the car. In a 60 m
+    bend at 40 m the path has swung 13 m left; a line drawn straight ahead would
+    sit in the oncoming lane. (2) HEIGHT: z is interpolated from the path at
+    that distance plus the calibrated camera height — on a 5% grade at 41 m
+    that is 2.05 m above the road under the car, and a line at z=0 would float
+    under the road on screen. (3) THE SAME PROJECTION AS THE LEAD CHEVRON:
+    both endpoints go through `model_renderer._car_space_transform`, so the
+    line and the chevron agree to the pixel by construction rather than by
+    tuning. This is why it is drawn from `augmented_road_view` immediately
+    after `model_renderer.render()` — it borrows THIS frame's transform, path
+    and calibration offset.
+  * Rendering: three stacked strokes for the glow plus a core, thickness
+    scaling with the projected span so a gate 30 m out is thinner than one at
+    10 m, and short end posts (`POST_H_M` 0.35) projected from the same
+    endpoints lifted in car-space z, which is what makes the line stand ON the
+    road rather than read as paint on the windscreen. Colour is a new token,
+    `T.HOLO`, a pale cyan-white — cool so it reads as a projection, and distinct
+    from `LAT_ONLY`'s saturated cyan so a marker on the road is never mistaken
+    for the engagement state. `follow_line.py` may not call `rl.Color` with a
+    literal (the v3.5.4 rule, pinned).
+  * VISIBILITY: shown only with longitudinal ACTIVE, a tracked lead, and a live
+    published gap; alpha eased on `EASE_TAU`, the gap eased slower (`GAP_TAU`
+    0.30) so 20 Hz speed jitter does not shimmer it along the road. While it
+    fades out the gap HOLDS its last value — otherwise the line would sweep
+    toward the bonnet as it disappears. A stale `fp_follow` reads INACTIVE and
+    the line fades: a line drawn from a dead planner's last number looks
+    exactly like a live one. Nothing past `MAX_GAP_M` 120 is drawn — the model
+    path is uncertain there and a line would claim precision it lacks.
+  * Personality 1 (aggressive) publishes a shorter `t_follow`, so the line
+    moves in; it does not disappear or dim. That is the owner's "closer but
+    still displayed".
+  * SAFETY: behind `T.safe_draw("follow_line", ...)`, inside the sunnypilot-UI
+    guard (stock UI untouched), no IO at import or in the constructor (the
+    hud/ rule — `test_hud_imports` picks the module up automatically), the
+    shm read is a lazy function-local import, and `draw()` survives a model
+    renderer with nothing in it yet (first frames).
+- TESTS: **1187 green**, ruff clean. NEW `onroad/tests/test_follow_line.py`
+  (26): the geometry as arithmetic (curve, hill, interpolation, off-path,
+  degenerate paths, NaN), the visibility rule through the REAL `FollowLine`,
+  a projection test through a known transform, and AST wiring guards.
+  `TestTheFollowChannel` (5). SIX guards mutation-tested, all caught.
+  PROCESS NOTE: `_load('tokens')` in a test produces a SEPARATE module object
+  from the `tokens` the module under test bound, so `isinstance` across the two
+  is false for identical classes. Compare against `module.T`, not a fresh load
+  — test_hud_logic already recorded the same trap.
+- `FUNNYPILOT_VERSION` -> 3.7.0, `EXPECTED_VERSION` -> "3.7.0", branch
+  `funnypilot-3.7.0`. Three new `_CODE_MARKERS`; all 140 resolve.
+- ON-ROAD VERIFICATION: (1) behind a lead at steady speed the chevron should
+  sit ON the line; if it sits consistently ahead of or behind it while the gap
+  is stable, the MPC is not holding `t_follow*v + STOP_DISTANCE` and THAT is
+  the finding, not a drawing error. (2) through a bend the line must stay
+  square to the lane and on the tarmac — if it drifts off the road or tilts,
+  the model path (not this code) is what is wrong there. (3) on a crest or dip
+  the line should stay on the surface; floating or sinking means the path's z
+  is off, which also misplaces the lead chevron — check both together.
+
 ### v3.6.9 Changes (based on funnypilot-3.6.8)
 
 Three defects in v3.6.8's dashboard, all reported after the first flash. NO
