@@ -374,3 +374,25 @@ class TestLookingUpACornerAtItsOwnPosition:
     assert store.nearby(37.5, -122.0, 270.0, 45.0, 55.0, ahead_only=False) == []
     assert store.nearby(37.5 + 500.0 / 111320.0, -122.0, 90.0, 45.0, 55.0,
                         ahead_only=False) == []
+
+
+class TestADemonstrationReachesTheStore:
+  """v3.7.0 — `demo` is passed through `observe`, gated by `allow_raise`."""
+
+  def test_a_demonstrated_pass_lifts_the_ceiling(self, store):
+    k = see(store, a_peak=2.4, severity=2.0, now=1.0)          # poisoned: hi -> 1.2
+    assert store.corners[k].a_hi == pytest.approx(1.2, abs=0.02)
+    see(store, a_peak=2.5, severity=CLEAN, now=2.0, demo=True)
+    assert store.corners[k].a_hi == pytest.approx(2.5)
+
+  def test_a_governed_demonstration_cannot(self, store):
+    """A pass SCC-M itself was holding back is not evidence the corner is fast,
+    whichever bound it would move. MUTATION: drop `and allow_raise`."""
+    k = see(store, a_peak=2.4, severity=2.0, now=1.0)
+    see(store, a_peak=2.5, severity=CLEAN, now=2.0, demo=True, allow_raise=False)
+    assert store.corners[k].a_hi == pytest.approx(1.2, abs=0.02)
+
+  def test_without_demo_the_ceiling_stays_put(self, store):
+    k = see(store, a_peak=2.4, severity=2.0, now=1.0)
+    see(store, a_peak=2.5, severity=CLEAN, now=2.0)
+    assert store.corners[k].a_hi == pytest.approx(1.2, abs=0.02)

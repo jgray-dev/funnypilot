@@ -189,8 +189,87 @@ does with the car is different.
   from the `tokens` the module under test bound, so `isinstance` across the two
   is false for identical classes. Compare against `module.T`, not a fresh load
   — test_hud_logic already recorded the same trap.
+- **SECOND PASS, SAME VERSION — SCC-M v2 LEARNED A TURN AS A CORNER.** Owner:
+  a corner by the house that is almost never DRIVEN — the driveway sits on it,
+  so most visits are a turn into or out of it, blinker on, braking, the driver
+  steering off the road. SCC-M had learned the corner as far slower than it is
+  and capped every real pass "wayyy past what's acceptable". FOUR GAPS, ONE
+  FAMILY: a turn is not a pass through a corner, and nothing said so firmly
+  enough.
+  * `long_v2/scc_map_v2.py` — **A TURN ABANDONS THE PASS; IT USED TO MERELY
+    BLOCK IT, AND TOO LATE.** `blinker` was folded into `blocked`, which made
+    the pass unusable at commit — but only for frames while the stalk was
+    physically on. Self-cancelling stalks switch off as the wheel returns to
+    centre, i.e. near the END of the turn, while the manoeuvre — the tight
+    curvature, the brake, the takeover, the acceleration away — carries on for
+    seconds. A pass or orphan candidate opening in that tail saw no blinker and
+    was judged as a drive through the bend. NEW `TURN_HOLD_S` 3.0: any open
+    pass or orphan is dropped the moment the blinker comes on, nothing opens
+    while it is on, and the same holds for the hold after it goes off.
+    ABANDON, NOT RAISE-ONLY: a turn says nothing about the corner in either
+    direction. Consequence worth knowing: a lane change mid-bend now abandons
+    the pass rather than only suppressing the departure signal — the lateral
+    signals during a lane change are the manoeuvre's, not the bend's.
+  * `long_v2/corner_effort.py` — **A TAKEOVER AT JUNCTION CURVATURE IS THE
+    DRIVER LEAVING THE ROAD, NOT A VERDICT ON THE BEND.** An unsignalled turn
+    into a driveway is a takeover with no blinker to abandon on, and
+    `TAKEOVER_SEVERITY` 2.0 would condemn the bend it happened inside. The
+    steering itself tells the two apart: `CornerPass.takeover_k` keeps the
+    tightest curvature on the OVERRIDE frames (recovered from the effort's own
+    `a_lat / v^2`, no new signal), and `turned_off` is true past `JUNCTION_K`
+    0.04 1/m — a 25 m radius, which is a junction and not a corner a car
+    cruises through. `_commit_pass` discards it. A takeover at the bend's own
+    curvature keeps v3.6.5's verdict, pinned.
+  * Same file / `scc_map_v2._commit_orphan` — **ORPHANS WERE MISSING THE v3.6.6
+    RULE.** A manual longitudinal pass is raise-only for a listed corner; an
+    orphan filed from one could still LOWER, so a driver on the pedal through
+    an unlisted bend filed a slow record for it. `allow_lower=not p.long_manual`
+    now, same evidence, same rule.
+  * `long_v2/corner_speed.py`, `scc_learn_store.py` — **A DEMONSTRATION MAY
+    RAISE THE CEILING, AND WITHOUT THIS A POISONED CORNER IS PERMANENT.**
+    `update_interval` only ever lowered `a_hi`; `effective_a_lat` takes
+    `min(a_lo, a_hi)`; so however many clean passes raised the floor afterwards
+    the answer stayed at the old ceiling — which is why the owner's corner
+    STAYED wrong. A demonstration (openpilot steering the whole bend, nothing
+    stressed, driver on the throttle — `MIN_DEMO_S`) is not an estimate that
+    the corner supports `a_peak`, it is the car having done it, and that is the
+    standard a ceiling should require to rise. `demo=True` lifts `a_hi` to
+    `a_peak`, adopted outright; an ordinary clean pass still only raises the
+    floor slowly; a stressed pass still raises nothing; `allow_raise=False`
+    (SCC-M governed the pass) blocks it as it blocks the floor. **A demo
+    implies `seed` INSIDE `update_interval`**, not only at the call site — a
+    first test passed `demo` alone and got the ceiling adopted and the floor
+    eased, two discounts on one piece of evidence.
+  * **HOW THE OWNER'S CORNER RECOVERS**: drive it once with lateral engaged and
+    a foot on the throttle through the bend. That is a demonstration; the
+    ceiling lifts to what was driven. Alternatively delete
+    `/data/corners_v2.jsonl` and let it relearn from scratch.
+  * **A RESIDUAL AMBIGUITY, STATED RATHER THAN HIDDEN**: a lateral takeover
+    at the BEND'S curvature while SCC-M is governing still lowers the ceiling
+    (v3.6.5). Grabbing the wheel because the car is going too SLOWLY looks
+    identical in the steering, so a frustrated takeover can deepen the very
+    problem that provoked it. The demonstration path is now the way out; a
+    redesign of the takeover verdict was not done here.
+  * TESTS: **1207 green**, ruff clean. NEW `TestATurnIsNotAPass` (8),
+    `TestADemonstrationLiftsTheCeiling` (5), `TestADemonstrationReachesTheStore`
+    (3), `TestATakeoverAtJunctionCurvatureIsATurnOff` (4). NINE guards
+    mutation-tested, all caught — **BUT ONE SURVIVED THE FIRST PASS AND IT WAS
+    A VACUOUS FIXTURE**: the hold test ran `(TURN_HOLD_S - 0.5) / dt` frames of
+    "hold", which is -50 frames when the constant is mutated to zero, so it ran
+    nothing and the assertion held trivially. The probe is a FIXED 1.0 s now,
+    with an explicit assertion that the constant exceeds it. A guard whose
+    fixture collapses when the constant is removed is not a guard — the same
+    family as v3.4.5's "two branches produced identical values".
+    PROCESS NOTE 2: the `_turn_until` init was inserted with a regex that matched
+    the `self._orphan = None` I had JUST WRITTEN in the new branch rather than
+    the one in `__init__` (which carries a trailing comment) — so the attribute
+    was never initialised, every `observe_frame` raised inside its own
+    swallowed `try`, and ELEVEN learning tests failed while every cap test
+    passed. A total function that swallows its exceptions hides exactly this;
+    the pattern of "all recording dead, all capping fine" is the tell.
+  * Three new `_CODE_MARKERS`; all 143 resolve.
 - `FUNNYPILOT_VERSION` -> 3.7.0, `EXPECTED_VERSION` -> "3.7.0", branch
-  `funnypilot-3.7.0`. Three new `_CODE_MARKERS`; all 140 resolve.
+  `funnypilot-3.7.0`. Six new `_CODE_MARKERS` across both passes; all 143 resolve.
 - ON-ROAD VERIFICATION: (1) behind a lead at steady speed the chevron should
   sit ON the line; if it sits consistently ahead of or behind it while the gap
   is stable, the MPC is not holding `t_follow*v + STOP_DISTANCE` and THAT is

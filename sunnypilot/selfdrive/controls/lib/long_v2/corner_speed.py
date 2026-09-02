@@ -342,8 +342,23 @@ def effective_a_lat(a_lo: float, a_hi: float, visits: int,
 
 
 def update_interval(a_lo: float, a_hi: float, a_peak: float, severity: float,
-                    seed: bool = False):
+                    seed: bool = False, demo: bool = False):
   """Fold one observed pass into the interval. Returns (a_lo, a_hi).
+
+  v3.7.0 — `demo=True` is the ONE thing that may RAISE THE CEILING, and it
+  exists because without it a corner that has once been wrongly condemned is
+  condemned forever. `a_hi` only ever fell; `effective_a_lat` takes
+  `min(a_lo, a_hi)`; so however many clean passes raised the floor afterwards,
+  the answer stayed at the old ceiling. That is the reported corner by the
+  owner's house: driven cleanly, still capped far below what it supports.
+
+  A DEMONSTRATION is openpilot steering the whole bend with nothing stressed
+  while the driver holds the throttle (corner_effort.MIN_DEMO_S). It is not an
+  estimate that the corner supports `a_peak`; it is the car having done it.
+  That is the standard a ceiling should require to move up — an ordinary clean
+  pass still only raises the floor, slowly, and a stressed pass still can never
+  raise anything. The asymmetry survives: ceilings fall fast on evidence of
+  stress and rise only on proof.
 
   `seed=True` adopts the pass outright instead of easing toward it, and the
   caller passes it for a corner's FIRST visit. THE REASON IS THAT A FRESH
@@ -371,6 +386,12 @@ def update_interval(a_lo: float, a_hi: float, a_peak: float, severity: float,
   hi = float(a_hi) if finite(a_hi) else A_LAT_MAX
   p = float(a_peak) if finite(a_peak) else 0.0
   s = float(severity) if finite(severity) else 1.0
+  # v3.7.0 — A DEMONSTRATION IMPLIES ADOPTION, here and not only at the call
+  # site. The store already ORs `seed` with `demo`, but a caller that passed
+  # `demo` alone would have had the ceiling adopted and the FLOOR eased — two
+  # different discounts on the same piece of evidence. Found by a test that
+  # did exactly that.
+  seed = bool(seed) or bool(demo)
   if p <= 0.0:
     return clamp(lo, A_LAT_MIN, A_LAT_MAX), clamp(hi, A_LAT_MIN, A_LAT_MAX)
 
@@ -386,6 +407,11 @@ def update_interval(a_lo: float, a_hi: float, a_peak: float, severity: float,
     target = clamp(p, A_LAT_MIN, A_LAT_MAX)
     if target > lo:
       lo = target if seed else lo + (target - lo) * ALPHA_FLOOR
+    # v3.7.0 — a demonstration lifts a ceiling it has just disproved. Adopted
+    # outright (like `seed`), because the car has already done it, and only up
+    # to the demonstrated value, never past it.
+    if demo and target > hi:
+      hi = target
   return clamp(lo, A_LAT_MIN, A_LAT_MAX), clamp(hi, A_LAT_MIN, A_LAT_MAX)
 
 

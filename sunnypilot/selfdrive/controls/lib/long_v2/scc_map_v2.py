@@ -85,6 +85,26 @@ BEHIND_KEEP_M = 25.0
 # This is how far apart they may be and still be the same corner.
 SAME_CORNER_M = 30.0
 
+# ── a turn is not a pass (v3.7.0) ───────────────────────────────────────────
+#
+# Owner: a corner by the house that is almost never DRIVEN — the driveway sits
+# on it, so most visits are a turn into or out of it, blinker on, braking, the
+# driver steering. SCC-M had learned the corner as far slower than it is.
+#
+# THE OLD RULE WAS RIGHT AND TOO LATE. `blinker` was folded into `blocked`,
+# which made the pass UNUSABLE at commit — but only for frames while the stalk
+# was actually on. Self-cancelling stalks switch off as the wheel returns to
+# centre, i.e. near the END of the turn, while the manoeuvre — the tight
+# curvature, the brake, the takeover, the acceleration away — carries on for
+# seconds. A pass or an orphan candidate opening in that tail saw no blinker
+# and was judged as if it were a drive through the bend.
+#
+# So a turn now ABANDONS: any open pass and any orphan candidate are dropped
+# the moment the blinker comes on, nothing opens while it is on, and the
+# same holds for TURN_HOLD_S after it goes off. Abandon, not "raise-only": a
+# turn says nothing about the corner in either direction.
+TURN_HOLD_S = 3.0
+
 # ── corners the geometry cannot see (v3.6.5) ───────────────────────────────
 #
 # THE STORE IS NOW A SOURCE OF CORNERS, NOT ONLY AN ANNOTATION ON THEM. Until
@@ -319,6 +339,7 @@ class SCCMapV2:
     self._geom_at = 0.0
     self._dr_at = 0.0        # v3.6.5: when the distances were last advanced
     self._orphan = None      # v3.6.5: a bend the geometry never listed
+    self._turn_until = 0.0   # v3.7.0: no pass may open before this; see TURN_HOLD_S
     self.orphan_count = 0
     self.corner_warning = False   # v3.6.5: an unmanageable bend is coming up
     self._warn_frames = 0
@@ -626,7 +647,19 @@ class SCCMapV2:
           inside = c
           break
 
-      blocked = bool(blinker or standstill or gps_acc > MAX_GPS_ACC_M)
+      # v3.7.0 — THE TURN. See TURN_HOLD_S. `_turn_until` is a wall of time
+      # behind which no pass may be open or opened.
+      if blinker:
+        self._turn_until = now + TURN_HOLD_S
+      turning = bool(blinker) or now < self._turn_until
+      if turning:
+        if self._pass.open:
+          self._pass.reset()
+          self._pass_key = None
+        self._orphan = None
+        return
+
+      blocked = bool(standstill or gps_acc > MAX_GPS_ACC_M)
       if self._pass.open:
         self._pass.add(self._effort, dt, v_ego, blocked=blocked, lead=lead)
         # Still the SAME corner? Each refresh re-projects from a moved ego pose,
@@ -715,8 +748,12 @@ class SCCMapV2:
       radius = 1.0 / o["k"] if o["k"] > 0.0 else 0.0
       if radius <= 0.0:
         return
+      # v3.7.0 — THE v3.6.6 RULE APPLIES HERE TOO. A manual longitudinal pass is
+      # raise-only for a listed corner; an orphan filed from one was still
+      # allowed to LOWER, so a driver on the pedal through an unlisted bend
+      # could file a slow record for it. Same evidence, same rule.
       s.observe(o["lat"], o["lon"], o["brg"], radius, a_peak, severity,
-                FLAG_ENGAGED, allow_raise=False)
+                FLAG_ENGAGED, allow_raise=False, allow_lower=not p.long_manual)
       self.learned_count = s.count
       self.orphan_count += 1
       self.last_pass = (a_peak, severity, radius, p.depart_peak)
@@ -728,6 +765,12 @@ class SCCMapV2:
     key, self._pass_key = self._pass_key, None
     try:
       if key is None or not self._pass.usable():
+        return
+      # v3.7.0 — A TAKEOVER AT JUNCTION CURVATURE IS THE DRIVER LEAVING THE
+      # ROAD. An unsignalled turn into a driveway is a takeover with no blinker
+      # to abandon on, and TAKEOVER_SEVERITY would condemn the bend it happened
+      # inside. The steering itself tells the two apart — see JUNCTION_K.
+      if self._pass.turned_off:
         return
       a_peak, severity = self._pass.verdict()
       s = self.store()
@@ -757,9 +800,12 @@ class SCCMapV2:
       # says nothing about a bend openpilot rates at 45. The lateral signals
       # measured during the same pass are unaffected and still lower the ceiling
       # on their own evidence — this only removes the SPEED from the argument.
+      # v3.7.0 — `demo=demo` lets a demonstration RAISE THE CEILING too, which
+      # is what makes a poisoned corner recoverable at all; see
+      # corner_speed.update_interval. The store's own guards still apply.
       s.observe(key[0], key[1], key[2], key[3], a_peak, severity, flags,
                 allow_raise=not self.is_active, seed=demo,
-                allow_lower=not self._pass.long_manual)
+                allow_lower=not self._pass.long_manual, demo=demo)
       self.learned_count = s.count
       # v3.6.2 — NO LOG LINE HERE. The pass used to be written to the swaglog
       # so the thresholds could be calibrated from a drive. They are pinned by

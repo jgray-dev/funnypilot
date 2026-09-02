@@ -379,7 +379,8 @@ class LearnStore:
   def observe(self, lat: float, lon: float, bearing: float, radius: float,
               a_peak: float, severity: float, flags: int = 0,
               now: float | None = None, allow_raise: bool = True,
-              seed: bool = False, allow_lower: bool = True) -> str:
+              seed: bool = False, allow_lower: bool = True,
+              demo: bool = False) -> str:
     """Fold one traversal in. Returns the key it landed on.
 
     The interval maths lives in corner_speed.update_interval — this method owns
@@ -413,7 +414,12 @@ class LearnStore:
     # DEMONSTRATED (see corner_effort.MIN_DEMO_S). Both mean "this evidence
     # deserves no discount"; neither weakens the direction guards inside
     # update_interval, which still refuse to lower a floor or raise a ceiling.
-    lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity, seed=fresh or bool(seed))
+    # v3.7.0 — `demo` is passed through so a demonstration can raise the
+    # ceiling (see update_interval). `allow_raise=False` blocks that as it
+    # blocks the floor: a pass SCC-M itself was governing is not evidence that
+    # the corner is fast, whichever bound it would move.
+    lo, hi = update_interval(c.a_lo, c.a_hi, a_peak, severity,
+                             seed=fresh or bool(seed), demo=bool(demo) and allow_raise)
     if not allow_raise:
       lo = min(lo, c.a_lo)
     # v3.6.6 — THE MIRROR, and the owner's rule for a manual longitudinal pass:

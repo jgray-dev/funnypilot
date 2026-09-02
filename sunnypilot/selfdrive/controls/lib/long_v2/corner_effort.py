@@ -199,6 +199,15 @@ TAKEOVER_SEVERITY = 2.0
 # because the car entered far too fast. The rate-based signals still need their
 # window and simply contribute nothing when they do not have it.
 MIN_TAKEOVER_S = 0.3
+# v3.7.0 — A TAKEOVER AT JUNCTION-GRADE CURVATURE IS A TURN-OFF, NOT A VERDICT.
+# TAKEOVER_SEVERITY was designed for "openpilot entered the bend too fast and I
+# grabbed it". A driver turning into a driveway or side road also takes the
+# wheel — and steers far tighter than any road bend: 0.04 1/m is a 25 m radius,
+# which is a junction, not a corner a car cruises through. Above this the
+# takeover is the driver LEAVING the road, and the pass says nothing about the
+# bend it happened inside. Measured from the effort's own a_lat / v^2 on the
+# override frames, so it needs no new signal.
+JUNCTION_K = 0.04
 # How long the human has to actually hold an axis before it reads as a
 # takeover. `latActive` drops for a frame at plenty of boundaries that are not
 # interventions — a model drop, the moment a corner leaves the list, the edge
@@ -555,6 +564,7 @@ class CornerPass:
     self._started = False
     self._ended = False        # the human is driving now; stop measuring
     self._override_t = 0.0     # how long they have held the wheel; TAKEOVER_DWELL_S
+    self.takeover_k = 0.0      # v3.7.0: tightest curvature while they held it; see JUNCTION_K
     self.demo_time = 0.0       # driver chose the speed, lateral on; MIN_DEMO_S
     self.long_manual = False   # the driver owned the speed at some point
 
@@ -601,6 +611,14 @@ class CornerPass:
     if self.engaged_at_start:
       if effort.override:
         self._override_t += dt
+        # v3.7.0 — remember HOW the human steered while they had it. The
+        # effort's a_lat is v^2*|k|, so this recovers |k| without a new input;
+        # `_commit_pass` reads it against JUNCTION_K to tell a turn-off from a
+        # correction. Kept on the override frames only, because that is the
+        # steering that is the human's.
+        v2 = float(v_ego) * float(v_ego) if _finite(v_ego) else 0.0
+        if v2 > 1.0 and _finite(effort.a_lat):
+          self.takeover_k = max(self.takeover_k, float(effort.a_lat) / v2)
         if self._override_t >= TAKEOVER_DWELL_S:
           self._ended = True
           self.took_over = not bool(lead)
@@ -639,6 +657,12 @@ class CornerPass:
       self.depart_peak = min(effort.departure, MAX_DEPART_M)
     if effort.limited:
       self.limit_time += dt
+
+  @property
+  def turned_off(self) -> bool:
+    """v3.7.0 — the takeover was the driver leaving the road, not correcting
+    the bend. Discards the pass instead of condemning the corner."""
+    return bool(self.took_over) and self.takeover_k >= JUNCTION_K
 
   def engaged_fraction(self) -> float:
     """How much of the pass openpilot steered. 1.0 = all of it."""

@@ -471,3 +471,38 @@ class TestTheEnvelopeHasRoomToBeFollowed:
     assert asked < available, "the envelope asks for more than the MPC may give"
     assert asked / available <= self.MAX_SHARE, \
         f"only {100 * (1 - asked / available):.0f}% headroom; the car cannot catch up"
+
+
+class TestADemonstrationLiftsTheCeiling:
+  """FunnyPilot v3.7.0 — the one way a wrongly-condemned corner recovers.
+
+  `a_hi` only ever fell and `effective_a_lat` takes min(a_lo, a_hi), so a
+  poisoned ceiling was permanent however cleanly the bend was driven after. A
+  DEMONSTRATION — openpilot steering the whole bend with nothing stressed while
+  the driver holds the throttle — is the car having done it, and that is the
+  standard a ceiling should require to rise.
+  """
+
+  def test_a_demonstration_raises_a_low_ceiling_to_what_was_driven(self):
+    lo, hi = CS.update_interval(1.2, 1.2, a_peak=2.4, severity=0.1, demo=True)
+    assert hi == pytest.approx(2.4)
+    assert lo == pytest.approx(2.4)
+
+  def test_an_ordinary_clean_pass_still_cannot_raise_it(self):
+    """MUTATION: drop the `demo and` guard. The floor may rise; the ceiling may
+    not — a clean pass is weak evidence and the ceiling requires proof."""
+    lo, hi = CS.update_interval(1.2, 1.2, a_peak=2.4, severity=0.1)
+    assert hi == pytest.approx(1.2)
+
+  def test_a_stressed_demonstration_is_not_a_demonstration(self):
+    # `demo` cannot bypass the direction guards: stressed passes never raise.
+    lo, hi = CS.update_interval(1.2, 1.2, a_peak=2.4, severity=1.3, demo=True)
+    assert hi <= 1.2 + 1e-9
+
+  def test_it_lifts_only_to_what_was_demonstrated(self):
+    lo, hi = CS.update_interval(1.0, 1.5, a_peak=1.3, severity=0.1, demo=True)
+    assert hi == pytest.approx(1.5), "a demo below the ceiling leaves it alone"
+
+  def test_the_ceiling_still_beats_the_floor_afterwards(self):
+    lo, hi = CS.update_interval(1.2, 1.2, a_peak=2.4, severity=0.1, demo=True)
+    assert CS.effective_a_lat(lo, hi, visits=10) > CS.effective_a_lat(1.2, 1.2, visits=10)

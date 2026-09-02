@@ -870,3 +870,51 @@ class TestTheDriversDemonstration:
                                   severity=0.0, seed=True)
     assert lo == pytest.approx(2.4), "a slow manual pass must not lower the floor"
     assert hi == pytest.approx(3.0), "...nor touch the ceiling"
+
+
+class TestATakeoverAtJunctionCurvatureIsATurnOff:
+  """v3.7.0 — see JUNCTION_K. The takeover verdict was designed for a bend
+  entered too fast; a driver turning into a driveway also takes the wheel, and
+  steers far tighter than any road bend. The pass records how the human
+  steered so the commit path can tell the two apart."""
+
+  DT = 0.01
+
+  def _pass(self, k_after, v=12.0, seconds=3.0, take_at=1.5):
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for i in range(int(seconds / self.DT)):
+      t = i * self.DT
+      taken = t >= take_at
+      e.update(self.DT, v, k_after if taken else 0.012, 25.0, 0.0, not taken)
+      e.a_lat = v * v * (k_after if taken else 0.012)
+      p.add(e, self.DT, v)
+    return p
+
+  def test_junction_curvature_during_the_takeover_is_a_turn_off(self):
+    p = self._pass(k_after=0.09)
+    assert p.took_over
+    assert p.takeover_k >= CE.JUNCTION_K
+    assert p.turned_off
+
+  def test_bend_curvature_during_the_takeover_is_still_a_verdict(self):
+    # Anti-vacuous: grabbing the wheel at the bend's own curvature is v3.6.5's
+    # case and must keep its severity.
+    p = self._pass(k_after=0.012)
+    assert p.took_over and not p.turned_off
+    assert p.verdict()[1] == pytest.approx(CE.TAKEOVER_SEVERITY)
+
+  def test_the_curvature_is_taken_from_the_override_frames_only(self):
+    # Hard steering BEFORE the takeover was openpilot's, not the human's.
+    p, e = CE.CornerPass(), CE.LateralEffort()
+    p.begin()
+    for _i in range(300):
+      e.update(self.DT, 12.0, 0.09, 25.0, 0.0, True)
+      e.a_lat = 12.0 * 12.0 * 0.09
+      p.add(e, self.DT, 12.0)
+    assert p.takeover_k == 0.0
+
+  def test_junction_k_is_a_junction_not_a_corner(self):
+    # 0.04 1/m is a 25 m radius. A bend a car cruises through is 60 m+.
+    assert 1.0 / CE.JUNCTION_K <= 25.0 + 1e-9
+    assert CE.JUNCTION_K > 1.0 / 60.0

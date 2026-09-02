@@ -1247,3 +1247,122 @@ class TestAManualSpeedOnlyEverRaises:
       if isinstance(node, ast.keyword) and node.arg == "allow_lower":
         found = not isinstance(node.value, ast.Constant)
     assert found, "_commit_pass must pass a computed allow_lower to observe()"
+
+
+class TestATurnIsNotAPass:
+  """FunnyPilot v3.7.0 — the corner by the owner's house.
+
+  The driveway sits on the bend, so most visits are a TURN into or out of it:
+  blinker on, braking, the driver steering off the road. SCC-M had learned the
+  corner as far slower than it is. `blinker` used to be folded into `blocked`,
+  which rejected the pass at commit — but only for frames while the stalk was
+  physically on, and self-cancelling stalks switch off near the END of the
+  turn while the manoeuvre carries on for seconds.
+  """
+
+  def _frames(self, scc, n, blinker=False, lat_active=True, curvature=0.012, t0=100.0, dt=0.01):
+    for i in range(n):
+      scc.observe_frame(t0 + i * dt, 18.0, curvature, 25.0, 0.0, lat_active, False,
+                        False, blinker, False, 3.0)
+    return t0 + n * dt
+
+  def test_a_blinker_abandons_an_open_pass_immediately(self, store):
+    scc = inside_a_corner(store)
+    self._frames(scc, 200)                         # two seconds into a real pass
+    assert scc._pass.open
+    scc.observe_frame(102.0, 18.0, 0.012, 25.0, 0.0, True, False, False, True, False, 3.0)
+    assert not scc._pass.open and scc._pass_key is None
+    leave(scc)
+    assert store.count == 0
+
+  def test_nothing_opens_while_the_blinker_is_on(self, store):
+    scc = inside_a_corner(store)
+    self._frames(scc, 300, blinker=True)
+    assert not scc._pass.open
+
+  def test_the_hold_outlasts_a_self_cancelling_stalk(self, store):
+    """THE FIX. The stalk cancels near the end of the turn; the manoeuvre
+    continues. A pass opening in that tail must not be judged as a drive
+    through the bend. MUTATION: TURN_HOLD_S -> 0."""
+    # THE PROBE DURATION IS FIXED, NOT DERIVED FROM THE CONSTANT UNDER TEST. A
+    # first version ran `(TURN_HOLD_S - 0.5) / dt` frames of "hold", which is
+    # -50 frames when the constant is mutated to zero — so it ran nothing and
+    # the assertion held vacuously. The mutation survived. A guard whose
+    # fixture collapses when the constant is removed is not a guard.
+    assert M.TURN_HOLD_S >= 1.5, "the 1.0 s probe below must land well inside the hold"
+    scc = inside_a_corner(store)
+    t = self._frames(scc, 50, blinker=True)                   # 0.5 s of stalk
+    t = self._frames(scc, 100, blinker=False, t0=t)           # 1.0 s after it cancels
+    assert not scc._pass.open, "still inside the hold; nothing may open"
+    t = self._frames(scc, int(M.TURN_HOLD_S / 0.01) + 50, blinker=False, t0=t)   # past the hold
+    assert scc._pass.open, "anti-vacuous: once the hold lapses, learning resumes"
+
+  def test_a_turn_records_nothing_in_either_direction(self, store):
+    # Abandon, not raise-only: a turn is silent about the corner.
+    scc = inside_a_corner(store)
+    self._frames(scc, 200)
+    self._frames(scc, 400, blinker=True, t0=102.0, curvature=0.08)   # turning off, hard
+    leave(scc)
+    assert store.count == 0
+
+  def test_an_orphan_candidate_is_dropped_by_a_blinker(self, store):
+    """The orphan learner watches unlisted bends; a junction turn is the
+    tightest 'bend' a car ever drives and would file a very slow record."""
+    scc = make(bend_route(radius=600.0, arc_deg=5.0, lead_in=800.0), store=store)
+    scc.corners = []
+    scc._read_route = list
+    t = 100.0
+    for i in range(60):                                    # a tight turn, engaged
+      scc.observe_frame(t + i * 0.01, 9.0, 0.09, 30.0, 0.0, True, False, False, False, False, 3.0,
+                        lat=37.5, lon=-122.0, bearing=90.0)
+    assert scc._orphan is not None
+    scc.observe_frame(t + 0.6, 9.0, 0.09, 30.0, 0.0, True, False, False, True, False, 3.0,
+                      lat=37.5, lon=-122.0, bearing=90.0)
+    assert scc._orphan is None
+    assert store.count == 0
+
+  def test_an_unsignalled_driveway_takeover_is_a_turn_off(self, store):
+    """No blinker to abandon on, so the steering has to tell it. Engaged into
+    the bend, then the driver grabs the wheel and turns at junction curvature:
+    the takeover verdict (severity 2.0) must NOT condemn the corner."""
+    scc = inside_a_corner(store)
+    self._frames(scc, 150)                                              # ours, engaged
+    for i in range(60):                                                 # driver steers off, hard
+      scc.observe_frame(101.5 + i * 0.01, 12.0, 0.09, 40.0, 0.0, False, False,
+                        False, False, False, 3.0)
+    leave(scc)
+    assert store.count == 0
+
+  def test_a_genuine_mid_bend_takeover_is_still_a_verdict(self, store):
+    """Anti-vacuous for the one above: a takeover at the bend's OWN curvature is
+    the driver saying it was too fast, and v3.6.5's verdict must survive."""
+    scc = inside_a_corner(store)
+    self._frames(scc, 150)
+    for i in range(60):
+      scc.observe_frame(101.5 + i * 0.01, 18.0, 0.012, 25.0, 0.0, False, False,
+                        False, False, False, 3.0)
+    leave(scc)
+    assert store.count == 1
+    c = next(iter(store.corners.values()))
+    assert c.a_hi < CS.A_LAT_MAX
+
+  def test_an_orphan_filed_from_a_manual_long_pass_is_raise_only(self, store):
+    """The v3.6.6 rule the orphan path was missing. MUTATION: drop
+    `allow_lower=not p.long_manual` from _commit_orphan."""
+    scc = make(bend_route(radius=600.0, arc_deg=5.0, lead_in=800.0), store=store)
+    scc.corners = []
+    scc._read_route = list
+    # pre-existing record at the spot, with a known ceiling
+    store.observe(37.5, -122.0, 90.0, 40.0, 2.0, 0.0, now=1.0)
+    hi_before = next(iter(store.corners.values())).a_hi
+    t = 100.0
+    # an engaged, stressed, BRAKED pass through an unlisted bend right there
+    for i in range(400):
+      scc.observe_frame(t + i * 0.01, 12.0, 0.03, 25.0 + (8.0 if (i // 5) % 2 else -8.0), 0.0,
+                        True, False, False, False, False, 3.0, brake_pressed=True,
+                        lat=37.5, lon=-122.0, bearing=90.0)
+    for i in range(50):                                     # straighten out -> commit
+      scc.observe_frame(t + 4.0 + i * 0.01, 12.0, 0.0, 0.0, 0.0, True, False, False,
+                        False, False, 3.0, brake_pressed=True, lat=37.5, lon=-122.0, bearing=90.0)
+    c = next(iter(store.corners.values()))
+    assert c.a_hi >= hi_before - 1e-9, "a braked pass may not lower an orphan's ceiling"
