@@ -715,6 +715,13 @@ $("#bFlash").onclick = async () => {
   $("#veil").classList.add("on");
   try{
     const d = await api("/api/branches");
+    // TOLERATE BOTH SHAPES. v3.6.8 read `d.branches` off an endpoint that
+    // returned a BARE ARRAY, so this threw "Cannot read properties of undefined
+    // (reading 'slice')" and the modal was unusable. v3.6.9 names the field
+    // server-side; this normalisation is what keeps a half-updated device —
+    // new page, old server, or the reverse — degrading instead of breaking.
+    const BR = Array.isArray(d) ? d : (d && Array.isArray(d.branches) ? d.branches : []);
+    if(!BR.length) throw new Error("no funnypilot-* branches came back");
     // THE SERVER ALREADY SORTS NEWEST FIRST by commit date, so "recent" is just
     // the head of the list. Ten is what fits without the modal scrolling, and
     // the rest are one click away — the full list had grown past a screenful,
@@ -722,14 +729,14 @@ $("#bFlash").onclick = async () => {
     const RECENT = 10;
     let all = false, picked = null;
     const draw = () => {
-      const shown = all ? d.branches : d.branches.slice(0, RECENT);
-      const more = d.branches.length - shown.length;
+      const shown = all ? BR : BR.slice(0, RECENT);
+      const more = BR.length - shown.length;
       $("#brlist").innerHTML = shown.map(b => `
         <div class="br" data-b="${b.name}" role="option"
              aria-selected="${picked === b.name}">${b.name}
           <small>${b.date ? new Date(b.date).toLocaleDateString(undefined,
                  {month:"short",day:"numeric",year:"numeric"}) : ""}</small></div>`).join("")
-        + (more > 0 ? `<div class="br showall" id="brMore">Show all ${d.branches.length} branches
+        + (more > 0 ? `<div class="br showall" id="brMore">Show all ${BR.length} branches
              <small>${more} older</small></div>` : "");
       $$("#brlist .br[data-b]").forEach(el => el.onclick = () => {
         picked = el.dataset.b; $("#mGo").disabled = false; draw();

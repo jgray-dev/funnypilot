@@ -119,6 +119,70 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.6.9 Changes (based on funnypilot-3.6.8)
+
+Three defects in v3.6.8's dashboard, all reported after the first flash. NO
+CONTROL CODE IS TOUCHED — the longitudinal stack is byte-identical to 3.6.8.
+
+- `sunnypilot/navd/nav_webserver.py` — **THE DASHBOARD WAS UNREACHABLE AFTER
+  JOINING A NETWORK, AND IT IS A STARTUP-ORDER DEFECT.** aiohttp runs every
+  `on_startup` handler TO COMPLETION BEFORE IT BINDS THE PORT.
+  `_start_triage_background` awaited `_boot_snapshot()` -> `_code_identity()`,
+  which is SIX `_sh()` subprocess calls (`git rev-parse` twice, `git status
+  --porcelain`, two `cat`s, a `git rev-parse` into safe_staging) at a 10 s
+  timeout each, plus a SHA-1 of every file in `_FEEL_FILES`. Worst case is
+  about a minute in which NOTHING IS LISTENING on 8888 and the browser simply
+  cannot connect — and joining a network is the worst moment for exactly those
+  calls, because the updater is active and the tree is busy.
+  **THE HANDLER SCHEDULES NOW INSTEAD OF AWAITING.** Measured after: the socket
+  is listening 0.217 s after the module starts importing. `_boot_snapshot` is
+  BACKGROUNDED rather than deleted — it is the code-identity evidence v3.2.7
+  exists for, and trading one diagnosis problem for another is not a fix.
+  THE RULE: **a process whose job is to be reachable must become reachable
+  first.** Diagnostics are what you do once you are serving. Same shape as the
+  `hud/` no-IO-at-import rule, one layer out.
+- Same file — **AND v3.6.8 IS WHY A PRE-EXISTING FRAGILITY TIPPED OVER.** It
+  added `from openpilot.common.swaglog import cloudlog` AT MODULE SCOPE, which
+  is neither cheap nor inert: importing it builds a rotating file handler that
+  `os.listdir`s `/data/log` (`backup_count=2500`) and calls `doRollover()` right
+  there, and stands up a zmq PUSH handler in a process that later `pty.fork()`s
+  for the terminal — the fork-with-a-zmq-context hazard openpilot's own source
+  carries a TODO about. It is imported ON FIRST LOG now, cached, and degraded to
+  stdlib logging if it fails. Pinned by a module-scope import scan.
+- Same file — `_EXECUTOR`'s initializer was a bare `os.nice(10)`. **A
+  ThreadPoolExecutor whose initializer raises becomes permanently BROKEN and
+  every later submission fails**, so one `PermissionError` would have taken out
+  the entire Drives section rather than one scheduling priority. `_nice_worker`
+  cannot raise.
+- `/api/branches` + `nav_web/index.html` — **"Could not list branches: Cannot
+  read properties of undefined (reading 'slice')".** The endpoint returned a
+  BARE ARRAY and the v3.6.8 dashboard read `d.branches`. Server names the field
+  now; the client normalises BOTH shapes, so a half-updated device degrades
+  instead of throwing.
+  **IT IS v3.6.3's HAND-WRITTEN FIXTURE ONE PROCESS BOUNDARY OUT**: a consumer
+  written against the author's memory of a format rather than against the
+  producer, with no test able to see the seam. NEW
+  `TestTheApiShapesTheClientActuallyReads` scans the SHIPPED HTML for the fields
+  it reads and asserts the server emits them.
+- **ON `UpdaterState` READING "idle" — THAT IS NOT A BUG AND NOT NEW.** v3.2.5st
+  made `updated.py` skip the fetch cleanly when the target branch is absent from
+  `origin`'s ls-remote, and on this fork `origin` is sunnypilot upstream while
+  the funnypilot-* branches live on the `funnypilot` remote. So the updater has
+  nothing to check, exits its cycle successfully (deliberately, so
+  `UpdateFailedCount` does not grow and gate engagement) and parks at `idle`.
+  Every funnypilot branch since v3.2.5st has behaved this way. Branch switching
+  is by explicit flash only, which is what the boot guard in
+  `launch_chffrplus.sh` enforces.
+- TESTS: **1151 green**, ruff clean. NEW `TestTheServerBecomesReachableFirst`
+  (7) and `TestTheApiShapesTheClientActuallyReads` (5). SIX guards
+  mutation-tested, all caught.
+  PROCESS NOTE, AND IT IS THE THIRD TIME THIS SESSION: a check for a stale
+  `d.branches` read matched its own explanatory comment. Comments are stripped
+  before any textual scan now — the same lesson as v3.5.8's comment-satisfiable
+  guard and v3.6.6's docstring-breakable one.
+- `FUNNYPILOT_VERSION` -> 3.6.9, `EXPECTED_VERSION` -> "3.6.9", branch
+  `funnypilot-3.6.9`. Two new `_CODE_MARKERS`; all 137 resolve.
+
 ### v3.6.8 Changes (based on funnypilot-3.6.7)
 
 Two halves: three more longitudinal fixes, and the web UI rewritten as a

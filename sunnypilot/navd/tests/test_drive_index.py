@@ -444,3 +444,143 @@ class TestAnEmptyCatalogueExplainsItself:
     for n in range(50):
       os.makedirs(os.path.join(root, f"junk{n}"))
     assert len(di.realdata_status(root)["sample"]) <= 5
+
+
+class TestTheApiShapesTheClientActuallyReads:
+  """FunnyPilot v3.6.9 — the client is a separate file and nothing checked that
+  it and the server agreed.
+
+  `/api/branches` returned a BARE ARRAY while the dashboard read `d.branches`,
+  so the flash modal died with "Cannot read properties of undefined (reading
+  'slice')". No Python test could see it and no JS test existed. This is the
+  same family as v3.6.3's hand-written corner fixture: a consumer tested
+  against the author's memory of a format rather than against the producer.
+
+  These scan the shipped HTML for the fields it reads and assert the server
+  emits them. Crude, but it is the seam that actually broke.
+  """
+
+  def _js(self):
+    import re
+    html = (pathlib.Path(di.__file__).parent / "nav_web" / "index.html").read_text()
+    js = re.findall(r"<script>\n(.*?)</script>", html, re.S)[-1]
+    # Comments are stripped because a guard that its own explanation can
+    # satisfy is not a guard — this file has learned that three times now.
+    return "\n".join(ln for ln in js.splitlines() if not ln.strip().startswith("//"))
+
+  def test_the_page_is_findable(self):
+    assert "api(\"/api/branches\")" in self._js()
+
+  def test_branches_is_normalised_rather_than_assumed(self):
+    js = self._js()
+    assert "Array.isArray(d)" in js, \
+      "the client must tolerate both the bare array and the named field"
+    # ...and it must never index straight into the response again.
+    assert "d.branches.slice" not in js and "d.branches.length" not in js
+
+  def test_the_server_returns_the_named_field(self):
+    import ast
+    src = ast.parse(pathlib.Path(
+      pathlib.Path(di.__file__).parent / "nav_webserver.py").read_text())
+    fn = next(n for n in ast.walk(src)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and n.name == "handle_branches")
+    body = ast.unparse(fn)
+    assert "'branches':" in body or '"branches":' in body
+
+  def test_drives_response_carries_what_the_page_reads(self):
+    import ast
+    js = self._js()
+    src = ast.parse(pathlib.Path(
+      pathlib.Path(di.__file__).parent / "nav_webserver.py").read_text())
+    fn = next(n for n in ast.walk(src)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "handle_drives")
+    body = ast.unparse(fn)
+    for field in ("drives", "status"):
+      assert f"'{field}'" in body or f'"{field}"' in body
+    assert "d.drives" in js and "d.status" in js
+
+
+class TestTheServerBecomesReachableFirst:
+  """FunnyPilot v3.6.9 — the dashboard was unreachable after joining a network.
+
+  aiohttp runs every `on_startup` handler TO COMPLETION BEFORE BINDING THE
+  PORT. v3.6.8's handler awaited `_boot_snapshot()` -> `_code_identity()`,
+  which is six `_sh()` subprocess calls at a 10 s timeout each plus a SHA-1 of
+  every file in `_FEEL_FILES`. Nothing listens on 8888 until that finishes, and
+  right after joining a network is exactly when git and the filesystem are
+  slowest.
+
+  A PROCESS WHOSE JOB IS TO BE REACHABLE MUST BECOME REACHABLE FIRST.
+  Diagnostics are what you do once you are serving.
+  """
+
+  def _fn(self, name):
+    import ast
+    src = ast.parse(pathlib.Path(
+      pathlib.Path(di.__file__).parent / "nav_webserver.py").read_text())
+    fn = next((n for n in ast.walk(src)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name), None)
+    assert fn is not None, f"{name} not found — re-point this guard"
+    return fn
+
+  def test_the_startup_handler_is_findable_and_registered(self):
+    # Anti-vacuous: both halves, so a renamed handler fails loudly.
+    import ast
+    self._fn("_start_triage_background")
+    main = self._fn("main")
+    assert "_start_triage_background" in ast.unparse(main)
+
+  def test_startup_awaits_nothing_expensive(self):
+    """The whole fix, structurally. An `await` on anything but a scheduling
+    call here puts subprocess time in front of the listening socket."""
+    import ast
+    fn = self._fn("_start_triage_background")
+    awaits = [ast.unparse(n.value) for n in ast.walk(fn) if isinstance(n, ast.Await)]
+    assert awaits == [], f"on_startup must schedule, not await: {awaits}"
+
+  def test_the_boot_snapshot_still_happens(self):
+    # It must be BACKGROUNDED, not deleted — it is the code-identity evidence
+    # v3.2.7 exists for. Losing it to fix reachability would be trading one
+    # diagnosis problem for another.
+    import ast
+    body = ast.unparse(self._fn("_start_triage_background"))
+    assert "_boot_snapshot" in body and "_bg(" in body
+
+  def test_nothing_heavy_is_imported_at_module_scope(self):
+    """v3.6.8 imported swaglog out here. That builds a rotating handler which
+    lists /data/log and rotates AT IMPORT, and stands up a zmq context in a
+    process that later `pty.fork()`s. None of it may precede the port."""
+    import ast
+    src = ast.parse(pathlib.Path(
+      pathlib.Path(di.__file__).parent / "nav_webserver.py").read_text())
+    top = set()
+    for node in src.body:
+      if isinstance(node, ast.Import):
+        top |= {a.name for a in node.names}
+      elif isinstance(node, ast.ImportFrom) and node.module:
+        top.add(node.module)
+    banned = {m for m in top if m.startswith(("openpilot.common.swaglog",
+                                              "openpilot.common.params",
+                                              "cereal", "zmq"))}
+    assert not banned, f"heavy module-scope import: {banned}"
+
+  def test_logging_is_reached_through_the_lazy_accessor(self):
+    import ast
+    src = pathlib.Path(pathlib.Path(di.__file__).parent / "nav_webserver.py").read_text()
+    tree = ast.parse(src)
+    # No bare `cloudlog.` calls left behind by the conversion.
+    bare = [ast.unparse(n) for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and getattr(n.value, "id", "") == "cloudlog"]
+    assert not bare, f"still using the module-scope name: {bare}"
+    assert "_log()." in src
+
+  def test_the_executor_initializer_cannot_break_the_pool(self):
+    """A ThreadPoolExecutor whose initializer raises is permanently BROKEN and
+    every later submission fails — the whole Drives section, from one
+    PermissionError on nice()."""
+    from openpilot.sunnypilot.navd import nav_webserver as nw
+    nw._nice_worker()          # must not raise, whatever the platform allows
+    import ast
+    fn = self._fn("_nice_worker")
+    assert any(isinstance(n, ast.Try) for n in ast.walk(fn))

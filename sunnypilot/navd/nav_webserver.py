@@ -23,15 +23,33 @@ from aiohttp import web
 
 from openpilot.sunnypilot.navd import drive_index
 
-# Lazily degraded rather than imported hard: swaglog pulls in zmq, and this
-# module must stay importable (and this process must stay startable) even if
-# the logging stack is unhappy. A dashboard that cannot log is still a
-# dashboard; one that cannot start is a restart loop on a moving car.
-try:
-  from openpilot.common.swaglog import cloudlog
-except Exception:                                        # pragma: no cover
-  import logging
-  cloudlog = logging.getLogger("nav_webserver")
+# ── logging, deliberately lazy (v3.6.9) ─────────────────────────────────────
+#
+# v3.6.8 imported `openpilot.common.swaglog` AT MODULE SCOPE and that was a
+# mistake in a process on the startup path. Importing it is not cheap or inert:
+# it builds a rotating file handler that `os.listdir`s `/data/log` (thousands
+# of files, `backup_count=2500`) and calls `doRollover()` right there, and it
+# stands up a zmq PUSH handler in a process that later `pty.fork()`s for the
+# terminal — the fork-with-a-zmq-context hazard openpilot's own source has a
+# TODO about.
+#
+# None of that may happen before the port is listening, and none of it is
+# needed unless something actually goes wrong. So it is imported ON FIRST LOG,
+# cached, and degraded to stdlib logging if it fails. A dashboard that cannot
+# log is still a dashboard; one that cannot finish importing is a restart loop.
+_CLOUDLOG = None
+
+
+def _log():
+  global _CLOUDLOG
+  if _CLOUDLOG is None:
+    try:
+      from openpilot.common.swaglog import cloudlog as _c
+    except Exception:                                    # pragma: no cover
+      import logging
+      _c = logging.getLogger("nav_webserver")
+    _CLOUDLOG = _c
+  return _CLOUDLOG
 
 REPO = "jgray-dev/funnypilot"
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "nav_web")
@@ -64,7 +82,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.6.8"
+EXPECTED_VERSION = "3.6.9"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -210,6 +228,9 @@ _CODE_MARKERS = [
   # v3.6.8
   ("def _safe_segment_dir", "/data/openpilot/sunnypilot/navd/drive_index.py", "drive path validator"),
   ("def hls_playlist", "/data/openpilot/sunnypilot/navd/drive_index.py", "playback without transcoding"),
+  # v3.6.9
+  ("app[\"triage_boot\"]", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "port opens before housekeeping"),
+  ("def _nice_worker", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "executor initializer cannot break the pool"),
   ("STOP_GOV_DECEL_MIN", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop governor acts on a braking lead"),
   ("STARTING_UPPER_JERK", "/data/openpilot/opendbc_repo/opendbc/sunnypilot/car/hyundai/longitudinal/controller.py", "launch jerk allowance"),
   ("KEEP_BRANCH_SUFFIX", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "flash prunes non-stable branches"),
@@ -433,7 +454,14 @@ async def handle_branches(request: web.Request) -> web.Response:
   try:
     async with aiohttp.ClientSession() as session:
       branches = await _fetch_branches(session)
-    return web.json_response(branches)
+    # v3.6.9 — a NAMED FIELD, not a bare array. The v3.6.8 dashboard read
+    # `d.branches` off a top-level list and threw
+    # "Cannot read properties of undefined (reading 'slice')". `branches` is
+    # kept as the response's own name so the client and the server agree by
+    # construction; the client still tolerates the old bare array, because the
+    # two are separate files and a half-updated device should degrade rather
+    # than break.
+    return web.json_response({"branches": branches, "count": len(branches)})
   except Exception as e:
     return web.json_response({"error": str(e)}, status=500)
 
@@ -741,8 +769,30 @@ async def handle_logs_mark(request: web.Request) -> web.Response:
 
 
 async def _start_triage_background(app: web.Application) -> None:
-  await _boot_snapshot()
+  """FunnyPilot v3.6.9 — SCHEDULE the boot snapshot; never AWAIT it here.
+
+  **THIS IS WHY THE DASHBOARD WAS UNREACHABLE AFTER CONNECTING TO A NETWORK.**
+  aiohttp runs every `on_startup` handler TO COMPLETION BEFORE IT BINDS THE
+  PORT. This one awaited `_boot_snapshot()`, which awaits `_code_identity()`,
+  which is six `_sh()` subprocess calls — `git rev-parse` twice, `git status
+  --porcelain`, two `cat`s and a `git rev-parse` into safe_staging — plus a
+  SHA-1 of every file in `_FEEL_FILES`. Each `_sh` carries a 10 s timeout, so
+  the worst case is about a minute during which nothing is listening on 8888
+  and the browser simply cannot connect.
+
+  Right after joining a network is the worst moment for exactly those calls:
+  the updater is active, the filesystem is busy, and `git status` on this tree
+  is not fast. v3.6.8 then made a pre-existing fragility tip over by adding a
+  module-scope `swaglog` import whose handler lists `/data/log` and rotates
+  before the module finishes importing.
+
+  THE RULE THIS LEAVES BEHIND, and it is the same one `hud/` already has one
+  layer in: **a process whose job is to be reachable must become reachable
+  first.** Diagnostics are what you do once you are serving, not a toll paid
+  before you start.
+  """
   app["triage_pulse"] = asyncio.create_task(_pulse_task())
+  app["triage_boot"] = _bg(_boot_snapshot())
 
 
 async def handle_version(request: web.Request) -> web.Response:
@@ -802,9 +852,19 @@ async def handle_index(request: web.Request) -> web.Response:
 # responsive has the priority backwards.
 # ════════════════════════════════════════════════════════════════════════════
 
+def _nice_worker() -> None:
+  """Drop this worker's priority. NEVER RAISES, and that is the point: a
+  ThreadPoolExecutor whose initializer raises becomes permanently BROKEN, so
+  every later `_run` fails. Losing the nice value costs a little scheduler
+  priority; losing the pool costs the whole Drives section."""
+  try:
+    os.nice(10)
+  except Exception:
+    pass
+
+
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-  max_workers=1, thread_name_prefix="fp-web",
-  initializer=lambda: os.nice(10) if hasattr(os, "nice") else None)
+  max_workers=1, thread_name_prefix="fp-web", initializer=_nice_worker)
 
 
 async def _run(fn, *args):
@@ -849,7 +909,7 @@ async def _never_5xx(request: web.Request, handler):
   except asyncio.CancelledError:
     raise
   except Exception as e:
-    cloudlog.exception("nav_webserver handler failed: %s", request.rel_url)
+    _log().exception("nav_webserver handler failed: %s", request.rel_url)
     return web.json_response({"error": type(e).__name__, "detail": str(e)[:400]}, status=500)
 
 
@@ -863,7 +923,7 @@ def _bg(coro):
     try:
       await coro
     except Exception:
-      cloudlog.exception("nav_webserver background task failed")
+      _log().exception("nav_webserver background task failed")
   return asyncio.ensure_future(wrapper())
 
 
@@ -1134,7 +1194,7 @@ def main():
     web.run_app(app, host="0.0.0.0", port=_PORT, reuse_address=True,
                 handle_signals=True, print=None)
   except Exception:
-    cloudlog.exception("nav_webserver exiting")
+    _log().exception("nav_webserver exiting")
     raise
 
 
