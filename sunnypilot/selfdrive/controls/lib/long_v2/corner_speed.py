@@ -204,6 +204,52 @@ _J_V = (0.0, 96.0, 186.0, 341.0)     # integral of the budget, m^2/s^2
 ARRIVAL_LEAD_T = 5.0
 MAX_LOOKAHEAD_M = 400.0
 
+# ── the exit (v3.7.1) ──────────────────────────────────────────────────────
+#
+# Owner: "the switch when exiting a corner between decel and acceleration is
+# abrupt and jolty ... acceleration should begin a little sooner after the apex
+# of the corner, even if we're still in the corner — we have a lot of breathing
+# room in the exit to begin speeding up sooner."
+#
+# WHAT THE CAP DID. `corner_cap` held EXACTLY `v_corner` from the arrival lead
+# through the apex to the exit point, then released at RELEASE_RATE — 2.5 m/s^2,
+# three times what the car's own accel clip allows at corner speeds. So the
+# target did not so much rise as RUN AWAY, and the demand stepped from "hold"
+# to "the clip" as fast as the jerk shaper permits: half a second, at the exact
+# moment the wheel was still unwinding. That is the jolt, and it was the shape
+# of the envelope rather than a tuning value.
+#
+# WHAT IT DOES NOW. Past the apex the permitted speed rises with the fraction of
+# the exit half already driven, so that at the exit point the car would be
+# pulling (1 + EXIT_LAT_FRAC) of the corner's OWN lateral budget IF the road
+# were still at full curvature there:
+#
+#     v(s)^2 = v_corner^2 * (1 + EXIT_LAT_FRAC * s / half_len)      0 <= s <= half
+#
+# THE BOUND IS A FRACTION OF THE BUDGET, NOT A FIXED RATE, and that is the
+# safety argument. A corner learned as supporting only 1.0 m/s^2 gets a ramp
+# proportionate to 1.0; a corner at the default gets one proportionate to 2.25.
+# A fixed 0.6 m/s^2 rate would have exited a stressed bend at +48% of its learned
+# budget. 0.20 is +9.5% of SPEED at the exit point, and in practice far less
+# lateral than that because the detected extent already includes the road's own
+# easing — which is the "breathing room" the owner is describing.
+#
+# WHAT IT IMPLIES AT THE APEX. dv/dt there is v^2 * f / (2 * half): 0.42 m/s^2
+# for a 29 mph bend 60 m long, 0.56 for a 40 m one — around 70% of the car's
+# accel clip at those speeds. The MPC TRACKS a target moving at that rate
+# instead of saturating against one that has run off, which is the difference
+# between a build and a step. Past the exit RELEASE_RATE takes over from the
+# exit speed, and by then the car is already accelerating, so a target that
+# runs ahead of it changes nothing felt.
+#
+# THIS IS ONE OF THREE PIECES THAT HAD TO MOVE TOGETHER. The turn limit
+# (selfdrive/controls/lib/turn_limit.py) pinned the throttle ceiling at zero for
+# any lateral accel above 1.7 m/s^2 below 20 m/s — under the 2.25 budget, so for
+# the whole arc — and now carries a matching exit allowance keyed on the model
+# path opening ahead. SCC-V's cap needed no change: its corner speed is
+# sqrt(a / k_now) and rises on its own as the measured curvature unwinds.
+EXIT_LAT_FRAC = 0.20
+
 
 def _interp(x: float, bp, v) -> float:
   """np.interp for a monotone table, clamping at both ends. Stdlib so this
@@ -428,21 +474,34 @@ def approach_cap(v_corner: float, distance_m: float) -> float:
   return math.sqrt(v_corner * v_corner + 2.0 * _interp(d_eff, _J_BP, _J_V))
 
 
+def exit_speed(v_corner: float, half_len_m: float) -> float:
+  """The cap at the EXIT POINT of a bend: the corner speed lifted by the exit
+  allowance. v3.7.1. Equals `v_corner` for a bend of unknown extent."""
+  if not finite(v_corner) or v_corner <= 0.0:
+    return 0.0
+  half = float(half_len_m) if (finite(half_len_m) and half_len_m > 0.0) else 0.0
+  return float(v_corner) * math.sqrt(1.0 + EXIT_LAT_FRAC) if half > 0.0 else float(v_corner)
+
+
 def corner_cap(v_corner: float, distance_m: float, half_len_m: float) -> float:
-  """The speed permitted NOW for a whole corner, approach AND run-out. v3.6.5.
+  """The speed permitted NOW for a whole corner, approach, arc AND run-out.
 
   `distance_m` is to the APEX, positive ahead. `half_len_m` is half the length
   of the detected bend, so the arc runs from +half_len (entry) to -half_len
   (exit) in this frame.
 
-  THREE REGIMES, AND THE THIRD IS THE v3.6.5 FIX:
+  FOUR REGIMES. The third is v3.6.5's fix, the second is v3.7.1's:
 
-    ahead of the entry   the integrated approach envelope, `approach_cap`.
-    inside the bend      exactly `v_corner`. The whole arc is at the measured
-                         radius, so the speed limit applies across all of it —
-                         releasing at the apex would ask the car to accelerate
-                         while it is still turning.
-    past the exit        sqrt(v^2 + 2 * RELEASE_RATE * s_past).
+    ahead of the apex    the integrated approach envelope, `approach_cap`,
+                         which is flat at `v_corner` for the last
+                         ARRIVAL_LEAD_T of travel — i.e. through the entry half.
+    apex to exit         `v_corner * sqrt(1 + EXIT_LAT_FRAC * s / half)`, the
+                         exit ramp. See EXIT_LAT_FRAC: acceleration begins AT
+                         the apex, proportionate to the corner's own budget,
+                         so the car is already building speed when the wheel
+                         unwinds instead of stepping to the clip at the exit.
+    past the exit        sqrt(v_exit^2 + 2 * RELEASE_RATE * s_past), from the
+                         exit speed, continuous with the ramp.
 
   WHAT WAS WRONG BEFORE. The cap was `approach_cap(v, max(distance, 0))`, so a
   corner already behind us evaluated to a FLAT `v_corner` right up until
@@ -470,7 +529,10 @@ def corner_cap(v_corner: float, distance_m: float, half_len_m: float) -> float:
   d = float(distance_m)
   if d >= 0.0:
     return approach_cap(v_corner, d)
+  v2 = float(v_corner) * float(v_corner)
   past = -d - half
   if past <= 0.0:
-    return float(v_corner)          # still inside the bend
-  return math.sqrt(v_corner * v_corner + 2.0 * RELEASE_RATE * past)
+    # v3.7.1 — inside the exit half: the ramp. `-d` is how far past the apex.
+    return math.sqrt(v2 * (1.0 + EXIT_LAT_FRAC * (-d) / half))
+  v_exit = exit_speed(v_corner, half)
+  return math.sqrt(v_exit * v_exit + 2.0 * RELEASE_RATE * past)

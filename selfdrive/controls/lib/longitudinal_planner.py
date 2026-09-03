@@ -38,7 +38,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import get_T
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.long_shaping import AccelJerkShaper, LeadGrace, StopGovernor
-from openpilot.selfdrive.controls.lib.turn_limit import limit_accel_in_turns, predicted_lat_accel
+from openpilot.selfdrive.controls.lib.turn_limit import limit_accel_in_turns, predicted_lat_accel, path_opening
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -57,6 +57,8 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 # ceiling at all times, lead or no lead: braking for a slower lead is
 # unaffected (the MPC's lead constraint sits below the ceiling), but a
 # lead can no longer pull the car above the governed speed.
+# v3.7.1: applied to the SET SPEED only, before the speed governors, so it
+# no longer stacks a second 7% on top of every corner cap. See update().
 HIDDEN_CRUISE_OFFSET = 0.93
 
 # Up-jerk (throttle application) by personality, m/s^3
@@ -169,8 +171,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Total (degrades to exactly the pre-v3.5.4 behaviour on any bad data).
     a_y_pred = predicted_lat_accel(sm['modelV2'].orientationRate.z,
                                    sm['modelV2'].velocity.x, v_ego)
+    # v3.7.1: and whether the road is OPENING ahead of us, so the ceiling can
+    # begin to lift from a bend's apex instead of only once the lateral accel
+    # has fallen under the total budget. See turn_limit.EXIT_A_X. Total, like
+    # the term above: 0.0 on any doubt, which is exactly the v3.5.4 behaviour.
+    opening = path_opening(sm['modelV2'].orientationRate.z, sm['modelV2'].velocity.x, v_ego)
     accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip,
-                                      self.CP, a_y_pred)
+                                      self.CP, a_y_pred, opening)
 
     if reset_state:
       self.v_desired_filter.x = v_ego
@@ -204,6 +211,27 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       clipped_accel_coast = max(accel_coast, accel_clip[0])
       clipped_accel_coast_interp = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [accel_clip[1], clipped_accel_coast])
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
+
+    # FunnyPilot v3.7.1 — THE HIDDEN GOVERNOR SHAVES THE SET SPEED, NOT THE
+    # CORNER CAPS. v3.3.3st applied HIDDEN_CRUISE_OFFSET to `v_cruise` AFTER the
+    # speed governors had taken their min(), so every SCC-V/SCC-M corner cap
+    # was being multiplied by 0.93 as well: the dev panel said CAP 30 mph and
+    # the car held 27.9. That is two speed reductions stacked on one corner —
+    # the corner budget and then a second, undocumented 7% — and it is the
+    # opposite of what the v2.0.3 note about this offset says ("lead, SLA, and
+    # map constraints bypass the offset"). It is also part of why "the CAP
+    # values feel fair, but we're rarely ever actually going that speed"
+    # (v3.6.6) — 2 mph of that gap was this line.
+    #
+    # The shave now lands on the CRUISE CANDIDATE, before the governors: the
+    # set speed the driver dialled is held 7% under, exactly as before, and a
+    # corner cap below that is honoured at the number the controller chose. A
+    # cap between the shaved and the dialled speed simply does not bind, since
+    # the car is already under it. SLA is unaffected in speed (its target IS
+    # the cluster, which this shaved before too) and the lead/stop governors
+    # below still see the same ceiling they always did.
+    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
+      v_cruise *= HIDDEN_CRUISE_OFFSET
 
     # Get new v_cruise from Smart Cruise Control, Speed Limit Assist and the speed governor
     v_cruise, self.a_desired = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
@@ -239,14 +267,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     following = self.mpc.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
 
-    # FunnyPilot v3.3.4: apply the hidden governor before the target reaches
-    # the MPC/controls layer, unconditionally. v3.3.3st gated it off while
-    # following a lead, which let the car chase a lead back up to the full
-    # displayed set speed (~7% / up to ~6 mph above the governed ceiling).
-    # The governed v_cruise is a ceiling, not a command: lead braking is
-    # still owned entirely by the MPC's lead constraint.
-    if v_cruise_initialized and not force_slow_decel and v_cruise > 0.0:
-      v_cruise *= HIDDEN_CRUISE_OFFSET
+    # (v3.3.4's application of HIDDEN_CRUISE_OFFSET used to sit here, after the
+    # governors. It moved above `update_targets` in v3.7.1 — see the note there.
+    # Its lead-independence is unchanged: the shave is on the set speed
+    # regardless of whether a lead is tracked.)
 
     # Lead flicker/departure robustness, speed domain only (cap floored at v_ego)
     lead_one = sm['radarState'].leadOne

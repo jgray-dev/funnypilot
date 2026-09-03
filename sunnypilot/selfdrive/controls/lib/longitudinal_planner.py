@@ -58,6 +58,11 @@ class LongitudinalPlannerSP:
     self._speed_governor = SpeedGovernor()
     self._fric = 0.8
     self._scc_map_authority = 0.0
+    # v3.7.1 — SCC-M's cap AS THE GOVERNOR SEES IT (after scc_fusion), for the
+    # MAP pill. The raw ask still goes out on fp_scc / fp_sccdbg beside the
+    # authority that survived; this is the one number that says whether SCC-M
+    # is actually reaching the car.
+    self._v_scc_map_gated = CAP_INACTIVE
     # v3.6.2 — SCC-M v2 watches the car at the carState rate, not the model
     # rate, because the oscillation it is looking for lives at a few Hz and
     # would alias at 20. `update_car_state` below is that hook.
@@ -223,6 +228,7 @@ class LongitudinalPlannerSP:
     asked = max(0.0, v_cruise - self._scc_map_v2.output_v_target)
     got = max(0.0, v_cruise - v_scc_map) if v_scc_map < 999.0 else 0.0
     self._scc_map_authority = min(1.0, got / asked) if asked > 0.1 else 0.0
+    self._v_scc_map_gated = float(v_scc_map)
     v_sla = self.sla.output_v_target if self.sla.is_active else 999.0
 
     # Speed limit info for road cap logic
@@ -291,12 +297,22 @@ class LongitudinalPlannerSP:
     sccVision.active = self._scc_vision_v2.is_active
     sccVision.gasGating = bool(self._scc_vision_v2.gas_gating_active)
     # Map Control (LongV2)
+    #
+    # v3.7.1 — THE PILL IS TOLD WHAT REACHES THE GOVERNOR, NOT WHAT SCC-M ASKED
+    # FOR. `vTarget`/`active` here feed the onroad MAP pill and nothing else,
+    # and the pill's contract (hud/stations.py) is "lit means this source is
+    # governing". Publishing the RAW cap lit it while scc_fusion had vetoed the
+    # cap outright, i.e. while SCC-M had no authority at all — a pill saying
+    # "MAP 42" over a car that was ignoring the map. The raw ask, with the
+    # authority that survived beside it, still goes out on fp_scc and fp_sccdbg
+    # for the minimap marker and the dev panel, which are the readouts that
+    # exist to show the disagreement.
     sccMap = smartCruiseControl.map
     sccMap.state = 0  # disabled placeholder
-    sccMap.vTarget = float(self._scc_map_v2.output_v_target)
+    sccMap.vTarget = float(self._v_scc_map_gated)
     sccMap.aTarget = float(self._scc_map_v2.output_a_target)
     sccMap.enabled = self._scc_map_v2.is_enabled
-    sccMap.active = self._scc_map_v2.is_active
+    sccMap.active = bool(self._scc_map_v2.is_active and self._v_scc_map_gated < CAP_INACTIVE)
     sccMap.gasGating = bool(self._scc_map_v2.gas_gating_active)
     sccMap.cornerRadiusAhead = float(self._scc_map_v2.corner_radius_m)
 
@@ -368,7 +384,12 @@ class LongitudinalPlannerSP:
                        _stop_cap, getattr(self, '_v_cruise_last', 0.0))))
 
     # v3.5.0: the learned corner count + whether it is governing right now.
-    write_learn_shm(self._scc_map_v2.learned_count, self._scc_map_v2.is_active,
+    # v3.7.1 — "governing" means A LEARNED CORNER is governing, which is what
+    # the LRN pill claims. This passed `is_active` alone, so the pill lit for
+    # every SCC-M cap, learned or not, and disagreed with the minimap's own
+    # "LRN" (fp_scc's `learned`, which is `gov_confidence > 0`). One rule now.
+    write_learn_shm(self._scc_map_v2.learned_count,
+                    bool(self._scc_map_v2.is_active and self._scc_map_v2.gov_confidence > 0.0),
                     self._scc_map_v2.gov_confidence)
 
     # v3.7.0: the gap the MPC is holding to, for the onroad follow-distance

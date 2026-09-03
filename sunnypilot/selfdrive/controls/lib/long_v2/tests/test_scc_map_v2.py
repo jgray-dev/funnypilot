@@ -64,6 +64,12 @@ def bend_route(radius=120.0, arc_deg=90.0, lead_in=250.0, node_m=4.0):
   return [(px / M_PER_DEG, py / M_PER_DEG) for px, py in dense]
 
 
+def straight_route(length_m=400.0, behind_m=20.0):
+  """A straight road due north through the origin, ~1 m spacing. A record at
+  (d / M_PER_DEG, 0.0) lies exactly on it, d metres ahead."""
+  return [(x / M_PER_DEG, 0.0) for x in range(-int(behind_m), int(length_m))]
+
+
 def make(points=None, store=None):
   return M.SCCMapV2(params=NoParams(),
                     route_reader=lambda: (points if points is not None else []),
@@ -888,9 +894,12 @@ class TestTheExitHandsAuthorityBack:
 
   def test_the_cap_climbs_as_the_corner_recedes(self):
     """MUTATION: restore `approach_cap(v, max(distance, 0))` in _raw_cap. Every
-    value below becomes exactly v_target and the ordering assertion fails."""
+    value below becomes exactly v_target and the ordering assertion fails.
+    v3.7.1: at the exit point the cap is already the EXIT speed — the ramp from
+    the apex has run — and the release continues from there."""
     caps = [self._past(s)._raw_cap(30.0) for s in (0.0, 10.0, 25.0, 60.0)]
-    assert caps[0] == pytest.approx(13.0)
+    assert caps[0] == pytest.approx(CS.exit_speed(13.0, 20.0))
+    assert caps[0] > 13.0
     assert all(b > a for a, b in zip(caps, caps[1:], strict=False))
 
   def test_the_gate_lets_go_on_the_way_out_too(self):
@@ -909,6 +918,96 @@ class TestTheExitHandsAuthorityBack:
     scc.is_enabled = True
     scc._update_gas_gate(v_ego=27.0, v_cruise=30.0)
     assert scc.gas_gating_active
+
+
+def route_with_tail(radius=100.0, arc_deg=90.0, lead_in=150.0, tail_m=300.0):
+  """bend_route plus a straight run-out heading east after the bend, so a car
+  can be placed PAST the corner and still be on the route."""
+  pts = bend_route(radius=radius, arc_deg=arc_deg, lead_in=lead_in)
+  end_n, end_e = lead_in + radius, radius       # where a 90-degree right-hander ends
+  for t in range(1, int(tail_m)):
+    pts.append((end_n / M_PER_DEG, (end_e + t) / M_PER_DEG))
+  return pts
+
+
+class TestACornerIsListedForAsLongAsItCaps:
+  """v3.7.1 — THE MAP PILL WITH NO CORNER ON THE MINIMAP. The corner left the
+  list BEHIND_KEEP_M past its exit while the cap went on releasing for several
+  seconds; the pill (and the LRN pill) read the cap, the minimap reads the
+  list. A corner now stays listed while its run-out is under the set speed, up
+  to BEHIND_MAX_M, so the two cannot disagree.
+  """
+
+  def _past_the_exit(self, tail_m, v_cruise):
+    """Stand `tail_m` down the straight tail after the bend, heading east. The
+    apex is then roughly (arc/2 + tail_m) behind: 78 + tail_m for this route."""
+    route = route_with_tail()
+    scc = make(route)
+    run(scc, v_ego=20.0, v_cruise=v_cruise, n=1, lat=0.0, lon=0.0, bearing=0.0)
+    assert scc.corners, "fixture: the bend must be found"
+    c = scc.corners[0]
+    run(scc, v_ego=20.0, v_cruise=v_cruise, n=1,
+        lat=250.0 / M_PER_DEG, lon=(100.0 + tail_m) / M_PER_DEG, bearing=90.0)
+    return scc, c
+
+  def test_the_pure_rule(self):
+    """MUTATION: return `d >= -(half + BEHIND_KEEP_M)` only."""
+    keep = M.SCCMapV2._keep_behind
+    v, half = 13.0, 20.0
+    assert keep(50.0, half, v, 30.0)                       # ahead: always
+    assert keep(-(half + M.BEHIND_KEEP_M), half, v, 30.0)  # inside the keep: always
+    # past the keep but the run-out is still under cruise: kept
+    d = -(half + M.BEHIND_KEEP_M + 40.0)
+    assert CS.corner_cap(v, d, half) < 30.0
+    assert keep(d, half, v, 30.0)
+    # ...and NOT kept once the run-out has reached the set speed
+    assert CS.corner_cap(v, d, half) > 20.0
+    assert not keep(d, half, v, 20.0)
+    # ...nor ever beyond the hard bound, however high the set speed
+    assert not keep(-(half + M.BEHIND_MAX_M + 1.0), half, v, 1000.0)
+
+  def test_a_corner_still_capping_stays_on_the_list(self):
+    """MUTATION: drop the `_keep_behind` call from _refresh_corners (i.e. cut
+    at BEHIND_KEEP_M again)."""
+    # 90 m down the tail: the detected extent of this 90-degree arc is ~108 m
+    # each side of the apex, so this is the first probe clear of BEHIND_KEEP_M.
+    scc, c = self._past_the_exit(90.0, v_cruise=30.0)
+    behind = [k for k in scc.corners if k.distance < -(k.half_len + M.BEHIND_KEEP_M)]
+    assert behind, [(k.distance, k.half_len) for k in scc.corners]
+    k = behind[0]
+    assert CS.corner_cap(k.v_target, k.distance, k.half_len) < 30.0
+    # and the cap is real: SCC-M is still active on it
+    assert scc.is_active
+
+  def test_the_geometry_window_reaches_back_far_enough_to_keep_it(self):
+    """THE HALF OF THE SYMPTOM THE KEEP RULE ALONE COULD NOT FIX. The corner
+    list is rebuilt from the route polyline inside `window_around_ego`, and at
+    120 m of behind-window a bend whose apex had passed that far back simply
+    stopped being FOUND — list empty, cap still releasing, pill still lit.
+    The window must reach at least as far back as anything `_keep_behind` can
+    keep. MUTATION: WINDOW_BEHIND_M back to 120."""
+    assert RG.WINDOW_BEHIND_M >= M.BEHIND_MAX_M + 2 * 60.0, (RG.WINDOW_BEHIND_M, M.BEHIND_MAX_M)
+    scc, c = self._past_the_exit(140.0, v_cruise=30.0)   # apex ~220 m behind
+    behind = [k for k in scc.corners if k.distance < -(k.half_len + M.BEHIND_KEEP_M)]
+    assert behind, [(k.distance, k.half_len) for k in scc.corners]
+    assert scc.is_active
+
+  def test_a_corner_whose_run_out_is_done_is_dropped(self):
+    """The same geometry at a set speed the run-out has already reached."""
+    scc, c = self._past_the_exit(90.0, v_cruise=12.0)
+    assert not any(k.distance < -(k.half_len + M.BEHIND_KEEP_M) for k in scc.corners)
+
+  def test_the_gas_gate_and_the_warning_ignore_a_corner_behind(self):
+    """Keeping it listed must not let it gate the throttle or raise the
+    unmanageable warning — both are approach-side questions."""
+    scc, c = self._past_the_exit(90.0, v_cruise=30.0)
+    scc.is_enabled = True
+    scc._update_gas_gate(v_ego=20.0, v_cruise=30.0)
+    assert not scc.gas_gating_active
+    for k in scc.corners:
+      k.unmanageable = True
+    scc._update_warning(20.0)
+    assert not scc.corner_warning
 
 
 def orphan_drive(scc, seconds=4.0, dt=0.01, v=20.0, curvature=0.012,
@@ -996,21 +1095,29 @@ class TestLearnedCornersEnterTheList:
   cap the car however many times it had been measured — and could never show a
   ring on the minimap either, since the ring needs `visits >= 1` on a LISTED
   corner.
+
+  v3.7.1 — AND A RECORD HAS TO BE ON THE ROAD WE ARE ON. The first cut took any
+  record within 400 m whose heading roughly matched ours; that is also a bend
+  on a parallel road, and the car capped for corners the minimap could not
+  show. Records are matched to mapd's route polyline now (STORE_ROUTE_MAX_M),
+  their distance is arc length along it, and their heading is compared with
+  the route's direction where they sit.
   """
 
-  def _seeded(self, d, radius=90.0):
+  def _seeded(self, d, radius=90.0, lon_m=0.0, bearing=0.0):
     tmp = tempfile.TemporaryDirectory()
     s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
-    # a record straight ahead (bearing 0 => north => +lat)
-    s.observe(d / M_PER_DEG, 0.0, 0.0, radius, 2.0, 0.2)
+    # a record ahead (bearing 0 => north => +lat), `lon_m` metres to the side
+    s.observe(d / M_PER_DEG, lon_m / M_PER_DEG, bearing, radius, 2.0, 0.2)
     return s, tmp
 
   def test_a_learned_bend_the_geometry_missed_still_caps(self):
     """MUTATION: delete the `_corners_from_store` call from
-    _refresh_corners."""
+    _refresh_corners. The route is a dead straight: the geometry finds
+    nothing, the store record is what puts a corner in the list."""
     s, tmp = self._seeded(150.0)
     try:
-      scc = make([], store=s)          # NO route at all: geometry finds nothing
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=28.0, v_cruise=28.0, n=5)
       assert scc.corners, "the store must be able to put a corner in the list"
       assert scc.corners[0].visits >= 1
@@ -1025,7 +1132,7 @@ class TestLearnedCornersEnterTheList:
     there."""
     s, tmp = self._seeded(200.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=28.0, v_cruise=28.0, n=3)
       assert any(c.visits >= 1 for c in scc.corners)
     finally:
@@ -1052,12 +1159,93 @@ class TestLearnedCornersEnterTheList:
   def test_a_record_behind_us_is_not_injected(self):
     s, tmp = self._seeded(-150.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(behind_m=300.0), store=s)
       run(scc, v_ego=28.0, v_cruise=28.0, n=3)
       assert not scc.corners
     finally:
       s.join_writes()
       tmp.cleanup()
+
+  # ── v3.7.1: on THIS road ──────────────────────────────────────────────────
+
+  def test_a_record_beside_the_road_is_not_injected(self):
+    """THE REPORTED CASE. A bend on a parallel road 100 m to the side, same
+    heading, 150 m ahead: the old projection put it 150 m ahead ON our road.
+    MUTATION: drop the STORE_ROUTE_MAX_M test."""
+    s, tmp = self._seeded(150.0, lon_m=100.0)
+    try:
+      scc = make(straight_route(), store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=5)
+      assert not scc.corners
+      assert not scc.is_active
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_a_record_a_lane_off_the_centreline_still_counts(self):
+    """GPS accuracy is up to MAX_GPS_ACC_M and OSM ways are centrelines: a real
+    record on our road sits a few metres off the polyline. The bound must not
+    reject it. MUTATION: set STORE_ROUTE_MAX_M under ~12."""
+    s, tmp = self._seeded(150.0, lon_m=8.0)
+    try:
+      scc = make(straight_route(), store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=5)
+      assert scc.corners
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_no_route_means_no_injection(self):
+    """Without a route there is nothing to say which road a record is on.
+    MUTATION: fall back to the along-heading projection when `rs` is empty."""
+    s, tmp = self._seeded(150.0)
+    try:
+      scc = make([], store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=5)
+      assert not scc.corners
+    finally:
+      s.join_writes()
+      tmp.cleanup()
+
+  def test_the_distance_is_arc_length_along_the_route(self):
+    """A record on the far side of a bend is further away BY ROAD than by air.
+    The old projection understated it; the envelope is built on distance, so
+    that was a cap arriving early. MUTATION: use the straight-line projection."""
+    route = bend_route(radius=100.0, arc_deg=90.0, lead_in=150.0)
+    # the geometry finds the bend itself; put the record well past it, on the
+    # route's tail, and out of STORE_DEDUPE_M of the apex
+    tail = route[-1]
+    with tempfile.TemporaryDirectory() as d:
+      s = LS.LearnStore(directory=d, name="corners_v2.jsonl")
+      s.observe(tail[0], tail[1], 90.0, 60.0, 2.0, 0.2)     # heading east at the exit
+      scc = make(route, store=s)
+      run(scc, v_ego=28.0, v_cruise=28.0, n=2)
+      rec = [c for c in scc.corners if c.visits >= 1]
+      assert rec, "the record on the route's tail must be listed"
+      straight = math.hypot(tail[0] * M_PER_DEG, tail[1] * M_PER_DEG)
+      assert rec[0].distance > straight + 15.0, (rec[0].distance, straight)
+      s.join_writes()
+
+  def test_a_records_heading_is_judged_where_it_sits_not_where_we_are(self):
+    """The other carriageway, or the same bend southbound, is a different
+    approach and must not be injected — but the test has to be the ROUTE'S
+    direction at the record, not ours here. Past a 90-degree right-hander the
+    route runs east while we still head north: a record heading east there is
+    ours and must be listed, one heading west is the opposite carriageway.
+    MUTATION: compare the record's heading with OUR bearing — the eastbound
+    record is then 90 degrees off and wrongly rejected."""
+    route = route_with_tail(radius=100.0, arc_deg=90.0, lead_in=150.0, tail_m=120.0)
+    # the tail starts at (250, 100) heading east; put the record 80 m along it
+    rec_lat, rec_lon = 250.0 / M_PER_DEG, 180.0 / M_PER_DEG
+    for heading, expect in ((90.0, True), (270.0, False)):
+      with tempfile.TemporaryDirectory() as d:
+        s = LS.LearnStore(directory=d, name="corners_v2.jsonl")
+        s.observe(rec_lat, rec_lon, heading, 60.0, 2.0, 0.2)
+        scc = make(route, store=s)
+        run(scc, v_ego=28.0, v_cruise=28.0, n=2)
+        listed = any(c.visits >= 1 for c in scc.corners)
+        assert listed == expect, (heading, [(c.distance, c.visits) for c in scc.corners])
+        s.join_writes()
 
 
 class TestTheUnmanageableCornerWarning:
@@ -1085,7 +1273,7 @@ class TestTheUnmanageableCornerWarning:
     """MUTATION: drop the `unmanageable` term from _update_warning."""
     s, tmp = self._at_floor(100.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=25.0, v_cruise=25.0, n=3)
       assert scc.corners and scc.corners[0].unmanageable
       assert scc.corner_warning
@@ -1101,7 +1289,7 @@ class TestTheUnmanageableCornerWarning:
       s = LS.LearnStore(directory=tmp.name, name="corners_v2.jsonl")
       for _ in range(3):
         s.observe(100.0 / M_PER_DEG, 0.0, 0.0, 90.0, 2.4, 0.1)
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=25.0, v_cruise=25.0, n=3)
       assert not scc.corner_warning
       s.join_writes()
@@ -1113,7 +1301,7 @@ class TestTheUnmanageableCornerWarning:
     outright, so without this the first bad sample warns forever."""
     s, tmp = self._at_floor(100.0, visits=1)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=25.0, v_cruise=25.0, n=3)
       assert not scc.corner_warning
     finally:
@@ -1125,7 +1313,7 @@ class TestTheUnmanageableCornerWarning:
     once you are in it is the complaint this exists to fix."""
     s, tmp = self._at_floor(350.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=10.0, v_cruise=25.0, n=3)   # 350 m is 35 s away at 10 m/s
       assert not scc.corner_warning
     finally:
@@ -1139,7 +1327,7 @@ class TestTheUnmanageableCornerWarning:
     stays; only the escalation and the silence end."""
     s, tmp = self._at_floor(100.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=25.0, v_cruise=25.0, n=6)
       assert scc.corner_warning
       assert scc.is_active and scc.output_v_target < 25.0
@@ -1152,7 +1340,7 @@ class TestTheUnmanageableCornerWarning:
     warning that blinks reads as a glitch. MUTATION: drop WARN_MIN_S."""
     s, tmp = self._at_floor(100.0)
     try:
-      scc = make([], store=s)
+      scc = make(straight_route(), store=s)
       run(scc, v_ego=25.0, v_cruise=25.0, n=3)
       assert scc.corner_warning
       # gps_ok=False empties the corner list for real. Clearing `scc.corners` by
@@ -1366,3 +1554,47 @@ class TestATurnIsNotAPass:
                         False, False, 3.0, brake_pressed=True, lat=37.5, lon=-122.0, bearing=90.0)
     c = next(iter(store.corners.values()))
     assert c.a_hi >= hi_before - 1e-9, "a braked pass may not lower an orphan's ceiling"
+
+
+class TestWhatThePillsAreTold:
+  """v3.7.1 — the onroad MAP and LRN pills read `longitudinalPlanSP` and
+  fp_learn, and both were being told something other than what the car was
+  doing. The SP planner imports cereal and cannot be constructed here, so the
+  publish is pinned on the AST like every other planner guard in this repo."""
+
+  def _fn(self, name):
+    import ast
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[2] / "longitudinal_planner.py"
+    tree = ast.parse(src.read_text())
+    return ast.unparse(next(n for n in ast.walk(tree)
+                            if isinstance(n, ast.FunctionDef) and n.name == name))
+
+  def test_the_map_pill_is_told_the_gated_cap_not_the_raw_ask(self):
+    """MUTATION: publish `_scc_map_v2.output_v_target` in `sccMap.vTarget`
+    again and the pill lights while scc_fusion has vetoed the cap."""
+    pub = self._fn("publish_longitudinal_plan_sp")
+    line = next(ln for ln in pub.splitlines() if "sccMap.vTarget =" in ln)
+    assert "_scc_map_v2.output_v_target" not in line, line
+    assert "_v_scc_map_gated" in line
+    active = next(ln for ln in pub.splitlines() if "sccMap.active =" in ln)
+    assert "_v_scc_map_gated" in active
+
+  def test_the_gated_cap_is_the_one_the_governor_was_handed(self):
+    """Anti-vacuous: the attribute is assigned FROM the fusion's output inside
+    update_targets, after gate_map_target has run."""
+    upd = self._fn("update_targets")
+    assert upd.index("gate_map_target(") < upd.index("self._v_scc_map_gated = ")
+    line = next(ln for ln in upd.splitlines() if "self._v_scc_map_gated = " in ln)
+    assert "v_scc_map" in line
+
+  def test_the_lrn_pill_lights_only_for_a_learned_governing_corner(self):
+    """MUTATION: pass `is_active` alone to write_learn_shm and LRN lights for
+    every SCC-M cap, learned or not — and disagrees with the minimap's own LRN
+    (fp_scc's `learned`, which is `gov_confidence > 0`)."""
+    import ast
+    tree = ast.parse(self._fn("publish_longitudinal_plan_sp"))
+    call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and ast.unparse(n.func).endswith("write_learn_shm"))
+    second = ast.unparse(call.args[1])
+    assert "is_active" in second and "gov_confidence" in second, second

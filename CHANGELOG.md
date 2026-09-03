@@ -1,3 +1,22 @@
+FunnyPilot v3.7.1 (2026-09-03)
+========================
+* Follow-distance guide bar: neutral white, no end posts, quieter, shown with
+  or without a lead. A lead INSIDE the line tints it toward red — white to red
+  only, never green.
+* Corner exit: the speed cap rises from the APEX, proportionate to the
+  corner's own lateral budget (EXIT_LAT_FRAC 0.20), instead of holding flat to
+  the exit point and then running away at 2.5 m/s^2. The turn limit gains a
+  matching exit allowance keyed on the model path opening ahead
+  (turn_limit.path_opening, EXIT_A_X 0.6), which was pinning the throttle
+  ceiling at zero for the whole arc of any governed corner.
+* Longitudinal audit: the hidden 0.93 cruise shave no longer stacks on the
+  corner caps (it shaves the set speed only, before the governors); learned
+  corner records are injected only when they lie on mapd's route, by arc
+  length, with their heading judged against the route's direction; a corner
+  stays listed (and on the minimap) for as long as its cap is releasing; the
+  MAP pill reads the cap the governor actually sees and LRN lights only for a
+  learned governing corner.
+
 FunnyPilot v3.6.2 (2026-08-07)
 ========================
 SCC-M is rewritten. It no longer asks anyone how fast a bend can be taken --

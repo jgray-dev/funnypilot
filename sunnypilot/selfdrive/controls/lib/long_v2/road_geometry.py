@@ -152,7 +152,11 @@ R_TRIM_HI_M = 120.0
 # the car rather than a position in someone else's array.
 MAX_POINTS = 2000     # hard bound on how much of the input array we will walk
 WINDOW_AHEAD_M = 500.0    # comfortably past MAX_LOOKAHEAD_M so the tail is real
-WINDOW_BEHIND_M = 120.0   # enough for a corner being traversed to stay whole
+# v3.7.1: 120 -> 300. It has to cover a corner whose apex is BEHIND_MAX_M back
+# plus that corner's whole extent, or the corner list loses a bend whose cap is
+# still releasing (scc_map_v2.BEHIND_MAX_M). 500 + 300 m at RESAMPLE_M is 200
+# vertices, half the MAX_VERTICES budget, so nothing ahead is truncated.
+WINDOW_BEHIND_M = 300.0
 MAX_VERTICES = 400    # bound on the resampled profile
 
 M_PER_DEG = 111320.0
@@ -428,6 +432,45 @@ def find_corners(rs, kappa, turns=None, r_max: float = R_MAX_M,
   return out
 
 
+def route_frame(points, lat0: float, lon0: float, bearing_deg: float):
+  """[(lat, lon), ...] -> (rs, s_ego): the route as a UNIFORMLY RESAMPLED
+  local polyline `[(s, fwd, right), ...]` around the car, and the arc position
+  of the vertex nearest the car. v3.7.1 — split out of `corners_from_route` so
+  SCC-M v2 can ask a second question of the same polyline: is a learned
+  record actually ON this road, and how far along it is it.
+
+  THE EGO POSITION IS TAKEN FROM THE UNSMOOTHED POLYLINE. Smoothing pulls the
+  line off the road by up to a lane width through a bend, and the whole point
+  of s_ego is where WE are on it. Never raises: `([], 0.0)` on any doubt.
+  """
+  try:
+    if not points or len(points) < 3:
+      return [], 0.0
+    xy = to_local(points[:MAX_POINTS], lat0, lon0, bearing_deg)
+    xy = window_around_ego(xy)
+    rs = resample(xy)
+    if len(rs) < 3:
+      return [], 0.0
+    s_ego = min(rs, key=lambda p: p[1] * p[1] + p[2] * p[2])[0]
+    return rs, s_ego
+  except Exception:
+    return [], 0.0
+
+
+def corners_from_rs(rs):
+  """[RoadCorner] from an already-resampled local polyline (see route_frame).
+  Never raises."""
+  try:
+    if len(rs) < 3:
+      return []
+    sm = smooth_polyline(rs)
+    turns = turn_prefix(sm)
+    kap = curvature_profile(sm, RESAMPLE_M, WINDOW_M, turns)
+    return find_corners(sm, kap, turns)
+  except Exception:
+    return []
+
+
 def corners_from_route(points, lat0: float, lon0: float, bearing_deg: float):
   """The whole pipeline: [(lat, lon), ...] -> ([RoadCorner], s_ego).
 
@@ -439,21 +482,7 @@ def corners_from_route(points, lat0: float, lon0: float, bearing_deg: float):
   Never raises: any input it cannot make sense of yields no corners, which
   makes every consumer a no-op.
   """
-  try:
-    if not points or len(points) < 3:
-      return [], 0.0
-    xy = to_local(points[:MAX_POINTS], lat0, lon0, bearing_deg)
-    xy = window_around_ego(xy)
-    rs = resample(xy)
-    if len(rs) < 3:
-      return [], 0.0
-    # THE EGO POSITION IS TAKEN FROM THE UNSMOOTHED POLYLINE. Smoothing pulls
-    # the line off the road by up to a lane width through a bend, and the whole
-    # point of s_ego is where WE are on it.
-    s_ego = min(rs, key=lambda p: p[1] * p[1] + p[2] * p[2])[0]
-    sm = smooth_polyline(rs)
-    turns = turn_prefix(sm)
-    kap = curvature_profile(sm, RESAMPLE_M, WINDOW_M, turns)
-    return find_corners(sm, kap, turns), s_ego
-  except Exception:
+  rs, s_ego = route_frame(points, lat0, lon0, bearing_deg)
+  if not rs:
     return [], 0.0
+  return corners_from_rs(rs), s_ego
