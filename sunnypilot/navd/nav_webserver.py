@@ -421,6 +421,50 @@ async def handle_diagnostics(request: web.Request) -> web.Response:
     return web.json_response({"error": str(e)}, status=500)
 
 
+# ── branch ordering (v3.7.0) ────────────────────────────────────────────────
+#
+# THE LIST IS SORTED BY VERSION, NOT BY COMMIT DATE, and the reason is worth
+# recording. The first version fetched every branch's commit to read its date
+# and sorted on that. Unauthenticated GitHub allows 60 requests an hour; with
+# this many branches, two opens of the flash modal exhaust it, a rate-limited
+# date fetch returns "", and "" sorts to the BOTTOM of a descending sort. So
+# whichever branch happened to be refused sank — reported as 3.7.0, the newest,
+# at the foot of the list. The order was not wrong, it was random.
+#
+# Version order is the owner's own convention, is deterministic, and costs no
+# requests at all. Dates are still fetched — best-effort, for the FIRST few
+# rows only, and never as a sort key — because they are useful to read and
+# bounded at DATE_FETCH_N requests the limit can comfortably absorb.
+_VER_RE = re.compile(r"^funnypilot-(\d+)\.(\d+)\.(\d+)([a-z]*)$")
+DATE_FETCH_N = 12
+
+
+def version_key(name: str):
+  """A sort key that puts the newest FunnyPilot branch first under `reverse=True`.
+
+  `funnypilot-3.7.0` > `funnypilot-3.6.9`, and a suffixed cut sorts newer than
+  its bare version (`3.2.3st` is a stable cut MADE AFTER 3.2.3). Anything that
+  does not match the convention sorts below everything that does, then
+  alphabetically, so a stray branch can never displace a real release.
+  """
+  m = _VER_RE.match(name or "")
+  if not m:
+    return (0, 0, 0, 0, name or "")
+  major, minor, patch, suffix = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+  # The suffix string alone orders a bare version below its cuts: "" sorts
+  # below any non-empty string. A first draft also carried a `1 if suffix else
+  # 0` element, and a mutation that zeroed it survived every test — because it
+  # was EQUIVALENT, not because a guard was missing. It is gone rather than
+  # guarded; the v3.6.2 rule is to record an equivalence, not manufacture a
+  # test for a term that cannot change an answer.
+  return (1, major, minor, patch, suffix)
+
+
+def sort_branches(names):
+  """Newest release first. Pure; the endpoint and the tests share it."""
+  return sorted(names, key=version_key, reverse=True)
+
+
 async def _fetch_branches(session: aiohttp.ClientSession):
   branches = []
   page = 1
@@ -437,24 +481,24 @@ async def _fetch_branches(session: aiohttp.ClientSession):
         break
       page += 1
 
-  # Filter to funnypilot-* branches, then fetch commit dates concurrently
-  fp_branches = [b for b in branches if b["name"].startswith("funnypilot-")]
+  fp = {b["name"]: b for b in branches if b["name"].startswith("funnypilot-")}
+  ordered = sort_branches(fp.keys())
 
-  async def get_date(branch):
-    commit_url = branch["commit"]["url"]
+  async def get_date(name):
     try:
-      async with session.get(commit_url, headers={"Accept": "application/vnd.github+json"}) as r:
+      async with session.get(fp[name]["commit"]["url"],
+                             headers={"Accept": "application/vnd.github+json"}) as r:
         if r.status == 200:
           c = await r.json()
-          date = c.get("commit", {}).get("committer", {}).get("date", "")
-          return branch["name"], date
+          return c.get("commit", {}).get("committer", {}).get("date", "")
     except Exception:
       pass
-    return branch["name"], ""
+    return ""
 
-  results = await asyncio.gather(*[get_date(b) for b in fp_branches])
-  sorted_branches = sorted(results, key=lambda x: x[1], reverse=True)
-  return [{"name": name, "date": date} for name, date in sorted_branches]
+  # Dates for the head of the list only, and they decorate — they do not sort.
+  head = ordered[:DATE_FETCH_N]
+  dates = dict(zip(head, await asyncio.gather(*[get_date(n) for n in head]), strict=True))
+  return [{"name": n, "date": dates.get(n, "")} for n in ordered]
 
 
 async def handle_branches(request: web.Request) -> web.Response:

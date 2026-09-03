@@ -268,6 +268,22 @@ does with the car is different.
     passed. A total function that swallows its exceptions hides exactly this;
     the pattern of "all recording dead, all capping fine" is the tell.
   * Three new `_CODE_MARKERS`; all 143 resolve.
+- **THIRD PASS, SAME VERSION — THE FLASH LIST WAS SORTED BY A RATE LIMIT.**
+  Owner: "3.7.0 showed at the bottom of the list, even though it's technically
+  the most recent branch". `sunnypilot/navd/nav_webserver.py` sorted branches
+  by a per-branch GitHub commit date — one API request PER BRANCH, against an
+  unauthenticated limit of 60/hour. Two opens of the modal exhaust it; a refused
+  fetch returned `""`, and `""` sorts to the BOTTOM of a descending sort. The
+  order was not wrong, it was random, and the newest branch simply drew the
+  refused request. NEW `version_key` / `sort_branches`: the owner's own
+  numbering, numeric not lexical (3.6.10 > 3.6.9), a suffixed cut newer than
+  its bare version (`3.2.3st` is made AFTER 3.2.3), strays below every real
+  release. Dates are fetched for the first `DATE_FETCH_N` 12 rows only and
+  DECORATE; they can blank, never reorder. `TestBranchesAreOrderedByVersion`
+  (5); four mutations run — three caught, one EQUIVALENT: a `1 if suffix else
+  0` key element survived being zeroed because the suffix STRING beside it
+  already orders bare below cut (`""` sorts below any non-empty string). The
+  redundant element was removed rather than guarded, per the v3.6.2 rule.
 - `FUNNYPILOT_VERSION` -> 3.7.0, `EXPECTED_VERSION` -> "3.7.0", branch
   `funnypilot-3.7.0`. Six new `_CODE_MARKERS` across both passes; all 143 resolve.
 - ON-ROAD VERIFICATION: (1) behind a lead at steady speed the chevron should

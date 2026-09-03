@@ -584,3 +584,56 @@ class TestTheServerBecomesReachableFirst:
     import ast
     fn = self._fn("_nice_worker")
     assert any(isinstance(n, ast.Try) for n in ast.walk(fn))
+
+
+class TestBranchesAreOrderedByVersion:
+  """v3.7.0 — the flash list sorted by a per-branch GitHub commit date, and an
+  unauthenticated rate limit turned failed fetches into "" which sank to the
+  bottom of a descending sort. 3.7.0, the newest branch, showed last.
+  Version order is deterministic and costs no requests."""
+
+  def _nw(self):
+    from openpilot.sunnypilot.navd import nav_webserver as nw
+    return nw
+
+  def test_the_reported_case(self):
+    nw = self._nw()
+    got = nw.sort_branches(["funnypilot-3.6.9", "funnypilot-3.7.0", "funnypilot-3.6.8",
+                            "funnypilot-3.6.10"])
+    assert got[0] == "funnypilot-3.7.0"
+    # numeric, not lexical: 3.6.10 is newer than 3.6.9
+    assert got.index("funnypilot-3.6.10") < got.index("funnypilot-3.6.9")
+
+  def test_a_suffixed_cut_sorts_newer_than_its_bare_version(self):
+    # 3.2.3st is the stable cut made AFTER 3.2.3.
+    nw = self._nw()
+    got = nw.sort_branches(["funnypilot-3.2.3", "funnypilot-3.2.3st", "funnypilot-3.2.4e"])
+    assert got == ["funnypilot-3.2.4e", "funnypilot-3.2.3st", "funnypilot-3.2.3"]
+
+  def test_a_stray_branch_can_never_displace_a_release(self):
+    nw = self._nw()
+    got = nw.sort_branches(["funnypilot-zzz", "funnypilot-3.0.1", "funnypilot-experimental"])
+    assert got[0] == "funnypilot-3.0.1"
+
+  def test_the_order_cannot_depend_on_a_date_fetch(self):
+    """MUTATION: sort on date again. The order must be fully determined before
+    any network request is made, so a rate limit can only ever blank a date,
+    never move a row."""
+    import ast
+    src = ast.parse(pathlib.Path(self._nw().__file__).read_text())
+    fn = next(n for n in ast.walk(src)
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "_fetch_branches")
+    body = ast.unparse(fn)
+    assert "sort_branches(" in body
+    assert "sorted(results" not in body and "key=lambda x: x[1]" not in body
+
+  def test_date_requests_are_bounded(self):
+    # The rate limit is 60/hour unauthenticated; the whole point is to stay
+    # far under it however many branches exist.
+    nw = self._nw()
+    assert 0 < nw.DATE_FETCH_N <= 15
+    import ast
+    src = ast.parse(pathlib.Path(nw.__file__).read_text())
+    fn = next(n for n in ast.walk(src)
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "_fetch_branches")
+    assert "[:DATE_FETCH_N]" in ast.unparse(fn)
