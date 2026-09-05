@@ -68,6 +68,102 @@ def snapshot(sm, now):
   return row
 
 
+RETRY_S = 5.0
+
+
+def report_socket():
+  sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+  try:
+    try:
+      os.unlink(P.SOCKET)
+    except FileNotFoundError:
+      pass
+    sock.bind(P.SOCKET)
+    os.chmod(P.SOCKET, 0o600)
+    sock.setblocking(False)
+    return sock
+  except BaseException:
+    sock.close()
+    raise
+
+
+def failure_status(cmd, now, message):
+  # A full filesystem must not make the error-reporting path fail too.
+  try:
+    P.atomic_json(P.STATUS, {'id':cmd.get('id', '') if isinstance(cmd, dict) else '',
+                             'saved':False, 'message':message, 't':now})
+  except OSError:
+    pass
+
+
+class CaptureLoop:
+  """Retry unavailable capture IO, not the control loop or the upload worker."""
+  def __init__(self, log_root, code_identity, logger):
+    self.log_root, self.code_identity, self.logger = log_root, code_identity, logger
+    self.capture = self.sock = None
+    self.pending_report = None
+    self.retry_at = self.last_sample = 0.0
+
+  def tick(self, now, sample, route):
+    if now < self.retry_at:
+      return
+    cmd = None
+    try:
+      if self.capture is None:
+        self.capture = Capture(log_root=self.log_root, identity=self.code_identity)
+      if self.sock is None:
+        self.sock = report_socket()
+      if self.pending_report is not None:
+        cmd, current_route, accepted_at = self.pending_report
+        # Only a request that passed Capture's freshness check can get here.
+        # Retrying its IO is not a newly arrived (now stale) user command.
+        self.capture.report(cmd, current_route, accepted_at)
+        self.pending_report = None
+        cmd = None
+      if sample is not None and now - self.last_sample >= .01:
+        self.capture.sample(sample())
+        self.last_sample = now
+      # Bound work per tick even if a broken client floods the socket.
+      for _ in range(8):
+        try:
+          raw = self.sock.recv(2048)
+        except BlockingIOError:
+          break
+        except OSError:
+          self.sock.close()
+          self.sock = None
+          raise
+        cmd = {}
+        try:
+          cmd = json.loads(raw)
+          current_route = route() or ''
+          if isinstance(current_route, bytes):
+            current_route = current_route.decode()
+          try:
+            self.capture.report(cmd, current_route, now)
+          except OSError:
+            self.pending_report = (cmd, current_route, now)
+            raise
+        except (ValueError, TypeError) as e:
+          failure_status(cmd, now, str(e)[:120])
+        cmd = None
+      self.capture.finish(now)
+    except (OSError, ValueError):
+      # Keep the Capture object and durable queue. A retry must not recover our
+      # own active reports as if the process had restarted, or discard labels.
+      self.retry_at = now + RETRY_S
+      if self.capture is not None:
+        for event in self.capture.active.values():
+          event['capture_interrupted'] = True
+      if cmd is not None:
+        failure_status(cmd, now, 'Feedback storage unavailable; save not confirmed. Retrying.')
+      self.logger.exception('feedback capture unavailable; retrying')
+
+  def close(self):
+    if self.sock is not None:
+      self.sock.close()
+
+
 def main():
   import cereal.messaging as messaging
   from cereal import log
@@ -75,26 +171,22 @@ def main():
   from openpilot.system.hardware.hw import Paths
   from openpilot.common.swaglog import cloudlog
 
-  os.nice(10)
+  try:
+    os.nice(10)
+  except OSError:
+    cloudlog.exception('feedback scheduling priority unavailable')
   params = Params()
-  capture = Capture(log_root=Paths.log_root(), identity=identity(Path(__file__).resolve().parents[2]))
+  capture_loop = CaptureLoop(Paths.log_root(), identity(Path(__file__).resolve().parents[2]), cloudlog)
   sm = messaging.SubMaster(['carState','controlsState','longitudinalPlan','deviceState','selfdriveState',
                            'liveTorqueParameters','carControl','radarState','longitudinalPlanSP','liveCalibration',
                            'onroadEvents','onroadEventsSP'], poll='carState')
-  sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-  try:
-    os.unlink(P.SOCKET)
-  except FileNotFoundError:
-    pass
-  sock.bind(P.SOCKET)
-  os.chmod(P.SOCKET, 0o600)
-  sock.setblocking(False)
   upload_allowed = False
   pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='feedback-upload')
   future = None
-  last_sample = next_upload = 0.0
+  next_upload = 0.0
 
   def upload_queued():
+    capture = capture_loop.capture
     config = P.read_json(str(capture.root / 'cloud.json'), {})
     if not config.get('token'):
       return
@@ -118,40 +210,20 @@ def main():
       upload_allowed = (sm.valid['deviceState'] and sm.alive['deviceState'] and
                         not sm['deviceState'].started and
                         sm['deviceState'].networkType == log.DeviceState.NetworkType.wifi)
-      if sm.updated['carState'] and now - last_sample >= .01:
-        try:
-          capture.sample(snapshot(sm, now))
-        except Exception:
-          cloudlog.exception('feedback sample unavailable')
-        last_sample = now
-      # Bound work per tick even if a broken client floods the socket.
-      for _ in range(8):
-        try:
-          raw = sock.recv(2048)
-        except BlockingIOError:
-          break
-        cmd = {}
-        try:
-          cmd = json.loads(raw)
-          route = params.get('CurrentRoute') or ''
-          if isinstance(route, bytes):
-            route = route.decode()
-          capture.report(cmd, route, now)
-        except Exception as e:
-          P.atomic_json(P.STATUS, {'id':cmd.get('id') if isinstance(cmd, dict) else '', 'saved':False,
-                                   'message':str(e)[:120], 't':now})
-      capture.finish(now)
+      capture_loop.tick(now, (lambda now=now: snapshot(sm, now)) if sm.updated['carState'] else None,
+                        lambda: params.get('CurrentRoute'))
       if future is not None and future.done():
         try:
           future.result()
         except Exception:
           cloudlog.exception('feedback upload worker failed')
         future = None
-      if upload_allowed and future is None and now >= next_upload:
+      if upload_allowed and capture_loop.capture is not None and future is None and now >= next_upload:
         future = pool.submit(upload_queued)
         next_upload = now + 60
   finally:
-    sock.close()
+    upload_allowed = False
+    capture_loop.close()
     pool.shutdown(wait=False, cancel_futures=True)
 
 

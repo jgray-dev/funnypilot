@@ -143,7 +143,9 @@ class SelfdriveD(CruiseHelper):
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
-    self.ignored_processes = {'mapd', }
+    # Optional capture must not refuse engagement or soft-disable a drive when
+    # its storage/socket fails. Manager still supervises and logs the process.
+    self.ignored_processes = {'mapd', 'funnypilot_feedback'}
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote

@@ -1,3 +1,21 @@
+FunnyPilot v3.7.2 (2026-09-05)
+============================
+* Fix a 3.7.1a engagement regression: failure of the optional feedback recorder
+  no longer raises processNotRunning or soft-disables driving. Manager still
+  supervises/logs it; required control, camera and calibration checks remain.
+* Retry recorder storage/socket failures at five-second intervals, preserve
+  accepted requests and pending captures, and tolerate failed error-status writes.
+  Labels, corner rules and queued state advance only after their required writes.
+  Partial telemetry is marked interrupted; artifact retries preserve collected data.
+* Includes 3.7.1b's camera-viewport correction and visible engagement blockers.
+  The viewport defect predates 3.7.1a and is not a calibration-estimator failure.
+* Condense CLAUDE.md to essential rules and current-version notes; historical
+  detail remains in Git. The fork's master branch becomes a single-file version
+  directory. Git pushes are pre-authorized; device deployment remains separate.
+* No controller retuning, calibration reset, schema changes or device flash.
+  The recorder failure is reproduced with injected storage faults; the owner's
+  actual refusal remains unconfirmed without device logs (SSH unreachable).
+
 FunnyPilot v3.7.1b (2026-09-05)
 =============================
 * Fix C3X camera/overlay alignment: camera video and projected lane/path

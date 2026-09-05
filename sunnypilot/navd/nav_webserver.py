@@ -11,6 +11,7 @@ import os
 import pty
 import fcntl
 import re
+import shlex
 import termios
 import time
 import struct
@@ -68,6 +69,9 @@ _PULSE_PERIOD_S = 600  # code-identity pulse every 10 min, catches mid-parked sw
 _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
 _FEEL_FILES = [
+  "/data/openpilot/selfdrive/selfdrived/selfdrived.py",
+  "/data/openpilot/sunnypilot/feedback/feedbackd.py",
+  "/data/openpilot/sunnypilot/feedback/capture.py",
   "/data/openpilot/sunnypilot/feedback/corner_feedback.py",
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
   "/data/openpilot/selfdrive/controls/lib/knot_filter.py",
@@ -92,7 +96,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.1b"
+EXPECTED_VERSION = "3.7.2"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -343,9 +347,12 @@ _CODE_MARKERS = [
   ("def model_overlay_ready", "/data/openpilot/selfdrive/ui/onroad/model_status.py", "calibrated model overlay readiness"),
   ("def availability_message", "/data/openpilot/selfdrive/ui/onroad/availability.py", "blocking faults visible without an engage request"),
   ("super()._render(self._content_rect)", "/data/openpilot/selfdrive/ui/onroad/augmented_road_view.py", "camera and lane projection share viewport"),
+  ("Optional capture must not refuse engagement", "/data/openpilot/selfdrive/selfdrived/selfdrived.py", "feedback health does not gate driving"),
+  ("class CaptureLoop", "/data/openpilot/sunnypilot/feedback/feedbackd.py", "bounded capture IO recovery"),
+  ("candidate = dict(event, state=", "/data/openpilot/sunnypilot/feedback/capture.py", "retryable capture finalization"),
 ]
 _CODE_CMD = "; ".join(
-  f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
+  f"grep -Fqs -- {shlex.quote(pat)} {shlex.quote(path)} && echo {shlex.quote('ok       ' + label)} || echo {shlex.quote('MISSING  ' + label)}"
   for pat, path, label in _CODE_MARKERS
 )
 
