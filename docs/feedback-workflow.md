@@ -13,6 +13,8 @@ software commit/branch/version/dirty state, controller and actuator samples,
 lead/governor data, torque parameters, and the matching steering triage lines.
 Samples also include calibration status/progress/angles and the exact selfdrive
 alert type/text, including refusal reasons that older UI versions hid.
+From 3.7.1b, `blocking_events` includes stock and MADS fault names even when
+the state machine selected no popup; check each stream's recorded validity.
 The enclosing road-video (`qcamera.ts`) and decimated-log (`qlog.zst`) minute
 segments are included without transcoding. Missing or oversized artifacts are
 listed in the manifest. Cabin video, audio, credentials and unrelated drives

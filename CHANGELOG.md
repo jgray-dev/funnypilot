@@ -1,3 +1,18 @@
+FunnyPilot v3.7.1b (2026-09-05)
+=============================
+* Fix C3X camera/overlay alignment: camera video and projected lane/path
+  geometry now use the same inner viewport. Previously the video used the
+  outer rectangle, creating a scale/position mismatch despite calibration.
+  Projection caching also follows viewport position changes.
+* Show blocked engagement and calibration/process-health messages even when
+  no engage-button event reaches the state machine and no popup is selected.
+  Stock and MADS blocking events are both consulted. Selected faults and
+  takeover alerts retain priority; only routine turn/speed notices stay quiet.
+* Draw faults above the camera clipping and HUD layers. Report capture yields
+  to these actual visible alerts. Feedback logs include all blocking events.
+* Carries all 3.7.1a changes. No engagement bypass or calibration reset.
+  The owner's device-specific refusal still requires logs or parked access.
+
 FunnyPilot v3.7.1a (2026-09-05)
 =============================
 Includes funnypilot-3.7.1 at 44f14a6af, merged into the existing 3.7.1a work.

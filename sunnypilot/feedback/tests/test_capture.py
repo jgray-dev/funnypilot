@@ -111,7 +111,9 @@ def test_snapshot_uses_real_cereal_fields():
       'longitudinalPlan':log.LongitudinalPlan.new_message(), 'liveTorqueParameters':log.LiveTorqueParametersData.new_message(),
       'carControl':car.CarControl.new_message(), 'radarState':log.RadarState.new_message(),
       'longitudinalPlanSP':custom.LongitudinalPlanSP.new_message(),
-      'selfdriveState':log.SelfdriveState.new_message(), 'liveCalibration':log.LiveCalibrationData.new_message()}
+      'selfdriveState':log.SelfdriveState.new_message(), 'liveCalibration':log.LiveCalibrationData.new_message(),
+      'onroadEvents':[log.OnroadEvent.new_message(name='selfdriveInitializing',noEntry=True)],
+      'onroadEventsSP':custom.OnroadEventSP.new_message(events=[{'name':'silentBrakeHold','noEntry':True}])}
   sm['selfdriveState'].alertType = 'calibrationIncomplete/noEntry'
   sm['selfdriveState'].alertText2 = 'Calibration in Progress'
   sm['liveCalibration'].calStatus = 'uncalibrated'
@@ -123,6 +125,7 @@ def test_snapshot_uses_real_cereal_fields():
   assert result['desired_curvature']==0 and 'lateral' in result
   assert result['selfdrive']['alert_type'] == 'calibrationIncomplete/noEntry'
   assert result['calibration']['status'] == 'uncalibrated'
+  assert result['blocking_events'] == {'onroadEvents':['selfdriveInitializing'], 'onroadEventsSP':['silentBrakeHold']}
   json.dumps(result,allow_nan=False)
 
 

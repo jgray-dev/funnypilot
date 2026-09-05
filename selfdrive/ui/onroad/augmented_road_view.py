@@ -97,7 +97,9 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     )
 
     # Render the base camera view
-    super()._render(rect)
+    # The normalization in _calc_frame_matrix uses the inner viewport. Drawing
+    # video into the outer rectangle magnifies/translates it relative to lanes.
+    super()._render(self._content_rect)
 
     # Draw all UI overlays
     geometry_ready = model_overlay_ready(ui_state.sm, ui_state.started_frame)
@@ -116,7 +118,6 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # sky; both go under the HUD so no readout is dimmed by them.
     self._draw_edge_treatment()
     self._hud_renderer.render(self._content_rect)
-    self.alert_renderer.render(self._content_rect)
     # FunnyPilot v3.5.1: no driver-monitoring face. Driver monitoring is
     # disabled on this fork (selfdrive/monitoring/helpers.py sets 24 h
     # timeouts, and selfdrived does not subscribe to driverMonitoringState),
@@ -134,6 +135,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     # Draw colored border based on driving state
     self._draw_border(rect)
+    # Faults are the final layer, outside the camera scissor and all HUD chrome.
+    self.alert_renderer.render(self._content_rect)
 
     # publish uiDebug
     msg = messaging.new_message('uiDebug')
@@ -230,6 +233,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # Check if we can use cached matrix
     cache_key = (
       ui_state.sm.recv_frame['liveCalibration'],
+      self._content_rect.x,
+      self._content_rect.y,
       self._content_rect.width,
       self._content_rect.height,
       self.stream_type

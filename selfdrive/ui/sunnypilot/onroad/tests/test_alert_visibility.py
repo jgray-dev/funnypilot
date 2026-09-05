@@ -6,6 +6,7 @@ from types import SimpleNamespace as NS
 import pytest
 from cereal import log
 from openpilot.selfdrive.ui.onroad.model_status import model_overlay_ready
+from openpilot.selfdrive.ui.onroad.availability import availability_message
 
 ROOT = Path(__file__).resolve().parents[5]
 
@@ -18,7 +19,7 @@ def selector():
   method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'get_alert')
   # Only graphics/IPC surroundings are substituted. Run the method from disk,
   # including its stale-message and watchdog paths, not a copy of the filter.
-  scope = {'log':log, 'Alert':NS, 'AlertStatus':log.SelfdriveState.AlertStatus,
+  scope = {'availability_message':availability_message, 'log':log, 'Alert':NS, 'AlertStatus':log.SelfdriveState.AlertStatus,
            'AlertSize':log.SelfdriveState.AlertSize, 'QUIET_ALERT_TYPES':frozenset(ast.literal_eval(quiet)),
            'gui_app':NS(sunnypilot_ui=lambda:True), 'ui_state':NS(started_frame=10, started_time=90),
            'time':NS(monotonic=lambda:100), 'TICI':True,
@@ -41,8 +42,10 @@ class Signals(dict):
 
 def signal(kind, status='normal', size='mid'):
   state = log.SelfdriveState.new_message(alertType=kind, alertStatus=status, alertSize=size,
-                                       alertText1='openpilot Unavailable', alertText2='Specific reason')
-  return Signals(selfdriveState=state)
+                                       alertText1='openpilot Unavailable', alertText2='Specific reason', engageable=True)
+  return Signals(selfdriveState=state, liveCalibration=log.LiveCalibrationData.new_message(calStatus='calibrated',rpyCalib=[0,0,0]),
+                 modelV2=log.ModelDataV2.new_message(), controlsState=log.ControlsState.new_message(),
+                 longitudinalPlan=log.LongitudinalPlan.new_message())
 
 
 @pytest.mark.parametrize('kind', [
@@ -110,3 +113,67 @@ def test_readiness_gates_both_model_and_follow_distance_projection():
   bodies = '\n'.join(ast.unparse(n) for gate in gates for n in gate.body)
   assert 'self.model_renderer.render(' in bodies
   assert 'self._follow_line.draw' in bodies
+
+
+def test_no_selected_popup_still_explains_blocked_engagement(selector):
+  sm = signal('', size='none')
+  sm['selfdriveState'].engageable = False
+  assert selector['get_alert'](None, sm).text1 == 'Engagement blocked'
+  sm['liveCalibration'].calStatus = 'uncalibrated'
+  sm['liveCalibration'].calPerc = 37
+  assert '37%' in selector['get_alert'](None, sm).text2
+  sm['liveCalibration'].calStatus = 'calibrated'
+  sm['selfdriveState'].engageable = True
+  assert selector['get_alert'](None, sm) is None
+
+
+def test_blocking_events_explain_unrecognized_button_and_include_mads():
+  from cereal import custom
+  sm = signal('', size='none')
+  event = log.OnroadEvent.new_message(name='selfdriveInitializing', noEntry=True)
+  sm['onroadEvents'] = [event]
+  for values in (sm.valid, sm.alive):
+    values['onroadEvents'] = True
+  sm.recv_frame['onroadEvents'] = 20
+  assert availability_message(sm,10,10) == ('Engagement blocked','Selfdrive initializing')
+  event.name = 'processNotRunning'
+  sm['managerState'] = log.ManagerState.new_message(processes=[{'name':'plannerd','running':False,'shouldBeRunning':True}])
+  sm.valid['managerState'] = sm.alive['managerState'] = True
+  sm.recv_frame['managerState'] = 20
+  assert availability_message(sm,10,10) == ('Process not running','plannerd')
+  sm['onroadEvents'] = []
+  sp = custom.OnroadEventSP.Event.new_message(name='silentBrakeHold', noEntry=True)
+  sm['onroadEventsSP'] = NS(events=[sp])
+  for values in (sm.valid, sm.alive):
+    values['onroadEventsSP'] = True
+  sm.recv_frame['onroadEventsSP'] = 20
+  assert 'brake hold' in availability_message(sm,10,10)[1]
+  sm.recv_frame['onroadEventsSP'] = 9
+  assert availability_message(sm,10,10) is None
+
+
+@pytest.mark.parametrize('service', ['selfdriveState','liveCalibration','modelV2','controlsState','longitudinalPlan'])
+def test_invalid_or_missing_services_are_visible_without_selected_alert(selector, service):
+  sm = signal('', size='none')
+  sm.valid[service] = False
+  assert selector['get_alert'](None, sm) is not None
+  assert availability_message(sm,10,4) is None  # bounded startup grace
+  sm.valid[service] = True
+  assert selector['get_alert'](None, sm) is None
+
+
+def test_takeover_has_priority_over_availability_fallback(selector):
+  sm = signal('commIssue/softDisable',status='critical',size='full')
+  sm.valid['liveCalibration'] = False
+  assert selector['get_alert'](None,sm).size == log.SelfdriveState.AlertSize.full
+
+
+def test_fault_layer_follows_camera_clip_and_hud_and_blocks_report():
+  tree = ast.parse((ROOT/'selfdrive/ui/onroad/augmented_road_view.py').read_text())
+  render = next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='_render')
+  body = ast.unparse(render)
+  assert body.index('self.alert_renderer.render(') > body.index('rl.end_scissor_mode(')
+  assert body.index('self.alert_renderer.render(') > body.index('self._hud_renderer.render(')
+  main = (ROOT/'selfdrive/ui/layouts/main.py').read_text()
+  assert 'alert_renderer.get_alert(ui_state.sm)' in main
+  assert "bool(ui_state.sm['selfdriveState'].alertText1)" not in main

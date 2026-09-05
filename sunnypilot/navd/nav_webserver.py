@@ -92,7 +92,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.1a"
+EXPECTED_VERSION = "3.7.1b"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -341,6 +341,8 @@ _CODE_MARKERS = [
   ("def upload_event", "/data/openpilot/sunnypilot/feedback/uploader.py", "private resumable feedback uploads"),
   ("ss.alertType in QUIET_ALERT_TYPES", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "engagement and calibration faults visible"),
   ("def model_overlay_ready", "/data/openpilot/selfdrive/ui/onroad/model_status.py", "calibrated model overlay readiness"),
+  ("def availability_message", "/data/openpilot/selfdrive/ui/onroad/availability.py", "blocking faults visible without an engage request"),
+  ("super()._render(self._content_rect)", "/data/openpilot/selfdrive/ui/onroad/augmented_road_view.py", "camera and lane projection share viewport"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

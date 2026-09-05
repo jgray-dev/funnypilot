@@ -58,9 +58,13 @@ def snapshot(sm, now):
                       'alert_text1':state.alertText1, 'alert_text2':state.alertText2}
   row['calibration'] = {'status':str(calib.calStatus), 'percent':calib.calPerc, 'rpy':list(calib.rpyCalib),
                         'height':list(calib.height), 'wide_from_device':list(calib.wideFromDeviceEuler)}
+  row['blocking_events'] = {}
+  for service in ('onroadEvents', 'onroadEventsSP'):
+    events = sm[service] if service == 'onroadEvents' else sm[service].events
+    row['blocking_events'][service] = [str(e.name) for e in events if e.noEntry or e.softDisable or e.immediateDisable]
   # Include timestamps/validity so stale samples cannot masquerade as fresh data.
   row['valid'] = {s:bool(sm.valid[s] and sm.alive[s]) for s in
-                  ('carState','controlsState','longitudinalPlan','selfdriveState','liveCalibration')}
+                  ('carState','controlsState','longitudinalPlan','selfdriveState','liveCalibration','onroadEvents','onroadEventsSP')}
   return row
 
 
@@ -75,7 +79,8 @@ def main():
   params = Params()
   capture = Capture(log_root=Paths.log_root(), identity=identity(Path(__file__).resolve().parents[2]))
   sm = messaging.SubMaster(['carState','controlsState','longitudinalPlan','deviceState','selfdriveState',
-                           'liveTorqueParameters','carControl','radarState','longitudinalPlanSP','liveCalibration'], poll='carState')
+                           'liveTorqueParameters','carControl','radarState','longitudinalPlanSP','liveCalibration',
+                           'onroadEvents','onroadEventsSP'], poll='carState')
   sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
   try:
     os.unlink(P.SOCKET)

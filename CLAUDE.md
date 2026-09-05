@@ -119,6 +119,35 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.7.1b Changes
+
+- `selfdrive/ui/onroad/augmented_road_view.py` — camera video MUST receive
+  `_content_rect`, the same viewport used by `_calc_frame_matrix` and model
+  projection. The old outer `rect` scaled the camera differently from lanes
+  even with correct calibration. Matrix cache now includes x/y, not only size.
+  Fault alerts render after scissor teardown, HUD chrome and border drawing.
+- `selfdrive/ui/onroad/availability.py`, `alert_renderer.py`, SP `ui_state.py`
+  — selected alerts retain priority. When none is selected, after five seconds
+  show missing/invalid calibration, calibration progress/failure, stock/MADS
+  blocking events, or unavailable model/control/plan data. The stock state
+  machine only selects many noEntry alerts after a recognized enable event;
+  initialization can therefore be silent despite blocked engagement. This is
+  display-only and never changes calibration or engagement decisions. Both
+  event streams require fresh valid current-drive data. The only suppressed
+  popups remain exact routine event/type pairs in QUIET_ALERT_TYPES.
+- `selfdrive/ui/layouts/main.py` — Report yields to the actual selected or
+  fallback alert, not merely nonempty selfdriveState.alertText1.
+- `sunnypilot/feedback/feedbackd.py` — retain stock/MADS blocking event names
+  and stream validity alongside calibration and selected alert details.
+- `test_camera_alignment.py` numerically compares real camera-draw and model
+  projection methods for narrow/wide cameras and sidebar sizes. Alert tests
+  exercise no selected popup, initialization, MADS blockers, invalid services,
+  recovery, takeover priority and final drawing order. A local graphics smoke
+  check is distinct from device validation. No device logs were available;
+  viewport mismatch is verified, the owner's exact refusal cause is not.
+- `FUNNYPILOT_VERSION`, web diagnostic expected version/markers and CHANGELOG
+  identify 3.7.1b on its own branch. Never claim a flash solely from a push.
+
 ### v3.7.1a Changes (includes funnypilot-3.7.1 at 44f14a6af)
 
 BASE CORRECTION: the initial work started at 3.7.0 (`73a974640`). The owner

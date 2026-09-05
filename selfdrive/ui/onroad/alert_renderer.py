@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import Label
+from openpilot.selfdrive.ui.onroad.availability import availability_message
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -112,10 +113,6 @@ class AlertRenderer(Widget):
             return ALERT_CRITICAL_TIMEOUT
           return ALERT_CRITICAL_REBOOT
 
-    # No alert if size is none
-    if ss.alertSize == 0:
-      return None
-
     # Don't get old alert
     if recv_frame < ui_state.started_frame:
       return None
@@ -123,12 +120,16 @@ class AlertRenderer(Widget):
     # Severity is not an availability classification: NoEntryAlert and
     # calibration faults also use normal. Quiet only named routine notices;
     # unknown/future faults, refusal reasons and all raised severities show.
-    if (gui_app.sunnypilot_ui() and ss.alertStatus.raw == AlertStatus.normal
-        and ss.alertSize.raw != AlertSize.full and ss.alertType in QUIET_ALERT_TYPES):
-      return None
-
-    # Return current alert
-    return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
+    quiet = (gui_app.sunnypilot_ui() and ss.alertStatus.raw == AlertStatus.normal
+             and ss.alertSize.raw != AlertSize.full and ss.alertType in QUIET_ALERT_TYPES)
+    if ss.alertSize != 0 and not quiet:
+      return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
+    # No popup does not mean ready. A blocked/initializing state machine may
+    # never have recognized an engage attempt and thus never select noEntry.
+    message = availability_message(sm, ui_state.started_frame, time.monotonic() - ui_state.started_time)
+    if message is not None:
+      return Alert(text1=message[0], text2=message[1], size=AlertSize.mid, status=AlertStatus.normal)
+    return None
 
   def _render(self, rect: rl.Rectangle):
     alert = self.get_alert(ui_state.sm)

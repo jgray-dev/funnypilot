@@ -54,7 +54,8 @@ class MainLayout(Widget):
       self._feedback_popup.layout(self._rect)
     self._render_main_content()
     if self._current_mode == MainState.ONROAD:
-      T.safe_draw('feedback_popup', self._feedback_popup.draw, self._rect, bool(ui_state.sm['selfdriveState'].alertText1))
+      alert = self._layouts[MainState.ONROAD].alert_renderer.get_alert(ui_state.sm)
+      T.safe_draw('feedback_popup', self._feedback_popup.draw, self._rect, alert is not None)
 
   def _setup_callbacks(self):
     self._sidebar.set_callbacks(on_settings=self._on_settings_clicked,
