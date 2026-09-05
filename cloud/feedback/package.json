@@ -1,0 +1,16 @@
+{
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260905.1",
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.129.0"
+  },
+  "name": "funnypilot-feedback",
+  "private": true,
+  "scripts": {
+    "check": "tsc --noEmit",
+    "types": "wrangler types --include-runtime=false",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}

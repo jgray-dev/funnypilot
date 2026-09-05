@@ -4,6 +4,18 @@ Includes funnypilot-3.7.1 at 44f14a6af, merged into the existing 3.7.1a work.
 All 3.7.1 guide-bar, corner-exit, cruise-offset, and map fixes are retained
 alongside the controller changes below.
 
+* Live Report popup: tap multiple issue labels while the event is happening.
+  Saves the whole drive and captures 20 seconds before/after, controller samples,
+  software identity, steering triage and surrounding road video/log segments.
+* Unneeded slowdown reports can immediately reduce the governing SCC-M corner's
+  future penalty. Relief is bounded to 10% of the speed deficit, at most 0.5 m/s
+  or 3% of its original target. Repeated reports do not compound; cap, gas gate
+  and map display agree. Lead, stop and other governor constraints remain active.
+* Private Cloudflare feedback inbox: checksummed uploads while parked on Wi-Fi,
+  restart-safe retries, and a web Feedback page showing actual upload status.
+  Agent review/download tooling and AGENTS.md document the evidence workflow.
+  Cloud resources and the device's separate upload credential are provisioned.
+
 * Web Drives: Save/Unsave from the drive list or playback, plus a saved-only
   filter and saved storage total. Saving protects the entire drive, including
   new segments, across restarts and flashes to versions supporting saves.

@@ -50,6 +50,7 @@ Import-light: numpy is not used; the geometry is stdlib. Params readers are
 injectable so the whole controller constructs in a test.
 """
 import json
+import copy
 import math
 import time
 
@@ -58,6 +59,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.long_v2 import road_geometry as
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.corner_effort import CornerPass, LateralEffort
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.curve_cap import CAP_INACTIVE, CurveSpeedCap
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_learn_store import LearnStore
+from openpilot.sunnypilot.feedback.corner_feedback import CornerFeedback
 
 try:
   from openpilot.common.params import Params
@@ -376,6 +378,7 @@ class SCCMapV2:
     self._warn_frames = 0
     self._last_sample_t = 0.0
     self._gate_frames = 0
+    self._feedback = CornerFeedback()
 
   # ── store ─────────────────────────────────────────────────────────────────
 
@@ -909,9 +912,10 @@ class SCCMapV2:
 
     best, best_c = CAP_INACTIVE, None
     for c in self.corners:
-      if c.v_target >= v_cruise - 0.5:
+      target = self._feedback.target(c, v_cruise)
+      if target >= v_cruise - 0.5:
         continue          # this corner does not constrain us at this speed
-      allowed = CS_.corner_cap(c.v_target, c.distance, c.half_len)
+      allowed = CS_.corner_cap(target, c.distance, c.half_len)
       if allowed < best:
         best, best_c = allowed, c
     if best_c is not None:
@@ -920,6 +924,14 @@ class SCCMapV2:
       self.gov_confidence = best_c.confidence
       self.corner_radius_m = best_c.radius
     return best
+
+  def display_corners(self, v_cruise):
+    # Give the ribbon the same targets used by cap/gas-gate evaluation without
+    # overwriting learned inputs and accidentally compounding the correction.
+    corners = [copy.copy(c) for c in self.corners]
+    for c in corners:
+      c.v_target = self._feedback.target(c, v_cruise)
+    return corners
 
   def _update_gas_gate(self, v_ego: float, v_cruise: float) -> None:
     """Should the planner stop adding throttle? See the GATE_ constants.
@@ -946,7 +958,8 @@ class SCCMapV2:
       # meet us; see GATE_V_RELEASE
       margin = GATE_V_RELEASE if self.gas_gating_active else GATE_V_MARGIN
       for c in self.corners:
-        if c.v_target >= v_cruise - 0.5:
+        target = self._feedback.target(c, v_cruise)
+        if target >= v_cruise - 0.5:
           continue          # does not constrain us; same test the cap applies
         # where we will be in GATE_LEAD_T seconds, at the speed we hold now.
         # Through the same `corner_cap` the speed cap uses, so a corner already
@@ -954,7 +967,7 @@ class SCCMapV2:
         # authority back — the v3.6.5 exit fix would otherwise be undone by the
         # gate, which is a THROTTLE clip and would keep the car coasting.
         d = c.distance - v_ego * GATE_LEAD_T
-        if CS_.corner_cap(c.v_target, d, c.half_len) < v_ego - margin:
+        if CS_.corner_cap(target, d, c.half_len) < v_ego - margin:
           gate = True
           break
 
@@ -974,6 +987,7 @@ class SCCMapV2:
     been the same mistake with our number instead of someone else's.
     """
     self.frame += 1
+    self._feedback.update()
     if self.frame % _PARAM_CHECK_FRAMES == 0:
       self.enabled = self._read_enabled_param()
 

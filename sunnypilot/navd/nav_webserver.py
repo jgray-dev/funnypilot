@@ -22,6 +22,7 @@ import aiohttp
 from aiohttp import web
 
 from openpilot.sunnypilot.navd import drive_index
+from openpilot.sunnypilot.feedback import protocol as feedback_protocol
 
 # ── logging, deliberately lazy (v3.6.9) ─────────────────────────────────────
 #
@@ -67,6 +68,7 @@ _PULSE_PERIOD_S = 600  # code-identity pulse every 10 min, catches mid-parked sw
 _PULSE_MAX_BYTES = 1024 * 1024
 # files whose on-disk content defines the "smoothing" feel — hashed each pulse
 _FEEL_FILES = [
+  "/data/openpilot/sunnypilot/feedback/corner_feedback.py",
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
   "/data/openpilot/selfdrive/controls/lib/knot_filter.py",
   "/data/openpilot/selfdrive/controls/lib/lat_handback.py",
@@ -333,6 +335,10 @@ _CODE_MARKERS = [
   ("class SteeringMotionCredit", "/data/openpilot/selfdrive/controls/lib/steering_motion.py", "signed wheel-motion credit"),
   ("error *= motion_scale", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "motion credit reaches error feedback"),
   ("credit / abs(neural_error)", "/data/openpilot/sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py", "neural credit bounded across reference horizons"),
+  ("class FeedbackPopup", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/feedback_popup.py", "live multi-label feedback popup"),
+  ("class Capture", "/data/openpilot/sunnypilot/feedback/capture.py", "durable surrounding feedback capture"),
+  ("PENALTY_RELIEF = 0.10", "/data/openpilot/sunnypilot/feedback/corner_feedback.py", "bounded per-corner feedback relief"),
+  ("def upload_event", "/data/openpilot/sunnypilot/feedback/uploader.py", "private resumable feedback uploads"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"
@@ -1062,6 +1068,21 @@ async def handle_storage(request: web.Request) -> web.Response:
   return web.json_response(stats)
 
 
+async def handle_feedback(request: web.Request) -> web.Response:
+  def read_reports():
+    import pathlib
+    root = pathlib.Path(feedback_protocol.ROOT)
+    reports = []
+    for path in (root / 'events').glob('*/event.json'):
+      event = feedback_protocol.read_json(str(path), {})
+      if isinstance(event, dict) and event.get('id'):
+        reports.append({k:event.get(k) for k in ('id','route','created_at','labels','state','remedy','commit','upload_error')})
+    reports.sort(key=lambda e:e.get('created_at') or 0, reverse=True)
+    config = feedback_protocol.read_json(str(root / 'cloud.json'), {})
+    return {'reports':reports[:200], 'linked':bool(config.get('token') and config.get('endpoint'))}
+  return web.json_response(await _run(read_reports))
+
+
 async def handle_drive_detail(request: web.Request) -> web.Response:
   route = _route_arg(request)
   segs = drive_index.route_segments(route)
@@ -1276,6 +1297,7 @@ def main():
   app.router.add_post("/api/logs/mark", handle_logs_mark)
   # v3.6.8 — drives + device actions
   app.router.add_get("/api/storage", handle_storage)
+  app.router.add_get("/api/feedback", handle_feedback)
   app.router.add_get("/api/drives", handle_drives)
   app.router.add_get("/api/drives/{route}", handle_drive_detail)
   app.router.add_delete("/api/drives/{route}", handle_drive_delete)

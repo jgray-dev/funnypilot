@@ -9,6 +9,8 @@ from openpilot.selfdrive.ui.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.layouts.onboarding import OnboardingWindow
+from openpilot.selfdrive.ui.sunnypilot.onroad.feedback_popup import FeedbackPopup
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
 
 if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.layouts.settings.settings import SettingsLayoutSP as SettingsLayout
@@ -29,9 +31,11 @@ class MainLayout(Widget):
     self._sidebar = Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
+    self._feedback_popup = FeedbackPopup()
 
     # Initialize layouts
     self._layouts = {MainState.HOME: HomeLayout(), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: AugmentedRoadView()}
+    self._layouts[MainState.ONROAD].set_touch_valid_callback(lambda: not self._feedback_popup.blocks_touch())
 
     self._sidebar_rect = rl.Rectangle(0, 0, 0, 0)
     self._content_rect = rl.Rectangle(0, 0, 0, 0)
@@ -46,7 +50,11 @@ class MainLayout(Widget):
 
   def _render(self, _):
     self._handle_onroad_transition()
+    if self._current_mode == MainState.ONROAD:
+      self._feedback_popup.layout(self._rect)
     self._render_main_content()
+    if self._current_mode == MainState.ONROAD:
+      T.safe_draw('feedback_popup', self._feedback_popup.draw, self._rect, bool(ui_state.sm['selfdriveState'].alertText1))
 
   def _setup_callbacks(self):
     self._sidebar.set_callbacks(on_settings=self._on_settings_clicked,
@@ -98,6 +106,8 @@ class MainLayout(Widget):
     user_bookmark = messaging.new_message('bookmarkButton')
     user_bookmark.valid = True
     self._pm.send('bookmarkButton', user_bookmark)
+    if ui_state.started:
+      self._feedback_popup.open()
 
   def _on_onroad_clicked(self):
     self._sidebar.set_visible(not self._sidebar.is_visible)

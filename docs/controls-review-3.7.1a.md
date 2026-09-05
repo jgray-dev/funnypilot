@@ -118,7 +118,7 @@ markers are retained, with the displayed version remaining 3.7.1a.
 ## Validation
 
 The unmodified controller/governor baseline passed 724 tests. The expanded
-regression run after integrating 3.7.1 and drive retention passes **1,317 tests**, including lateral/longitudinal helpers,
+regression run after integrating 3.7.1, drive retention and live feedback passes **1,329 tests**, including lateral/longitudinal helpers,
 actual controller transitions, planner output integration, SCC/SLA, blinker
 pause, UI import/contract guards, diagnostics, and release metadata checks.
 Ruff passes across `selfdrive`, `sunnypilot`, `system`, and `common`.
@@ -126,6 +126,19 @@ The drive-retention addition has 12 focused checks against temporary recordings
 and real HTTP handlers. A mobile Chromium check also covers save, reload,
 saved filtering, protected deletion, playback unsave, and confirmed deletion.
 Its local server uses temporary fixture files, not device recordings.
+
+Live feedback adds 12 focused capture, multi-label popup, real message-schema
+and SCC consistency checks. Invalid cruise/context values do not earn relief.
+The private Worker passed local authentication, incomplete-upload, checksum,
+retry and manifest-conflict checks. A synthetic capture uploaded to production
+and downloaded through the agent CLI with part and whole-file SHA-256 checks.
+That report is labeled synthetic and excluded from the owner feedback inbox.
+It verifies the pipeline, not steering or braking behavior. The Worker passes
+TypeScript checking and Wrangler deployment validation. Native UI rendering,
+the complete daemon lifecycle and onroad behavior remain unverified here.
+Desktop and mobile Chromium checks exercise the real Feedback HTTP handler,
+multi-label/status rendering, private config filtering and HTML escaping.
+See `docs/feedback-workflow.md` for capture, bounded relief and review details.
 
 Thirteen mutations were applied individually, confirmed to fail their targeted
 behavioral test, and restored: double PID integration; omitted handback freeze;
@@ -155,6 +168,7 @@ PYTHONPATH=. python -m pytest --noconftest -q -p no:cacheprovider -o addopts='' 
   sunnypilot/selfdrive/controls/lib/long_v2/tests \
   sunnypilot/selfdrive/controls/lib/speed_limit/tests \
   selfdrive/ui/sunnypilot/onroad/tests sunnypilot/navd/tests sunnypilot/tests \
+  sunnypilot/feedback/tests \
   sunnypilot/selfdrive/car/tests \
   system/manager/tests/test_storage_cleanup.py \
   sunnypilot/selfdrive/controls/lib/tests/test_blinker_pause_lateral.py \

@@ -130,6 +130,40 @@ all retained. The planner also keeps 3.7.1a's shaper synchronization and
 timestamp fix; the lateral motion-credit implementation is unchanged.
 `FUNNYPILOT_VERSION` and diagnostic `EXPECTED_VERSION` remain `3.7.1a`.
 
+LIVE FEEDBACK (owner requested):
+- Read `AGENTS.md` and `docs/feedback-workflow.md`, then query the private inbox
+  with `python tools/feedback_cloud.py list --status new` before investigating
+  driving feel. Synthetic pipeline checks are not driving evidence. Link actual
+  fix commits only after verification; document remaining vehicle limits.
+- `selfdrive/ui/sunnypilot/onroad/feedback_popup.py`, `ui/layouts/main.py` —
+  Report/bookmark opens a compact multi-select popup. Nonblocking datagrams,
+  durable acknowledgments and retries; driving alerts hide the popup. No new
+  Params keys, schemas, network work or durable disk writes in the UI.
+- `sunnypilot/feedback/{protocol,capture,feedbackd,uploader}.py`,
+  `system/manager/process_config.py` — separate always-run capture process,
+  20-second pre/post controller ring, whole-route save, software identity,
+  steering triage, surrounding qlog/road video. One upload thread, parked Wi-Fi
+  only, checksummed 4 MiB chunks and restart-safe queue. No cabin video/audio.
+- `sunnypilot/feedback/corner_feedback.py`, `scc_map_v2.py`, SP planner —
+  freeze the fresh governing SCC-M corner when Report opens. Unneeded slowdown
+  earns noncompounding relief: 10% of cruise/target deficit, capped at 0.5 m/s
+  and 3% of original target. Match within 20 m / 20 degrees; exclude stressed
+  corners. Durable rules are mirrored through shared memory; controls never
+  read /data or contact cloud. Cap, gas gate and ribbon share the same target.
+  Original learning and lead/stop/vision/SLA constraints remain active.
+- `cloud/feedback/`, `tools/feedback_cloud.py` — private R2 artifacts and D1
+  labels/review index behind an upload-only Worker. Downloads use existing
+  Wrangler account authentication, never the device credential. See workflow
+  for resource IDs and operations. Keep `/data/funnypilot_feedback/cloud.json`
+  and all tokens outside git, logs and tool output.
+- `sunnypilot/navd/nav_webserver.py`, `nav_web/index.html` — read-only Feedback
+  history with capture/upload states, labels, correction and upload errors.
+  Diagnostics include feedback code markers and corner-rule implementation hash.
+- `sunnypilot/feedback/tests/` — 12 capture/controller/schema/popup checks.
+  Local Worker protocol checks and a synthetic private cloud roundtrip verify
+  authentication, retries and checksums. Native UI/build and vehicle behavior
+  still require device validation; publishing code does not authorize flashing.
+
 WEB DRIVE RETENTION (owner requested):
 - `system/loggerd/drive_retention.py` — stdlib-only shared policy. A bounded,
   versioned `.fp_saved_drives.json` in the log root records whole-route saves;

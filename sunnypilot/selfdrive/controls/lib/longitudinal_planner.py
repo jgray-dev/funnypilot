@@ -356,7 +356,7 @@ class LongitudinalPlannerSP:
     # can tint the road by the slowdown each one needs. The UI cannot compute
     # these — the learned half lives in a store on /data and nothing in the HUD
     # may touch a filesystem.
-    write_corners_shm(self._scc_map_v2.corners)
+    write_corners_shm(self._scc_map_v2.display_corners(getattr(self, '_v_cruise_last', 0.0)))
     write_corner_warning_shm(self._scc_map_v2.corner_warning)
 
     # v3.6.2: the dev-UI payload. Diagnostic only — see long_v2/scc_shm.py.
@@ -375,6 +375,10 @@ class LongitudinalPlannerSP:
     _mpc = getattr(self, 'mpc', None)
     _stop = getattr(self, 'stop_gov', None)
     _stop_cap = getattr(_stop, 'cap', None) if _stop is not None else None
+    _source_code = long_source_code(getattr(_mpc, 'source', 'cruise'), str(self.source),
+                                    _stop_cap, getattr(self, '_v_cruise_last', 0.0))
+    self._scc_map_v2._feedback.publish_context(self._scc_map_v2, _source_code,
+                                              self._scc_map_authority, sm['carControl'].longActive)
     write_scc_debug_shm(self._scc_map_v2.debug_row(
       self._scc_map_authority,
       self._scc_vision_v2.output_v_target,

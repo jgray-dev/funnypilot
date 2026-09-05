@@ -216,6 +216,7 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
     <div id="brand"><b>FunnyPilot</b><span id="ver">—</span></div>
     <button class="navbtn" data-go="overview" aria-current="page"><i class="dot"></i>Overview</button>
     <button class="navbtn" data-go="drives"><i class="dot"></i>Drives</button>
+    <button class="navbtn" data-go="feedback"><i class="dot"></i>Feedback</button>
     <button class="navbtn" data-go="terminal"><i class="dot"></i>Terminal</button>
     <button class="navbtn" data-go="verify"><i class="dot"></i>Verify</button>
     <div id="railfoot">
@@ -262,7 +263,7 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
     <!-- DRIVES -->
     <section class="page" id="p-drives">
       <h1>Drives</h1>
-      <p class="sub">Recorded on this device. Nothing is uploaded anywhere.</p>
+      <p class="sub">Recorded on this device. Reported issues upload privately when parked on Wi-Fi.</p>
       <p class="sub" id="retentionPolicy">Loading cleanup policy…</p>
       <p class="sub" id="savedStorage"></p>
       <div id="toolbar">
@@ -281,6 +282,14 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
         <button class="btn sm" id="bRefresh">Refresh</button>
       </div>
       <div id="driveList"><div class="empty">Loading…</div></div>
+    </section>
+
+    <section class="page" id="p-feedback">
+      <h1>Feedback</h1>
+      <p class="sub">Tap Report on the driving screen, then select any issues. Each selection saves immediately.</p>
+      <p class="sub" id="feedbackLink">Checking cloud link…</p>
+      <button class="btn sm" id="bFeedbackRefresh">Refresh</button>
+      <div id="feedbackList" style="margin-top:16px"></div>
     </section>
 
     <!-- PLAYBACK -->
@@ -381,6 +390,7 @@ function go(name){
   $("#main").scrollTop = 0;
   if(name === "terminal") setTimeout(fitTerm, 60);
   if(name === "drives") loadDrives();
+  if(name === "feedback") loadFeedback();
 }
 $$(".navbtn").forEach(b => b.onclick = () => go(b.dataset.go));
 
@@ -408,6 +418,24 @@ async function loadOverview(){
 }
 
 /* ── drives ───────────────────────────────────────────────────────────── */
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function loadFeedback(){
+  try{
+    const data = await api('/api/feedback');
+    $('#feedbackLink').textContent = data.linked ? 'Cloud linked. Uploads resume automatically when parked on Wi-Fi.' : 'Captured locally. Cloud linking is required before uploads can start.';
+    $('#feedbackList').innerHTML = data.reports.length ? data.reports.map(e => `<div class="card" style="margin-bottom:12px">
+      <b>${escapeHtml(new Date(e.created_at*1000).toLocaleString())}</b>
+      <span class="pill">${escapeHtml(e.state === 'queued' ? 'Waiting to upload' : e.state)}</span>
+      <p>${escapeHtml((e.labels || []).map(l => l.replaceAll('_',' ')).join(' · ') || 'Unclassified bookmark')}</p>
+      <p class="mut">${escapeHtml(e.remedy)}</p>
+      <small class="num">${escapeHtml(e.id)} · ${escapeHtml((e.commit || '').slice(0,9))}</small>
+      ${e.upload_error ? `<p class="warn">Last upload: ${escapeHtml(e.upload_error)}. Will retry automatically.</p>` : ''}
+    </div>`).join('') : '<div class="empty">No reports yet.</div>';
+  }catch(e){ $('#feedbackList').textContent = 'Could not read feedback: ' + e.message; }
+}
+$('#bFeedbackRefresh').onclick = loadFeedback;
+setInterval(() => {if(!document.hidden && $('#p-feedback').classList.contains('on')) loadFeedback();}, 10000);
+
 let DRIVES = [], EMPTY_WHY = null;
 const SAVING = new Set();
 async function loadDrives(){

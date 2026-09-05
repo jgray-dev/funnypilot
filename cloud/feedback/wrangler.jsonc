@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "funnypilot-feedback",
+  "main": "src/index.ts",
+  "account_id": "831514824c4a5fba9c759e88c09ff40c",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "secrets": {"required": ["UPLOAD_TOKEN"]},
+  "observability": {"enabled": true, "head_sampling_rate": 0.1},
+  "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "funnypilot-feedback"}],
+  "d1_databases": [{"binding": "DB", "database_name": "funnypilot-feedback", "database_id": "7351d296-ce74-437b-b788-17de85da6ac0", "migrations_dir": "migrations"}]
+}
