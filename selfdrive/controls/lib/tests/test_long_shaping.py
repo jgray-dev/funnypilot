@@ -39,26 +39,17 @@ class TestAccelJerkShaper:
       prev = out
     assert abs(out - 1.0) < EPS
 
-  def test_mild_braking_comfort_limited(self):
+  def test_mild_braking_passes_through(self):
     s = AccelJerkShaper(DT, a_init=0.0)
     out = s.update(-1.0)
-    # mild demand: bounded by the comfort down-jerk (4 m/s^3)
-    assert abs(out - (-JERK_DOWN_V[1] * DT)) < EPS
+    assert out == -1.0
 
-  def test_strong_braking_barely_delayed(self):
-    # SAFETY INVARIANT: a -3.5 m/s^2 demand must be reached in well under
-    # half a second. At the max down-jerk of 12 m/s^3 that is <= 6 frames.
+  def test_strong_braking_is_not_delayed(self):
     s = AccelJerkShaper(DT, a_init=0.0)
-    frames = 0
-    while s.update(-3.5) > -3.5 + EPS:
-      frames += 1
-      assert frames < 10, "strong braking demand delayed too long"
-    assert frames <= int(3.5 / (JERK_DOWN_V[0] * DT)) + 1
+    assert s.update(-3.5) == -3.5
 
-  def test_down_jerk_scales_with_demand(self):
-    mild = AccelJerkShaper(DT, a_init=0.0).update(JERK_DOWN_BP[1])
-    strong = AccelJerkShaper(DT, a_init=0.0).update(JERK_DOWN_BP[0])
-    assert strong < mild < 0.0
+  def test_partial_throttle_lift_keeps_existing_slew(self):
+    assert AccelJerkShaper(DT, a_init=2.0).update(1.0) == pytest.approx(2.0 - 2.5 * DT)
 
   def test_jerk_down_is_monotone(self):
     """SAFETY INVARIANT, v3.5.3. The table must never allow a FIRMER braking
@@ -78,12 +69,9 @@ class TestAccelJerkShaper:
     brake = AccelJerkShaper(DT, a_init=1.0).update(-1.0)
     assert (1.0 - lift) < (1.0 - brake), "a mild lift must move less per frame than a brake apply"
 
-  def test_a_hard_demand_is_unaffected_by_the_new_breakpoints(self):
-    """The interpolation variable is the DEMAND, not the current output — so
-    extending the table upward cannot slow a brake application, whatever the
-    shaper was doing on the previous frame."""
+  def test_a_hard_demand_immediately_cancels_throttle(self):
     from_throttle = AccelJerkShaper(DT, a_init=1.0)
-    assert abs(from_throttle.update(-3.5) - (1.0 - JERK_DOWN_V[0] * DT)) < EPS
+    assert from_throttle.update(-3.5) == -3.5
 
   def test_fcw_bypass_is_immediate(self):
     s = AccelJerkShaper(DT, a_init=1.0)
@@ -107,6 +95,38 @@ class TestAccelJerkShaper:
     s = AccelJerkShaper(DT, a_init=0.5)
     out = s.update(float("nan"))
     assert out == 0.0
+
+  @pytest.mark.parametrize('invalid', [float('nan'), float('inf'), -float('inf')])
+  def test_invalid_target_does_not_release_existing_braking(self, invalid):
+    s = AccelJerkShaper(DT, a_init=-2.0)
+    assert s.update(invalid) == -2.0
+
+  @pytest.mark.parametrize('initial', [1.0, 0.0, -0.2, -2.0])
+  @pytest.mark.parametrize('target', [0.0, -0.1, -1.0, -3.5])
+  def test_comfort_never_weakens_a_new_braking_demand(self, initial, target):
+    s = AccelJerkShaper(DT, a_init=initial)
+    assert s.update(target) <= target + EPS
+
+
+class TestStopGovernorInputLifecycle:
+  def test_reset_forgets_braking_evidence(self):
+    g = ls.StopGovernor(DT)
+    for _ in range(20):
+      g.update(True, 30.0, 15.0, 20.0, 30.0, -3.0)
+    assert g.stopping_lead
+    g.reset()
+    assert not g.stopping_lead
+    assert g.update(True, 30.0, 15.0, 20.0, 30.0, -3.0) == 30.0
+
+  @pytest.mark.parametrize('distance', [float('nan'), float('inf'), -1.0])
+  def test_invalid_distance_drops_track_confirmation(self, distance):
+    g = ls.StopGovernor(DT)
+    for _ in range(20):
+      g.update(True, 30.0, 0.0, 20.0, 30.0)
+    assert g.cap is not None
+    assert g.update(True, distance, 0.0, 20.0, 30.0) == 30.0
+    assert g.cap is None
+    assert g.update(True, 30.0, 0.0, 20.0, 30.0) == 30.0
 
 
 def run_grace(g, seconds, **kw):

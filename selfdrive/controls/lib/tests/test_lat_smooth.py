@@ -212,9 +212,18 @@ class TestLatSmootherSpline:
     s.update(1.0, True, 0.0)
     s.reset(3e-4)
     assert s.out == 3e-4
-    # first active frame passes the model action through (no knot yet)
+    # Re-engagement between model frames must use the same schedule as an
+    # engagement on a model frame; the cached action is the first knot.
     out = s.update(5e-4, False, 1.0)
-    assert out == 5e-4
+    reference = LatSmoother()
+    reference.reset(3e-4)
+    assert out == reference.update(5e-4, True, 1.0)
+    assert 3e-4 < out < 5e-4
+    for i in range(1, 5):
+      before = out
+      out = s.update(5e-4, False, 1.0 + i * DT)
+      assert out > before
+    assert abs(out - 5e-4) < 1e-12
 
   def test_health_counts_realized_frames(self):
     s = LatSmoother()

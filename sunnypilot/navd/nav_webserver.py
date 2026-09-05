@@ -77,12 +77,19 @@ _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/lead_physics.py",
   "/data/openpilot/selfdrive/controls/controlsd.py",
   "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py",
+  "/data/openpilot/selfdrive/controls/lib/latcontrol_pid.py",
+  "/data/openpilot/selfdrive/controls/lib/longcontrol.py",
+  "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py",
+  "/data/openpilot/sunnypilot/selfdrive/controls/lib/latcontrol_torque_v0.py",
+  "/data/openpilot/sunnypilot/selfdrive/controls/lib/latcontrol_torque_ext.py",
+  "/data/openpilot/sunnypilot/selfdrive/controls/lib/latcontrol_torque_ext_base.py",
+  "/data/openpilot/sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py",
   "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py",
   "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/tokens.py",
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.0"
+EXPECTED_VERSION = "3.7.1a"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -199,7 +206,7 @@ _CODE_MARKERS = [
   ("def _draw_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ego marker"),
   # v3.5.3
   ("self.prev_accel_clip = list", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "accel clip reset on disengage"),
-  ("JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "gentle throttle release"),
+  ("JERK_DOWN_BP = [0.0, 1.0]", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "gentle partial throttle release"),
   # v3.5.4
   ("def predicted_lat_accel", "/data/openpilot/selfdrive/controls/lib/turn_limit.py", "anticipatory turn limiting"),
   ("def starting_accel_rate", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "scheduled creep launch"),
@@ -304,6 +311,12 @@ _CODE_MARKERS = [
   ("STOP_GOV_CLOSE_ON", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "stop governor only acts while closing"),
   ("VISION_DISAGREE_TH = 0.30", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_fusion.py", "vision outranks the map"),
   ("vision_available", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/speed_governor.py", "the veto knows if SCC-V is running"),
+  # v3.7.1a
+  ("def prepare_pid", "/data/openpilot/sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py", "one PID update in the selected units"),
+  ("self._freeze_integrator = freeze_integrator", "/data/openpilot/sunnypilot/selfdrive/controls/lib/latcontrol_torque_ext.py", "neural handback freeze"),
+  ("self.shaper.reset(self.output_a_target)", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "shaper follows published acceleration"),
+  ("a_target <= min(self.a, 0.0)", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "planned braking bypasses comfort ramp"),
+  ("min(self.last_output_accel, a_target, 0.0)", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "stopping preserves planned braking"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

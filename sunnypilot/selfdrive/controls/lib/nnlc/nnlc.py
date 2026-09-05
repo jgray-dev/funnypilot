@@ -58,6 +58,7 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
     self.roll_deque = deque(maxlen=history_check_frames[0])
     self.error_deque = deque(maxlen=history_check_frames[0])
     self.past_future_len = len(self.past_times) + len(self.nn_future_times)
+    self._pid_in_torque_space = False
 
   @property
   def _nnlc_enabled(self):
@@ -68,6 +69,29 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
       return
 
     self._pid.set_limits(self.lac_torque.steer_max, -self.lac_torque.steer_max)
+
+  def reset(self):
+    self._pid.reset()
+    self.pitch.x = self.pitch_last = 0.0
+    self.lateral_accel_desired_deque.clear()
+    self.roll_deque.clear()
+    self.error_deque.clear()
+
+  def prepare_pid(self, pid):
+    """Select the PID's units before either controller runs (v3.7.1a).
+
+    Neural control produces torque; the conventional controller produces
+    lateral acceleration. Neither the integrator nor the limits can cross
+    this boundary unchanged. Exactly one of them may update the PID per tick.
+    """
+    self._pid = pid
+    neural = self._nnlc_enabled
+    if neural != self._pid_in_torque_space:
+      self.reset()
+    self._pid_in_torque_space = neural
+    self.lac_torque.update_limits()
+    self.update_limits()
+    return neural
 
   def update_lateral_lag(self, lag):
     super().update_lateral_lag(lag)
@@ -85,12 +109,10 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
                                              FRICTION_THRESHOLD, self.lac_torque.torque_params)
 
   def update_output_torque(self, CS):
-    # v3.3.8: also freeze while the EPS governor's driver-limit bound is
-    # clamping, or the bump damper is active (see eps_limit.py / bump_damper.py
-    # — this mirrors the same two conditions the base LatControlTorque adds).
+    # v3.7.1a: use the caller's complete decision, including handback. Keeping
+    # a second copy here lost the handback freeze when that feature was added.
     freeze_integrator = (self._steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or
-                        getattr(self.lac_torque, '_eps_governor', None) and self.lac_torque._eps_governor.driver_limited or
-                        getattr(self.lac_torque, '_bump_damper', None) and self.lac_torque._bump_damper.active)
+                         self._freeze_integrator)
     self._output_torque = self._pid.update(self._pid_log.error,
                                            feedforward=self._ff,
                                            speed=CS.vEgo,

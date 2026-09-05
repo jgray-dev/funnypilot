@@ -1,3 +1,33 @@
+FunnyPilot v3.7.1a (2026-09-05)
+=============================
+Based directly on funnypilot-3.7.0 at 73a974640.
+
+Controller review: fixes to steering state transitions and delivery of
+planned braking. This is a development branch; vehicle behavior has not been
+validated on a device or closed course.
+
+* Steering: conventional and neural torque control now update the shared PID
+  exactly once per control tick, with limits in the selected controller's
+  units. Mode changes clear the old integrator. Neural control receives the
+  full handback/bump/safety freeze decision from the caller.
+* Disengagement clears steering PID state and neural history. The first
+  steering segment uses the same interpolation schedule whether engagement
+  lands on or between model frames. Partial/nonfinite neural plans fall back
+  to conventional torque control.
+* New braking/coasting demands pass through the downstream comfort shaper
+  immediately when reducing acceleration; partial throttle lifts, throttle
+  application, and brake release retain their comfort limits. Stopping also
+  preserves stronger planner braking instead of replacing it with the slow
+  stop-hold ramp. Brake application can therefore feel firmer.
+* The shaper follows the acceleration actually published after turn/coast
+  clipping. Invalid targets remove positive acceleration while retaining
+  existing braking. Stop-governor reset clears braking evidence; invalid lead
+  ranges cannot retain a confirmed cap.
+* Planner processing delay now converts both monotonic timestamps from
+  nanoseconds to seconds together. Version and diagnostic markers updated.
+
+Validation and review details: docs/controls-review-3.7.1a.md.
+
 FunnyPilot v3.6.2 (2026-08-07)
 ========================
 SCC-M is rewritten. It no longer asks anyone how fast a bend can be taken --

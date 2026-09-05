@@ -119,6 +119,77 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
+### v3.7.1a Changes (based on funnypilot-3.7.0 at 73a974640)
+
+Controller review and regression fixes. LOCAL DEVELOPMENT BRANCH; no device
+flash or on-road verification. Full rationale and validation commands live in
+`docs/controls-review-3.7.1a.md`.
+
+- `selfdrive/controls/lib/latcontrol_torque.py`,
+  `sunnypilot/selfdrive/controls/lib/latcontrol_torque_v0.py`,
+  `sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py` — **ONE PID UPDATE PER
+  TICK, IN ONE UNIT SYSTEM.** Both torque controllers previously updated the
+  PID in lateral-acceleration units and then let NNLC update THE SAME object
+  in torque units. The second update overwrote the log but retained the first
+  integral increment. A deterministic inference fixture reproduced an 11x
+  integral increment. `prepare_pid` now selects units/limits before either
+  path runs; the conventional update is skipped when NNLC owns the output.
+  Changing modes clears integrator and neural history. This also fixes the
+  first neural tick's limits and stale torque limits after model loss.
+- `latcontrol_torque_ext.py`, `nnlc/nnlc.py` — **PASS THE FREEZE DECISION.**
+  NNLC's independently maintained freeze expression omitted v3.4.9 handback.
+  The caller now passes the complete decision, including handback, bump, and
+  EPS suppression. A real controller test holds the wheel, releases it, and
+  proves the integrator stays frozen during the first half of the return.
+- Both torque controllers and `selfdrive/controls/lib/latcontrol_pid.py` —
+  `reset` now clears PID state. The inherited method only cleared saturation,
+  allowing old integral correction to return after disengagement. Inactive
+  updates reset too, so correctness does not depend on a separate caller.
+  Torque resets also clear neural roll/accel history.
+- `latcontrol_torque_ext_base.py` — validate all full-length finite arrays
+  used by neural interpolation and differencing. Checking only roll length
+  let incomplete pitch/accel arrays reach numpy with incompatible shapes.
+  Invalid plans select the conventional controller and its correct units.
+- `selfdrive/controls/lib/lat_smooth.py` — the first cached action after
+  reset starts a segment even between model updates. Previously that frame
+  bypassed interpolation entirely; engagement feel depended on frame phase.
+  Knot timing, spline coefficients, and the downstream limits are unchanged.
+- `long_shaping.py` — **A HIGH DOWN-JERK LIMIT IS STILL A BRAKING DELAY.**
+  The old table took 0.4 s to deliver a -3.5 demand from +1.0, despite its
+  comment saying braking was never delayed. New nonpositive reductions pass
+  through immediately. Positive partial lifts retain their old table;
+  throttle application and brake release retain up-jerk shaping. This can
+  make brake onset firmer; validate comfort upstream in the planner, not by
+  postponing a brake request downstream. Invalid targets no longer release
+  existing braking to zero. This is containment, not a replacement for
+  service-health disengagement or vehicle safety validation.
+- `longitudinal_planner.py` — **SHAPE FROM THE PUBLISHED COMMAND.** Reset
+  the shaper to the final clipped output every tick. A coast/turn ceiling
+  otherwise left hidden positive acceleration in shaper memory, unrelated
+  to the command the controller received. Also fixes `processingDelay`,
+  which subtracted model nanoseconds from publication seconds.
+- `longcontrol.py` — stopping takes the minimum of previous accel, planner
+  demand, and zero before applying the car's full stop-hold ramp. Previously
+  a -3.0 request from zero became -0.004 on a K5 stopping frame: the PID was
+  off and the ramp ignored the planner. Stronger existing braking is held;
+  launch tuning and the stopping ramp rate are preserved.
+- `long_shaping.StopGovernor` — external `reset` clears lead evidence;
+  internal `_reset_cap` preserves evidence while waiting to arm. Reusing one
+  operation for both lifecycles either prevented arming (v3.6.8) or leaked
+  observations across disengagement. Nonfinite/negative lead ranges now
+  discard track confirmation too. Removed stray stop-governor fields from
+  LeadGrace's constructor; its valid-input behavior is unchanged.
+- Tests: new `test_controller_transitions.py` runs actual controller,
+  extension, and PID code with isolated Params and deterministic inference;
+  it also executes the actual K5 neural model. `test_planner_output.py`
+  runs actual planner update/publish code with a prescribed MPC trajectory.
+  It does NOT simulate MPC or vehicle dynamics. Thirteen regression mutations
+  were run fail-then-restore, all caught. Existing braking tests that promised
+  a downstream delay were rewritten to pin immediate demand delivery.
+- `FUNNYPILOT_VERSION`, `EXPECTED_VERSION` -> `3.7.1a`. Diagnostic hashes
+  now include the remaining changed controllers and extension files; five
+  new markers plus an updated partial-throttle-lift marker.
+
 ### v3.7.0 Changes (based on funnypilot-3.6.9)
 
 One feature, owner-requested: a "holographic" follow-distance line on the road.

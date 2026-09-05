@@ -105,7 +105,10 @@ class LatSmoother:
 
   def update(self, model_curv: float, new_knot: bool, mono_t: float,
              next_curv_est: float | None = None) -> float:
-    if new_knot and math.isfinite(model_curv):
+    # v3.7.1a: engagement between model frames still needs a first segment.
+    # Passing the cached action straight through made the engagement step
+    # depend on which of the five control frames happened to enable lateral.
+    if (new_knot or self._knot_t is None) and math.isfinite(model_curv):
       self.prev = self.out  # continuity: never step, whatever the cadence did
       self.cur = float(model_curv)
       self._knot_t = mono_t
@@ -115,9 +118,7 @@ class LatSmoother:
     self._frames_since_knot += 1
 
     if self._knot_t is None:
-      # no knot yet (first frames after engage): pass the model action through
-      if math.isfinite(model_curv):
-        self.prev = self.cur = self.out = float(model_curv)
+      # No finite action yet: retain the measured curvature from reset.
       return self.out
 
     alpha = min(max((mono_t - self._knot_t) / T_MODEL + PHASE_LEAD, 0.0), 1.0)

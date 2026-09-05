@@ -14,6 +14,10 @@ class LatControlPID(LatControl):
     self.ff_factor = CP.lateralTuning.pid.kf
     self.get_steer_feedforward = CI.get_steer_feedforward_function()
 
+  def reset(self):
+    super().reset()
+    self.pid.reset()
+
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     pid_log = log.ControlsState.LateralPIDState.new_message()
     pid_log.steeringAngleDeg = float(CS.steeringAngleDeg)
@@ -26,6 +30,7 @@ class LatControlPID(LatControl):
     pid_log.steeringAngleDesiredDeg = angle_steers_des
     pid_log.angleError = error
     if not active:
+      self.reset()
       output_torque = 0.0
       pid_log.active = False
 

@@ -144,3 +144,22 @@ def test_stopping_ramp_runs_at_the_cars_full_rate():
   assert LC.long_control_state == LongCtrlState.stopping
   # exactly one full-rate step of brake was added, with no scaling
   assert out == pytest.approx(-1.2 - LC.CP.stoppingDecelRate * DT_CTRL, abs=1e-9)
+
+
+@pytest.mark.parametrize('last_accel', [1.0, 0.0, -1.0, -3.5])
+def test_stopping_honors_stronger_planned_braking(last_accel):
+  lc = _make_long_control()
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = last_accel
+  cs = car.CarState.new_message(vEgo=2.0, aEgo=last_accel)
+  out = lc.update(True, cs, a_target=-3.0, should_stop=True, accel_limits=[-3.5, 2.0])
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out <= min(last_accel, -3.0)
+
+
+def test_stopping_keeps_hold_when_plan_releases_brake():
+  lc = _make_long_control()
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -2.0
+  cs = car.CarState.new_message(vEgo=0.0)
+  assert lc.update(True, cs, 0.5, True, [-3.5, 2.0]) == -2.0

@@ -3,11 +3,10 @@
 Single-authority comfort shaping for the longitudinal planner. Design rules,
 in priority order (what an autonomous vehicle owes its passengers):
 
-  1. SAFETY IS NEVER COMFORT-LIMITED. The down-jerk allowance grows with the
-     strength of the braking demand, so a hard demand is executed essentially
-     unshaped, and the caller can bypass shaping entirely (FCW). The shaper
-     can therefore only ever soften throttle, never dilute or delay braking
-     the planner asked for.
+  1. New nonpositive demands pass through immediately when they reduce
+     acceleration. Brake release and throttle application remain jerk-limited.
+     The MPC already penalizes jerk; a downstream comfort ramp must not
+     replace its braking trajectory with a slower one.
   2. COMFORT IS ENFORCED IN EXACTLY ONE PLACE. Throttle application and brake
      release are jerk-limited here and nowhere else — no stacked filters or
      gates whose interactions can't be reasoned about.
@@ -27,34 +26,12 @@ from openpilot.selfdrive.controls.lib.lead_physics import LEAD_DECEL_MAX
 # Passenger-comfortable range is ~0.9-2.5 m/s^3; personality picks the point.
 JERK_UP_DEFAULT = 1.8
 
-# Jerk toward less accel (throttle release / brake apply), m/s^3.
-# Interpolated on the DEMANDED accel so a strong braking request immediately
-# unlocks a high slew rate — the comfort cap only applies to mild demands.
-#
-# FunnyPilot v3.5.3 EXTENDED THE TABLE INTO THE POSITIVE REGION. `np.interp`
-# CLAMPS outside its breakpoints, so with the old two-point table EVERY target
-# above -1.0 got 4.0 m/s^3 — including simply lifting off the throttle at +1.0
-# with nothing wrong, which took the car from full throttle to zero in a
-# quarter of a second. That is the single most-felt harshness on an ordinary
-# highway mile, and it was an artefact of the clamp rather than a decision.
-#
-# THIS CANNOT WEAKEN BRAKING, and the reason is the interpolation variable: the
-# lookup is on the DEMAND, not on the current output. The moment the planner
-# asks for -2.0 the table returns ~9.5 on that very frame, whatever the shaper
-# was doing before. The relaxed values are reachable only while the demand
-# itself is mild. Keep the sequence MONOTONICALLY DECREASING — a later edit
-# that raises a value in the middle would make firmer braking gentler, which is
-# the one thing this module promises never to do (test_jerk_down_is_monotone).
-#
-# FunnyPilot v3.5.5 PULLED THE RELAXATION OUT OF THE NEGATIVE REGION. v3.5.3
-# put 3.0 at a demand of 0.0, which meant every demand between -1.0 and 0 was
-# slewed more slowly than before — and that band is precisely "ease off for a
-# lead that is slowing". The intent was only ever to soften a THROTTLE LIFT, so
-# the relaxation now begins at 0 and the whole demand <= 0 half of the table is
-# bit-identical to the pre-v3.5.3 constant. A demand of +1.0 still gets 2.5.
-JERK_DOWN_BP = [-3.5, -1.0, 0.0, 1.0]
-JERK_DOWN_V = [12.0, 4.0, 4.0, 2.5]
-
+# Jerk for partial throttle lifts (positive demands only), m/s^3.
+# v3.7.1a: the old negative-demand table still delayed a -3.5 m/s^2
+# request from +1.0 by 0.4 s. A larger jerk allowance was not a braking
+# bypass. Only the positive part of that table remains useful.
+JERK_DOWN_BP = [0.0, 1.0]
+JERK_DOWN_V = [4.0, 2.5]
 
 class AccelJerkShaper:
   """Asymmetric jerk limiter on the planner's output accel target."""
@@ -67,9 +44,14 @@ class AccelJerkShaper:
     self.a = float(a)
 
   def update(self, a_target: float, jerk_up: float = JERK_UP_DEFAULT, bypass: bool = False) -> float:
-    if bypass or not np.isfinite(a_target):
-      # FCW / emergency: execute the demand unshaped and re-seed from it.
-      self.a = float(a_target) if np.isfinite(a_target) else 0.0
+    if not np.isfinite(a_target):
+      # No new throttle on invalid data, and no abrupt release of braking.
+      # This contains one bad target; service health/disengagement remains
+      # the caller's responsibility.
+      self.a = min(self.a, 0.0)
+      return self.a
+    if bypass or a_target <= min(self.a, 0.0):
+      self.a = float(a_target)
       return self.a
     jerk_down = float(np.interp(a_target, JERK_DOWN_BP, JERK_DOWN_V))
     lo = self.a - jerk_down * self.dt
@@ -99,8 +81,6 @@ class LeadGrace:
 
   def __init__(self, dt: float):
     self.dt = dt
-    self._dn = 0
-    self.stopping_lead = False
     self.reset()
 
   def reset(self) -> None:
@@ -256,29 +236,19 @@ class StopGovernor:
 
   def __init__(self, dt: float):
     self.dt = dt
-    self._dn = 0
-    self.stopping_lead = False
     self.reset()
 
   def reset(self) -> None:
-    """Drop the CAP. Deliberately does not clear the braking observation.
-
-    v3.6.8 — `_dn` counts frames of observed lead braking, and the arming test
-    reads the result of that count. Clearing it here made the two circular: the
-    governor could not arm without the count, and the count was wiped on every
-    frame it was not armed. Found by `test_a_braking_lead_arms_it_well_above_
-    the_crawl_threshold`, which is the whole reason to test the arming path
-    rather than only the envelope.
-    """
-    self._n = 0
-    self.cap = None          # None = not constraining
-
-  def _forget_lead(self) -> None:
-    """Everything reset() drops, plus what we believed about the lead itself.
-    Used when the track is gone — a new lead is not the old one."""
-    self.reset()
+    """Drop both the cap and lead evidence across a reset or invalid track."""
+    self._reset_cap()
     self._dn = 0
     self.stopping_lead = False
+
+  def _reset_cap(self) -> None:
+    # While observing a tracked lead, not yet arming the cap must preserve
+    # the braking count. External reset has a different lifecycle contract.
+    self._n = 0
+    self.cap = None
 
   def raw_cap(self, d_rel: float, v_lead: float, decel_lead: float = 0.0) -> float:
     """The stopping envelope, before confirmation or rate limiting.
@@ -311,13 +281,13 @@ class StopGovernor:
 
   def update(self, lead_status: bool, d_rel: float, v_lead: float,
              v_ego: float, v_cruise: float, a_lead: float = 0.0) -> float:
-    tracked = bool(lead_status) and np.isfinite(v_lead)
+    tracked = bool(lead_status) and np.isfinite(v_lead) and np.isfinite(d_rel) and d_rel >= 0.0
     # v3.6.8 — a lead is "committed to stopping" only after DECEL_N consecutive
     # frames of real braking. Counted rather than filtered so the requirement is
     # a duration and not a magnitude: a single hard sample must not arm it, and
     # a lead braking steadily but modestly must.
     if not tracked:
-      self._forget_lead()
+      self.reset()
       return v_cruise
     braking = np.isfinite(a_lead) and -float(a_lead) >= STOP_GOV_DECEL_MIN
     self._dn = self._dn + 1 if braking else 0
@@ -328,7 +298,7 @@ class StopGovernor:
     margin = STOP_GOV_CLOSE_OFF if self.cap is not None else STOP_GOV_CLOSE_ON
     closing = np.isfinite(v_ego) and float(v_ego) > float(v_lead) + margin
     if not (slow and closing):
-      self.reset()
+      self._reset_cap()
       return v_cruise
 
     self._n += 1

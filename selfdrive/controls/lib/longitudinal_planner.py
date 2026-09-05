@@ -11,14 +11,13 @@ priority order:
      accel/jerk overrides (whose 0.5 m/s^3 jerk cap could delay a 3 m/s^2
      braking demand by SECONDS while tiers escalated) are gone.
   2. COMFORT. Bounded acceleration (A_CRUISE_MAX table, turn limiting) and
-     bounded jerk, applied in exactly ONE place (long_shaping.AccelJerkShaper)
-     with asymmetric limits: throttle is applied gently, braking is slew-
-     limited only as much as the demanded deceleration allows, FCW bypasses
-     shaping entirely.
-  3. PREDICTABILITY. Set speed means set speed — the hidden 0.9x cruise
-     offset is removed. No time-boxed personality gas gates, no lead-cap
-     blending, no stacked output filters. The command is a deterministic
-     function of the plan.
+     bounded application/release jerk in long_shaping.AccelJerkShaper.
+     New braking demands bypass downstream comfort shaping; the MPC owns
+     their trajectory. FCW bypasses shaping entirely.
+  3. PREDICTABILITY. The branch retains its 0.93 cruise-target multiplier
+     after speed-governor arbitration, with or without a lead. Output shaping
+     tracks the acceleration actually published after clipping, so a released
+     ceiling cannot uncover a hidden acceleration history.
   4. ROBUSTNESS. Lead flicker and departures are handled in the SPEED domain
      (long_shaping.LeadGrace): the cap is floored at v_ego, so it can hold
      the car back after a lead drops but can never brake it.
@@ -321,6 +320,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target = self.shaper.update(output_a_target, jerk_up=get_jerk_up(personality), bypass=self.fcw)
 
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
+    # v3.7.1a: shape from what we actually published. A turn/coast ceiling
+    # can clip away positive accel for seconds; retaining that hidden demand
+    # would postpone the next brake request and step up when the ceiling lifts.
+    self.shaper.reset(self.output_a_target)
     self.prev_accel_clip = accel_clip
 
   def publish(self, sm, pm):
@@ -330,7 +333,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
-    longitudinalPlan.processingDelay = (plan_send.logMonoTime / 1e9) - sm.logMonoTime['modelV2']
+    longitudinalPlan.processingDelay = (plan_send.logMonoTime - sm.logMonoTime['modelV2']) / 1e9
     longitudinalPlan.solverExecutionTime = self.mpc.solve_time
 
     longitudinalPlan.speeds = self.v_desired_trajectory.tolist()

@@ -8,7 +8,6 @@ import math
 import numpy as np
 
 from openpilot.common.pid import PIDController
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 LAT_PLAN_MIN_IDX = 5
@@ -63,7 +62,7 @@ class LatControlTorqueExtBase:
     self.torque_from_lateral_accel_in_torque_space = CI.torque_from_lateral_accel_in_torque_space()
 
     self._ff = 0.0
-    self._pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI)
+    self._pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/lac_torque.dt)
     self._pid_log = None
     self._setpoint = 0.0
     self._measurement = 0.0
@@ -75,6 +74,7 @@ class LatControlTorqueExtBase:
     self._actual_curvature = 0.0
     self._gravity_adjusted_lateral_accel = 0.0
     self._steer_limited_by_safety = False
+    self._freeze_integrator = False
     self._output_torque = 0.0
 
     # twilsonco's Lateral Neural Network Feedforward
@@ -101,7 +101,13 @@ class LatControlTorqueExtBase:
 
   def update_model_v2(self, model_v2):
     self.model_v2 = model_v2
-    self.model_valid = self.model_v2 is not None and len(self.model_v2.orientation.x) >= CONTROL_N
+    # v3.7.1a: every interpolation and finite difference below uses the full
+    # model time grid. A populated roll array alone says nothing about pitch
+    # or acceleration, and a partial plan must not enter the neural path.
+    self.model_valid = model_v2 is not None and all(
+      len(values) == len(ModelConstants.T_IDXS) and np.isfinite(values).all()
+      for values in (model_v2.orientation.x, model_v2.orientation.y, model_v2.acceleration.y)
+    )
 
   def update_lateral_lag(self, lag):
     self.desired_lat_jerk_time = max(0.01, lag) + LATERAL_LAG_MOD

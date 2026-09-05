@@ -123,7 +123,10 @@ class LongControl:
       output_accel = 0.
 
     elif self.long_control_state == LongCtrlState.stopping:
-      output_accel = self.last_output_accel
+      # v3.7.1a: stop hold may add braking, but must not discard a stronger
+      # planner request. The PID is inactive here; ignoring a_target could
+      # turn a -3 m/s^2 demand into just -0.004 on the first stopping frame.
+      output_accel = min(self.last_output_accel, a_target, 0.0)
       if output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
         # v3.5.5: full rate again — this ramp is the ONLY brake authority in
