@@ -130,6 +130,29 @@ all retained. The planner also keeps 3.7.1a's shaper synchronization and
 timestamp fix; the lateral motion-credit implementation is unchanged.
 `FUNNYPILOT_VERSION` and diagnostic `EXPECTED_VERSION` remain `3.7.1a`.
 
+ENGAGEMENT / CALIBRATION VISIBILITY HOTFIX:
+- `selfdrive/ui/onroad/alert_renderer.py` — the v3.5.1 claim that normal means
+  nothing is wrong was FALSE. `NoEntryAlert` and calibration fault/progress
+  alerts use normal too. Quiet only complete event/type pairs in
+  `QUIET_ALERT_TYPES`; unknown alerts, no-entry reasons, raised severities and
+  full-screen alerts show. Do not restore a blanket severity filter.
+- `selfdrive/ui/onroad/model_status.py`, `augmented_road_view.py` — require
+  live, valid, current-drive model/calibration messages, calibrated status and
+  finite calibration angles before drawing projected geometry. Gate BOTH the
+  model overlay and guide bar; the bar otherwise reuses cached model points.
+  Camera and fault messages continue rendering. No calibration reset, forged
+  calibrated status or engagement bypass; these changes cannot fix a bad mount.
+- `sunnypilot/feedback/feedbackd.py` — capture calibration status/angles/progress
+  plus selfdrive state and alert text/type for subsequent investigations.
+- `selfdrive/ui/sunnypilot/onroad/tests/test_alert_visibility.py` — real capnp
+  messages through the production alert-selection method (native graphics
+  isolated), including refusal, calibration, unknown faults, stale data and
+  watchdog handling; overlay withdrawal/recovery and both drawing call sites.
+- Owner reported no engagement and misaligned geometry while away from SSH.
+  Private inbox had no driving reports. Hidden alerts and uncalibrated overlay
+  rendering are reproduced code defects; the device's actual refusal/calibration
+  state remains unverified. Do not call that root cause fixed without recordings.
+
 LIVE FEEDBACK (owner requested):
 - Read `AGENTS.md` and `docs/feedback-workflow.md`, then query the private inbox
   with `python tools/feedback_cloud.py list --status new` before investigating
@@ -2645,9 +2668,9 @@ two beat against each other and coincided occasionally.
   for a system that cannot act. The renderer is still CONSTRUCTED (keeps
   driverStateV2 flowing); only the draw is skipped.
 - `selfdrive/ui/onroad/alert_renderer.py` — informational banners suppressed.
-  FILTER IS ON `alertStatus`, NOT on a list of event names: `normal` is
-  openpilot's own word for "nothing is wrong", so new upstream events classify
-  themselves and nobody has to maintain a list. `AlertSize.full` always shows.
+  HISTORICAL BUG, corrected in 3.7.1a: filtering all normal-severity alerts also
+  hid engagement refusals and calibration faults. Normal does NOT mean healthy.
+  Use the explicit routine event/type pairs described in the hotfix above.
 - `selfdrive/ui/mici/onroad/torque_bar.py` — HOTFIX, the branch did NOT boot as
   first pushed. `warm_color: rl.Color | None = None` raised at import and took
   manager with it. Params are now DELIBERATELY UNANNOTATED with a comment

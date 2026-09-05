@@ -110,13 +110,19 @@ def test_snapshot_uses_real_cereal_fields():
   sm={'carState':car.CarState.new_message(), 'controlsState':log.ControlsState.new_message(),
       'longitudinalPlan':log.LongitudinalPlan.new_message(), 'liveTorqueParameters':log.LiveTorqueParametersData.new_message(),
       'carControl':car.CarControl.new_message(), 'radarState':log.RadarState.new_message(),
-      'longitudinalPlanSP':custom.LongitudinalPlanSP.new_message()}
+      'longitudinalPlanSP':custom.LongitudinalPlanSP.new_message(),
+      'selfdriveState':log.SelfdriveState.new_message(), 'liveCalibration':log.LiveCalibrationData.new_message()}
+  sm['selfdriveState'].alertType = 'calibrationIncomplete/noEntry'
+  sm['selfdriveState'].alertText2 = 'Calibration in Progress'
+  sm['liveCalibration'].calStatus = 'uncalibrated'
   sm['controlsState'].lateralControlState.init('torqueState')
   class Signals(dict):
     valid=dict.fromkeys(sm, True)
     alive=valid
   result=snapshot(Signals(sm),100)
   assert result['desired_curvature']==0 and 'lateral' in result
+  assert result['selfdrive']['alert_type'] == 'calibrationIncomplete/noEntry'
+  assert result['calibration']['status'] == 'uncalibrated'
   json.dumps(result,allow_nan=False)
 
 

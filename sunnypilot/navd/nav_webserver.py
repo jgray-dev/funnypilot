@@ -208,7 +208,7 @@ _CODE_MARKERS = [
   ("def _spawn_write", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_learn_store.py", "store writes off the planner thread"),
   ("def edge_fade", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap edge fade"),
   ("POSE_TAU", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap pose smoothing"),
-  ("INFORMATIONAL BANNERS ARE SUPPRESSED", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "info banner filter"),
+  ("QUIET_ALERT_TYPES = frozenset", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "explicit routine banner filter"),
   # v3.5.2
   ("def expected_speed_at", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tint vs expected speed"),
   ("def _draw_ego", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap ego marker"),
@@ -339,6 +339,8 @@ _CODE_MARKERS = [
   ("class Capture", "/data/openpilot/sunnypilot/feedback/capture.py", "durable surrounding feedback capture"),
   ("PENALTY_RELIEF = 0.10", "/data/openpilot/sunnypilot/feedback/corner_feedback.py", "bounded per-corner feedback relief"),
   ("def upload_event", "/data/openpilot/sunnypilot/feedback/uploader.py", "private resumable feedback uploads"),
+  ("ss.alertType in QUIET_ALERT_TYPES", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "engagement and calibration faults visible"),
+  ("def model_overlay_ready", "/data/openpilot/selfdrive/ui/onroad/model_status.py", "calibrated model overlay readiness"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

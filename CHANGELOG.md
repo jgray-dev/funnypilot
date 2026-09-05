@@ -4,6 +4,13 @@ Includes funnypilot-3.7.1 at 44f14a6af, merged into the existing 3.7.1a work.
 All 3.7.1 guide-bar, corner-exit, cruise-offset, and map fixes are retained
 alongside the controller changes below.
 
+* Engagement/calibration visibility hotfix: the old normal-severity filter hid
+  refusal reasons and calibration faults. Only explicitly named routine notices
+  are now quiet; fault messages and unknown alerts remain visible. Model/path
+  and follow-distance overlays require fresh, valid, completed calibration.
+  Feedback samples now include calibration state and the exact displayed alert.
+  The owner's current engagement failure still needs device-log diagnosis.
+
 * Live Report popup: tap multiple issue labels while the event is happening.
   Saves the whole drive and captures 20 seconds before/after, controller samples,
   software identity, steering triage and surrounding road video/log segments.

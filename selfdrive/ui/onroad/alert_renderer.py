@@ -27,6 +27,15 @@ ALERT_HEIGHTS = {
   AlertSize.mid: 420,
 }
 
+# Complete event/type pairs: even a routine event must show if it refuses entry.
+QUIET_ALERT_TYPES = frozenset({
+  "startup/permanent",
+  "preLaneChangeLeft/warning", "preLaneChangeRight/warning", "laneChange/warning",
+  "laneTurnLeft/warning", "laneTurnRight/warning",
+  "experimentalModeSwitched/warning",
+  "speedLimitActive/warning", "speedLimitChanged/warning", "speedLimitPending/warning",
+})
+
 SELFDRIVE_STATE_TIMEOUT = 5  # Seconds
 SELFDRIVE_UNRESPONSIVE_TIMEOUT = 10  # Seconds
 
@@ -111,27 +120,11 @@ class AlertRenderer(Widget):
     if recv_frame < ui_state.started_frame:
       return None
 
-    # FunnyPilot v3.5.1 — INFORMATIONAL BANNERS ARE SUPPRESSED.
-    #
-    # The design rule for this HUD is that state is IMPLIED by something
-    # already on screen and never announced by a slab of text over the road:
-    # the set speed changing is visible in the set-speed station, a lane change
-    # is visible in the turn-signal chevrons, SLA's intent is the halo on the
-    # sign. A banner for those covers the road to tell you something the screen
-    # is already showing you, and it trains the driver to ignore banners —
-    # which is exactly what you cannot afford when a real one arrives.
-    #
-    # THE FILTER IS ON `alertStatus`, NOT ON A LIST OF EVENT NAMES. `normal` is
-    # openpilot's own word for "nothing is wrong"; `userPrompt` and `critical`
-    # are the ones that mean something needs the driver. Keying off the
-    # severity the event already declares means new upstream events are
-    # classified correctly without anyone remembering to update a list here.
-    # AlertSize.full is always shown whatever its status — a full-screen alert
-    # is never incidental.
-    # `.raw` on both sides: the rest of this file compares the int form, and a
-    # silent type mismatch here would suppress every banner or none.
+    # Severity is not an availability classification: NoEntryAlert and
+    # calibration faults also use normal. Quiet only named routine notices;
+    # unknown/future faults, refusal reasons and all raised severities show.
     if (gui_app.sunnypilot_ui() and ss.alertStatus.raw == AlertStatus.normal
-        and ss.alertSize.raw != AlertSize.full):
+        and ss.alertSize.raw != AlertSize.full and ss.alertType in QUIET_ALERT_TYPES):
       return None
 
     # Return current alert

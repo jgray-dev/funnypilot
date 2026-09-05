@@ -11,6 +11,8 @@ The whole route is saved using the same protection as the web Drives page.
 The capture includes roughly 20 seconds before and after the report, the
 software commit/branch/version/dirty state, controller and actuator samples,
 lead/governor data, torque parameters, and the matching steering triage lines.
+Samples also include calibration status/progress/angles and the exact selfdrive
+alert type/text, including refusal reasons that older UI versions hid.
 The enclosing road-video (`qcamera.ts`) and decimated-log (`qlog.zst`) minute
 segments are included without transcoding. Missing or oversized artifacts are
 listed in the manifest. Cabin video, audio, credentials and unrelated drives

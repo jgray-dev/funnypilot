@@ -53,8 +53,14 @@ def snapshot(sm, now):
   row['governor_source'] = str(plan_sp.longitudinalPlanSource)
   row['map_cap'] = plan_sp.smartCruiseControl.map.vTarget
   row['vision_cap'] = plan_sp.smartCruiseControl.vision.vTarget
+  state, calib = sm['selfdriveState'], sm['liveCalibration']
+  row['selfdrive'] = {'enabled':state.enabled, 'state':str(state.state), 'alert_type':state.alertType,
+                      'alert_text1':state.alertText1, 'alert_text2':state.alertText2}
+  row['calibration'] = {'status':str(calib.calStatus), 'percent':calib.calPerc, 'rpy':list(calib.rpyCalib),
+                        'height':list(calib.height), 'wide_from_device':list(calib.wideFromDeviceEuler)}
   # Include timestamps/validity so stale samples cannot masquerade as fresh data.
-  row['valid'] = {s:bool(sm.valid[s] and sm.alive[s]) for s in ('carState','controlsState','longitudinalPlan')}
+  row['valid'] = {s:bool(sm.valid[s] and sm.alive[s]) for s in
+                  ('carState','controlsState','longitudinalPlan','selfdriveState','liveCalibration')}
   return row
 
 
@@ -69,7 +75,7 @@ def main():
   params = Params()
   capture = Capture(log_root=Paths.log_root(), identity=identity(Path(__file__).resolve().parents[2]))
   sm = messaging.SubMaster(['carState','controlsState','longitudinalPlan','deviceState','selfdriveState',
-                           'liveTorqueParameters','carControl','radarState','longitudinalPlanSP'], poll='carState')
+                           'liveTorqueParameters','carControl','radarState','longitudinalPlanSP','liveCalibration'], poll='carState')
   sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
   try:
     os.unlink(P.SOCKET)

@@ -118,7 +118,7 @@ markers are retained, with the displayed version remaining 3.7.1a.
 ## Validation
 
 The unmodified controller/governor baseline passed 724 tests. The expanded
-regression run after integrating 3.7.1, drive retention and live feedback passes **1,329 tests**, including lateral/longitudinal helpers,
+regression run after integrating 3.7.1, drive retention, live feedback and the alert-visibility hotfix passes **1,345 tests**, including lateral/longitudinal helpers,
 actual controller transitions, planner output integration, SCC/SLA, blinker
 pause, UI import/contract guards, diagnostics, and release metadata checks.
 Ruff passes across `selfdrive`, `sunnypilot`, `system`, and `common`.
@@ -139,6 +139,13 @@ the complete daemon lifecycle and onroad behavior remain unverified here.
 Desktop and mobile Chromium checks exercise the real Feedback HTTP handler,
 multi-label/status rendering, private config filtering and HTML escaping.
 See `docs/feedback-workflow.md` for capture, bounded relief and review details.
+
+The visibility hotfix adds 16 checks covering normal-severity refusals and
+calibration faults, unknown alerts, quiet routine notices, process watchdogs,
+and geometry withdrawal/recovery with invalid or stale calibration/model data.
+The capture schema check also verifies calibration and refusal fields. The
+owner's device was being driven away from SSH and the private inbox was empty;
+these checks do not identify or resolve its actual engagement blocker.
 
 Thirteen mutations were applied individually, confirmed to fail their targeted
 behavioral test, and restored: double PID integration; omitted handback freeze;

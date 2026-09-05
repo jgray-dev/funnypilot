@@ -9,6 +9,7 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.onroad.model_status import model_overlay_ready
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.follow_line import FollowLine
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
@@ -99,12 +100,14 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     super()._render(rect)
 
     # Draw all UI overlays
-    self.model_renderer.render(self._content_rect)
+    geometry_ready = model_overlay_ready(ui_state.sm, ui_state.started_frame)
+    if geometry_ready:
+      self.model_renderer.render(self._content_rect)
     # FunnyPilot v3.7.0: the follow-distance line goes ON the road, so it is
     # drawn immediately after the path and before any chrome or readout can
     # cover it. Same projection as the lead chevron — see hud/follow_line.py
     # for why that is the accuracy argument, not a convenience.
-    if gui_app.sunnypilot_ui():
+    if gui_app.sunnypilot_ui() and geometry_ready:
       T.safe_draw("follow_line", self._follow_line.draw, self.model_renderer, ui_state.sm, self._content_rect)
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     # FunnyPilot v3.5.0: edge treatment sits between the model and the HUD —
