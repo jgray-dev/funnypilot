@@ -1,6 +1,6 @@
 # FunnyPilot 3.7.3e — Astra-linked Comma 3X
 
-## Delivered source, not an activated service
+## Web deployed; broker and device activation pending
 
 Based on `funnypilot-3.7.2` commit
 `5ec74a3c776c2cdcf1d1c341e1017966051862c1`. This release adds an optional
@@ -8,10 +8,20 @@ outbound device client and extends the existing Astra website/harness. No
 controller tuning, vehicle safety-gate bypass, native schema, Params key, or
 on-device LLM was added.
 
-**No public Worker deployment, host broker restart, device flash/restart, device
-configuration change, real pairing, paid model call, or live driving validation
-was performed.** These source changes do not make the currently deployed website
-or vehicle use the new feature automatically.
+The owner explicitly authorized web deployment on 2026-09-05. Website and Worker
+are live at **https://astra.jgray.cc**, version
+`efa1c9e1-4f2b-4588-b718-1eff88124c28`, deployed at **23:41:38.320 UTC** with 100%
+traffic. Published HTML/JS/CSS match the build byte-for-byte; unauthenticated
+`/api/linked-devices` and `/api/state` return401. Verified at23:42:29 UTC.
+
+**No host broker restart, device flash/restart, device configuration change,
+real pairing, paid model call or live driving validation was performed.**
+Linked hardware is visible after refresh, but the old running brokers must be
+activated separately before linked conversations work. A tested capability
+preflight returns503 `BROKER_ACTIVATION_REQUIRED` rather than silently dropping
+the selected device. Conservatively, all conversation resumes are blocked until
+both brokers are updated; already-running and new ordinary conversations remain
+available.
 
 ## Architecture discovered on this host
 
@@ -160,9 +170,11 @@ Do not apply the patch blindly to already edited/live source. Check its baseline
 hashes first. The local non-Git source already contains these edits; applying the
 patch there again is unnecessary.
 
-Activation, **not performed here**, requires an explicitly authorized window:
-- Verify source/dependencies and build/deploy the Astra Worker/assets using the
-  existing credential workflow; no secret rotation is implied.
+Web deployment used `npm run check`, `npm run build`, Wrangler dry-run, then
+`wrangler deploy --keep-vars` with existing account authentication. No credential
+rotation or live configuration edits were performed.
+
+**Remaining activation was not performed** and requires an explicitly authorized window:
 - Check running Astra sessions before restarting `astra-web`/`astra-chat`.
   **Restarting `astra-web` terminates its PTYs**, including active agent sessions.
   Restarting just chat cannot load new PTY-broker creation code.
@@ -178,7 +190,8 @@ Local checks completed on this host:
 - **185 Python tests**, including the actual device client/runner, fault injection,
   feedback/process-health regressions, diagnostic markers and capnp annotation
   guard. **175 diagnostic markers resolve.** Changed Python passes Ruff.
-- **72 Astra tests**, including real SQLite transitions with injected clocks,
+- **73 Astra tests**, including fail-closed old-broker capability checks,
+  real SQLite transitions with injected clocks,
   browser UI fixtures, scoped native MCP subprocesses, existing auth/relay tests,
   and end-to-end **MCP → local Worker → real Python device/operations**.
 - TypeScript check, broker syntax checks and temporary-output production build.

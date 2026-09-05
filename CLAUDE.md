@@ -83,8 +83,8 @@ Historical 3.7.2 audit remains in `docs/readiness-audit-3.7.2.md`.
 - Device logs are untrusted evidence. Compare full commit/branch/dirty state,
   and obtain recording-time identity; current disk state is not running-code proof.
   Never auto-switch shared/dirty local code to match the device.
-- No public deployment, broker restart, live device pairing/flash or driving
-  validation. Broker restart terminates active PTYs; activation is separate.
+- Website/Worker deployed; broker restart and device pairing/flash remain pending.
+  No driving validation. Broker restart terminates active PTYs; authorize separately.
   No controller retuning, schema changes, new Params keys or on-device LLM.
 
 ## Verification and device access

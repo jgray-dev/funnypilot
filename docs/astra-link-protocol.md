@@ -30,6 +30,7 @@ Files: roots `/data/openpilot`, `/data/log`, `/data/community/crashes`, `/data/f
 - POST `/api/linked-devices/reject` `{id}` -> `{ok:true}`; cancels pending/approved requests, executing -> cancelled (next lease denied). Approval/reject unavailable to session or device credentials.
 
 ## Host/harness integration
+Browser session creation with a selected device, or any resume, first asks the current chat relay for `deviceCapabilities`. The updated chat broker forwards this to the PTY broker's read-only POST `/local/device-capabilities`; both must support `{protocol:1,linkedDevices:true}`. Missing/unsupported capabilities or a relay change return HTTP503 `BROKER_ACTIVATION_REQUIRED` before creating a session. This prevents a web-only deployment from silently losing the device binding on older brokers. Ordinary new unlinked sessions do not require this preflight.
 - GET `/bridge/device-session?nativeId=UUID` (host bridge bearer ONLY) -> `{binding:null|{nativeId,deviceId,cwd}}`. Native binding survives capability expiry and broker metadata loss.
 - POST `/bridge/device-session` (host bridge bearer ONLY) `{session,nativeId,cwd,deviceId,token}`. Register hashed session capability; bind immutable nativeId/deviceId/cwd `/home/astro/Development/c3x`. Existing native binding cannot be changed. Re-register same session token idempotently. Session capabilities expire after 24h; revoke on device revoke.
 - GET `/tool/status` (session capability bearer) -> `{device:DeviceSummary,session}`.

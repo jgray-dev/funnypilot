@@ -1629,11 +1629,12 @@
  async function readBody(req) { let raw = ''; for await (const part of req) { raw += part; if (raw.length > 256000) throw new Error('Request too large.'); } return raw ? JSON.parse(raw) : {}; }
  const server = http.createServer(async (req, res) => {
    const respond = (value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
-@@ -160,7 +177,7 @@
+@@ -160,7 +177,8 @@
      if (req.method === 'GET' && req.url === '/local/status') return respond({ online: bridge?.readyState === WebSocket.OPEN });
      if (req.method !== 'POST') return respond({ error: 'Not found' }, 404);
      const value = await readBody(req);
 -    if (req.url === '/local/create') return respond(create(value, true));
++    if (req.url === '/local/device-capabilities') return respond({ protocol: 1, linkedDevices: true });
 +    if (req.url === '/local/create') return respond(await create(value, true));
      if (req.url === '/local/link') {
        const s = sessions.get(value.session); if (!s?.running) throw new Error('Start a new Astra session before using /rc.');
@@ -1660,6 +1661,15 @@
    // Minting marks it shared; this unused credential remains only in memory and expires.
    await local('/local/link', { session: result.id });
    result.shared = true; const s = ensure(result); await attachTerminal(s); void refresh(); return result;
+@@ -129,6 +131,8 @@
+   if (method === 'projects') { const out = []; for (const root of cfg.roots) { out.push({ path: root, name: path.basename(root) }); try { for (const e of await fs.promises.readdir(root, { withFileTypes: true })) if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') out.push({ path: path.join(root, e.name), name: e.name }); } catch {} } return out.slice(0, 200); }
+   if (method === 'usage') return usage();
+   if (method === 'directories') return directoryOptions(params.prefix, cfg.roots);
++  // Do not advertise linked support until the PTY owner also has the new code.
++  if (method === 'deviceCapabilities') return local('/local/device-capabilities', {});
+   if (method === 'create') return create(params);
+   throw new Error('Unknown operation.');
+ }
 --- /dev/null
 +++ b/server/device-context.mjs
 @@ -0,0 +1,132 @@
@@ -3147,6 +3157,54 @@
  const pause = ms => new Promise(r => setTimeout(r, ms));
  async function socket(path, headers) {
    const ws = new WebSocket(base.replace(/^http/, 'ws') + path, { headers });
+@@ -13,6 +11,47 @@
+   return ws;
+ }
+ async function until(fn) { for (let n = 0; n < 100; n++) { if (fn()) return; await pause(30); } throw Error('Relay event timed out'); }
++test('linked creation and resumes fail closed until both brokers advertise support', async () => {
++  const headers = { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' };
++  const minted = await (await fetch(base + '/bridge/link', { method: 'POST', headers, body: JSON.stringify({ session: randomUUID() }) })).json();
++  const key = new URLSearchParams(new URL(minted.url).hash.slice(1)).get('key');
++  const exchange = await fetch(base + '/api/exchange', { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ key, name: 'broker-capabilities-test' }) });
++  assert.equal(exchange.status, 200);
++  const cookie = exchange.headers.get('set-cookie').split(';')[0];
++  const state = await (await fetch(base + '/api/state', { headers: { Cookie: cookie } })).json();
++  const owner = { Cookie: cookie, Origin: base, 'Content-Type': 'application/json', 'X-Astra-CSRF': state.csrf };
++  const chat = await socket('/bridge/chat-connect', headers);
++  const calls = []; let capability = null;
++  chat.on('message', d => {
++    const m = JSON.parse(String(d)); if (m.type !== 'call') return;
++    calls.push(m);
++    chat.send(JSON.stringify({ type: 'reply', id: m.id, ...(m.method === 'deviceCapabilities' ? capability ? { result: capability } : { error: 'Unknown operation.' } : { result: { id: 'synthetic-session', ...m.params } }) }));
++  });
++  const create = params => fetch(base + '/api/sessions', { method: 'POST', headers: owner, body: JSON.stringify(params) });
++  try {
++    const linkedDeviceId = randomUUID();
++    for (const params of [{ linkedDeviceId }, { resume: randomUUID() }]) {
++      const response = await create(params);
++      assert.equal(response.status, 503);
++      assert.equal((await response.json()).code, 'BROKER_ACTIVATION_REQUIRED');
++    }
++    capability = { protocol: 1, linkedDevices: false };
++    assert.equal((await create({ linkedDeviceId })).status, 503);
++    capability = { protocol: 2, linkedDevices: true };
++    assert.equal((await create({ linkedDeviceId })).status, 503);
++    assert.equal(calls.some(m => m.method === 'create'), false);
++    capability = { protocol: 1, linkedDevices: true };
++    const response = await create({ linkedDeviceId });
++    assert.equal(response.status, 200); assert.equal((await response.json()).linkedDeviceId, linkedDeviceId);
++    capability = null;
++    assert.equal((await create({ cwd: '/home/astro/sandbox' })).status, 200);
++    assert.equal(calls.filter(m => m.method === 'create').length, 2);
++  } finally {
++    chat.close();
++    await fetch(base + '/api/logout', { method: 'POST', headers: owner, body: '{}' });
++  }
++});
++
+ test('only the chat relay controls browser connectivity and API routing', async () => {
+   const headers = { Authorization: `Bearer ${secret}` };
+   const minted = await (await fetch(base + '/bridge/link', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ session: randomUUID() }) })).json();
 --- a/tests/security.test.mjs
 +++ b/tests/security.test.mjs
 @@ -1,11 +1,9 @@
@@ -3206,7 +3264,7 @@
          if (['/bridge/connect', '/bridge/chat-connect'].includes(path) && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
            const role = path === '/bridge/chat-connect' ? 'chat' : 'bridge';
            for (const old of this.ctx.getWebSockets(role)) old.close(1000, 'Replaced');
-@@ -103,6 +109,7 @@
+@@ -103,12 +109,27 @@
        const device = await this.device(request);
        if (!device) return json({ error: 'Open a fresh /rc link from Astra to sign in.' }, 401);
        if (request.method !== 'GET' && (origin !== this.env.ORIGIN || !equal(request.headers.get('x-astra-csrf') || '', device.csrf))) return json({ error: 'Request rejected' }, 403);
@@ -3214,7 +3272,28 @@
        if (path === '/api/state' && request.method === 'GET') return json({ device: { id: device.id, name: device.name, trusted: !!device.trusted, expires: device.expires }, csrf: device.csrf, online: !!this.bridge() });
        if (path === '/api/sessions' && request.method === 'GET') return json(await this.call('list'));
        if (path === '/api/usage' && request.method === 'GET') return json(await this.call('usage'));
-@@ -186,7 +193,7 @@
+       if (path === '/api/directories' && request.method === 'GET') return json(await this.call('directories', { prefix: url.searchParams.get('prefix') || '' }));
+       if (path === '/api/projects' && request.method === 'GET') return json(await this.call('projects'));
+-      if (path === '/api/sessions' && request.method === 'POST') { this.throttle(`create:${device.id}`, 6); return json(await this.call('create', await body(request))); }
++      if (path === '/api/sessions' && request.method === 'POST') {
++        this.throttle(`create:${device.id}`, 6);
++        const params = await body(request);
++        // An old broker silently ignores hardware selection. Resumes also need
++        // binding-aware brokers, even when the browser omits linkedDeviceId.
++        if (params.linkedDeviceId || params.resume) {
++          const bridge = this.bridge();
++          let capabilities: { protocol?: number; linkedDevices?: boolean } | undefined;
++          try { capabilities = await this.call('deviceCapabilities') as typeof capabilities; } catch { /* Fail closed before create. */ }
++          if (!capabilities || capabilities.protocol !== 1 || capabilities.linkedDevices !== true || !bridge || this.bridge() !== bridge) {
++            return json({ error: 'Broker activation required before starting or resuming linked conversations.', code: 'BROKER_ACTIVATION_REQUIRED' }, 503);
++          }
++        }
++        return json(await this.call('create', params));
++      }
+       if (path === '/api/devices' && request.method === 'GET') return json(this.ctx.storage.sql.exec('SELECT id,name,created,expires,trusted FROM devices WHERE expires>? ORDER BY created DESC', Date.now()).toArray());
+       if (path === '/api/trust' && request.method === 'POST') {
+         const value = await body(request), expires = Date.now() + 30 * 86400000;
+@@ -186,7 +207,7 @@
      const url = new URL(request.url);
      if (url.origin !== env.ORIGIN) return new Response('Unknown host', { status: 403 });
      let response: Response;

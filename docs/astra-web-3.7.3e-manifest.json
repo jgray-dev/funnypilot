@@ -1,7 +1,7 @@
 {
   "release": "3.7.3e",
   "sourceRoot": "/home/astro/sandbox/astra-web",
-  "patchSha256": "53b841343ef8470f39a85e7a64e9b8fe9f32b7f861d4f6124336baad3c2408d8",
+  "patchSha256": "5a74196df84cff0949cda150ceea1e3f2317e22b5b20d65341794a9612867b4c",
   "files": {
     "README.md": {
       "before": "2aef25f2e953c38d4fcc4bade7226915b1f9c05e24f1fb57377e098be52507ca",
@@ -21,11 +21,11 @@
     },
     "server/broker.mjs": {
       "before": "200bad70abd9bb047ced926c3901a5743e43950abd24209609e87112c3547d98",
-      "after": "34cbb268fbf43f381d7aa860c6789d42330268d014aba828aa8c367c694a4366"
+      "after": "f3b1302410594896a11dd946be7b8a6640c5571e2e615a84e0c059bcf58a1471"
     },
     "server/chat-broker.mjs": {
       "before": "f93a6c5b39900db4acf8482ec44c77d70ac27129029689a18870d4c26fc03484",
-      "after": "0ad248f8804749d31755f62f486996479f312d82b82cf7481bc14e06791174f1"
+      "after": "99a2085093262287ff22e4b0bc356d2975b268b61a92cd9479b6cde400ac66a0"
     },
     "server/device-context.mjs": {
       "before": null,
@@ -73,7 +73,7 @@
     },
     "tests/relay.test.mjs": {
       "before": "62f696535800e862d6c4d8ab47cca9749521eab8acbcdb3aa4299c074c1e243f",
-      "after": "b2373c929c8dd9a64c800d6207c92540e4f769b493c0cea87f8d8883ebab3744"
+      "after": "43610ebafa020e69a12fc482c726651760662d350bc977eb7ae67c2ad5278c5b"
     },
     "tests/security.test.mjs": {
       "before": "451a527c35bafd44f06a8949242d2e1f5ccf68478c5d3c2165ac775aa90947fd",
@@ -85,7 +85,7 @@
     },
     "worker/index.ts": {
       "before": "9e270cb2f714f9402492ad6018da03e1649d873bfd93699d5a37f52ca19593cf",
-      "after": "95aca4617fca17b148a1a937446b5b178231ea53364f479d0b46d558f8ff52ff"
+      "after": "1051a8e138e8b53475ea287d57a8cd9a4806c89bef25c8cf5d193d68cf4dfb7c"
     },
     "worker/linked-devices.ts": {
       "before": null,
