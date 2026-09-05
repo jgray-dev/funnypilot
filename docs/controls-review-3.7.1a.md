@@ -6,6 +6,52 @@ Working branch: `funnypilot-3.7.1a`. Review date: 2026-09-05.
 This change fixes reproducible controller defects. It does not establish
 autonomous-driving capability or road readiness. No device was flashed.
 
+## Lateral follow-up: steering motion credit
+
+The owner's next request concerned occasional large wheel movements during a
+turn. The new mechanism acts inside torque error feedback: it asks how much
+of the correction is already being supplied by wheel movement, relative to
+the upcoming reference trajectory. It does not move the model's curvature
+knots or spread them across a longer window.
+
+`SteeringMotionCredit` estimates signed wheel motion from 80 ms of angle
+samples. This matters on the K5: its CAN `SAS_Speed` field is unsigned and
+quantized in 4-degree/second steps. The estimator subtracts one 0.1-degree
+angle quantum, needs 40 ms of history, and clears its direction history on a
+reversal or sample gap. It therefore prefers missing a small movement over
+inventing motion from a quantized sensor tick.
+
+The controller projects that motion at most 120 ms forward and subtracts the
+reference movement already known from the actuator-delay buffer. Only surplus
+travel toward the tracking error earns credit. It smoothly reduces the error
+used by proportional and error-friction correction, and freezes integral
+accumulation while meaningful credit is applied. The maximum credited error
+is 0.12 m/s²; at least 35% of proportional/error-friction correction remains.
+Static path feedforward, roll/offset compensation, and planned jerk retain
+their values. Driver intervention, bump handling, and limiting bypass credit.
+
+Neural control receives the same bounded credit, adapted to its reference
+horizon; it cannot turn a small delayed error into a large reduction of a
+future error, or soften an opposite-sign future error. Its plan inputs are
+unchanged. The v0 torque tune keeps the original behavior.
+
+There is no accumulated command waiting to be paid back. When the wheel
+stops moving or falls behind a planned ramp, credit disappears and the
+original correction is available again. This is the distinction from a
+longer smoothing filter that would delay the entire turn.
+
+In five simple delayed second-order rack probes using the real conventional
+controller, wheel-rate RMS decreased approximately 1.3–4.2%; tracking-error
+RMS changes ranged from about 5.5% better to 2% worse. Torque-rate RMS improved
+in four probes and worsened approximately 0.5% in one. These are modest
+mechanism checks on an uncalibrated synthetic rack, not vehicle-performance
+claims. The actual driver-reported symptom still requires drive evidence.
+Existing triage records now carry `mcs` (minimum base feedback scale) and `mcr`
+(maximum credited error) to correlate the change with that symptom.
+Five focused checks cover the bounded behavior and real-controller wiring.
+Three additional mutations (removing conventional/neural credit and using the
+unsigned rate signal) each failed the corresponding behavioral check.
+
 ## Control paths reviewed
 
 Lateral: model curvature and delay alignment in `controlsd`, predictive knot
@@ -60,7 +106,7 @@ Params keys, capnp schema changes, or generated-code changes are introduced.
 ## Validation
 
 The unmodified controller/governor baseline passed 724 tests. The expanded
-regression run passes **1,251 tests**, including lateral/longitudinal helpers,
+regression run passes **1,256 tests**, including lateral/longitudinal helpers,
 actual controller transitions, planner output integration, SCC/SLA, blinker
 pause, UI import/contract guards, diagnostics, and release metadata checks.
 Ruff passes across `selfdrive`, `sunnypilot`, `system`, and `common`.

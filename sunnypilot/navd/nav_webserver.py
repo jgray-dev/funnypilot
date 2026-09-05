@@ -70,6 +70,7 @@ _FEEL_FILES = [
   "/data/openpilot/selfdrive/controls/lib/lat_smooth.py",
   "/data/openpilot/selfdrive/controls/lib/knot_filter.py",
   "/data/openpilot/selfdrive/controls/lib/lat_handback.py",
+  "/data/openpilot/selfdrive/controls/lib/steering_motion.py",
   "/data/openpilot/selfdrive/controls/lib/eps_limit.py",
   "/data/openpilot/selfdrive/controls/lib/bump_damper.py",
   "/data/openpilot/selfdrive/controls/lib/long_shaping.py",
@@ -317,6 +318,9 @@ _CODE_MARKERS = [
   ("self.shaper.reset(self.output_a_target)", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "shaper follows published acceleration"),
   ("a_target <= min(self.a, 0.0)", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "planned braking bypasses comfort ramp"),
   ("min(self.last_output_accel, a_target, 0.0)", "/data/openpilot/selfdrive/controls/lib/longcontrol.py", "stopping preserves planned braking"),
+  ("class SteeringMotionCredit", "/data/openpilot/selfdrive/controls/lib/steering_motion.py", "signed wheel-motion credit"),
+  ("error *= motion_scale", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "motion credit reaches error feedback"),
+  ("credit / abs(neural_error)", "/data/openpilot/sunnypilot/selfdrive/controls/lib/nnlc/nnlc.py", "neural credit bounded across reference horizons"),
 ]
 _CODE_CMD = "; ".join(
   f"grep -qs '{pat}' '{path}' && echo 'ok       {label}' || echo 'MISSING  {label}'"

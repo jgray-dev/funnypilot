@@ -124,9 +124,22 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
 
     self.update_feedforward_torque_space(CS)
 
+    delayed_error = self._setpoint - self._measurement
     low_speed_factor = float(np.interp(CS.vEgo, LOW_SPEED_X, LOW_SPEED_Y)) ** 2
     self._setpoint = self._desired_lateral_accel + low_speed_factor * self._desired_curvature
     self._measurement = self._actual_lateral_accel + low_speed_factor * self._actual_curvature
+    neural_error = self._setpoint - self._measurement
+    if delayed_error * neural_error <= 0.0:
+      # NNLC's reference is further ahead than the delayed base reference.
+      # Credit earned while closing the old error cannot soften a NEW error
+      # in the opposite direction (e.g. the plan has begun an unwind).
+      self._motion_scale = 1.0
+    else:
+      # Carry the bounded credit, not just its percentage, between references.
+      # A small delayed error must not authorize a large reduction of a much
+      # larger neural tracking error further ahead in the maneuver.
+      credit = abs(delayed_error) * (1.0 - self._motion_scale)
+      self._motion_scale = max(self._motion_scale, 1.0 - credit / abs(neural_error))
 
     # update past data
     roll = params.roll
@@ -176,6 +189,10 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
       torque_from_error = self.model.evaluate(nnff_error_input)
       if sign(self._pid_log.error) == sign(torque_from_error) and abs(self._pid_log.error) < abs(torque_from_error):
         self._pid_log.error = self._pid_log.error * (1.0 - error_blend_factor) + torque_from_error * error_blend_factor
+
+    # Motion credit changes error feedback only. Planned acceleration, jerk,
+    # roll, and all past/future plan inputs retain their original values.
+    self._pid_log.error *= self._motion_scale
 
     # compute feedforward (same as nn setpoint output)
     friction_input = self.update_friction_input(self._setpoint, self._measurement)

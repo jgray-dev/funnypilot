@@ -16,7 +16,7 @@ class LatControlTorqueExt(NeuralNetworkLateralControl, LatControlTorqueExtOverri
 
   def update(self, CS, VM, pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
              desired_lateral_accel, actual_lateral_accel, lateral_accel_deadzone, gravity_adjusted_lateral_accel,
-             desired_curvature, actual_curvature, steer_limited_by_safety, output_torque, freeze_integrator=False):
+             desired_curvature, actual_curvature, steer_limited_by_safety, output_torque, freeze_integrator=False, motion_scale=1.0):
     self._ff = ff
     self._pid = pid
     self._pid_log = pid_log
@@ -31,6 +31,7 @@ class LatControlTorqueExt(NeuralNetworkLateralControl, LatControlTorqueExtOverri
     self._gravity_adjusted_lateral_accel = gravity_adjusted_lateral_accel
     self._steer_limited_by_safety = steer_limited_by_safety
     self._freeze_integrator = freeze_integrator
+    self._motion_scale = motion_scale
     self._output_torque = output_torque
 
     self.update_calculations(CS, VM, desired_lateral_accel)

@@ -264,6 +264,8 @@ class Controls(ControlsExt):
                        driver_torque=CS.steeringTorque,
                        torque_out=self.sm['carOutput'].actuatorsOutput.torque,
                        pitch_rate_deg=pitch_rate_deg,
+                       motion_scale=getattr(getattr(self.LaC, '_motion_credit', None), 'scale', 1.0),
+                       motion_credit=getattr(getattr(self.LaC, '_motion_credit', None), 'credit', 0.0),
                        context_fn=lambda: {
                          "laf": round(float(self.sm['liveTorqueParameters'].latAccelFactorFiltered), 3),
                          "fric": round(float(self.sm['liveTorqueParameters'].frictionCoefficientFiltered), 4),

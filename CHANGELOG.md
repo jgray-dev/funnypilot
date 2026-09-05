@@ -6,6 +6,23 @@ Controller review: fixes to steering state transitions and delivery of
 planned braking. This is a development branch; vehicle behavior has not been
 validated on a device or closed course.
 
+Lateral follow-up: motion credit
+------------------------------
+The torque controller now accounts for wheel movement already in progress.
+It compares signed wheel travel with the next 120 ms of reference travel
+already in the actuator-delay buffer. When the wheel is outrunning that
+reference toward a tracking error, it eases proportional/error-friction
+correction before the wheel reaches the target, rather than pushing through
+it and having to correct back. Static path feedforward and model knot timing
+are preserved. This targets the recurring large steering "bite" feeling.
+
+The K5's CAN steering-speed field is unsigned; signed motion is derived from
+angle history instead. Credit is capped at 0.12 m/s² of tracking error, retains
+at least 35% of correction, and does not accumulate a command to repay later.
+It yields to driver intervention, bump handling, and limiting. Neural control
+receives bounded credit too; the conventional v0 tune remains unchanged.
+Triage records include `mcs`/`mcr` to identify when credit actually applied.
+
 * Steering: conventional and neural torque control now update the shared PID
   exactly once per control tick, with limits in the selected controller's
   units. Mode changes clear the old integrator. Neural control receives the

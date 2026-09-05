@@ -188,3 +188,53 @@ def test_real_k5_neural_model_and_history_reset(controllers):
   assert not ctrl.extension.roll_deque
   assert not ctrl.extension.lateral_accel_desired_deque
   assert ctrl.pid.i == 0.0
+
+
+@pytest.mark.parametrize('neural', [False, True])
+@pytest.mark.parametrize('direction', [-1.0, 1.0])
+def test_wheel_motion_softens_correction_without_moving_feedforward(controllers, monkeypatch, neural, direction):
+  current, cs, vm, params, _ = make_torque(controllers, neural=neural)
+  reference, _, _, _, _ = make_torque(controllers, neural=neural)
+  reference._motion_credit.correction_scale = lambda *args, **kwargs: 1.0
+  vm.calc_curvature = lambda angle, speed, roll: angle / 40.0
+  clock = [0.0]
+  monkeypatch.setattr(controllers['latcontrol_torque'].time, 'monotonic', lambda: clock[0])
+  for ctrl in (current, reference):
+    ctrl.lat_accel_request_buffer.extend([direction] * ctrl.lat_accel_request_buffer_len)
+  # Give both controllers the SAME angle samples. The unsigned speed field
+  # deliberately cannot distinguish the two directions; our angle history can.
+  cs.steeringRateDeg = 4.0
+  for i in range(20):
+    clock[0] = 1.0 + i * DT
+    cs.steeringAngleDeg = -direction * round(3.3 + 0.05 * i, 1)
+    previous_i = current.pid.i
+    for ctrl in (current, reference):
+      ctrl.update(True, cs, vm, params, False, direction / cs.vEgo**2, None, False, 0.2)
+  assert current._motion_credit.credit > 0.0
+  assert abs(current.pid.p) < abs(reference.pid.p)
+  assert current.pid.f == reference.pid.f  # frictionless fixture isolates path FF
+  assert current.pid.i == previous_i  # cannot store the correction we just suppressed
+
+
+def test_motion_credit_is_bounded_and_does_not_soften_a_planned_ramp():
+  from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, MIN_CORRECTION_SCALE, MAX_ACCEL_CREDIT
+  motion = SteeringMotionCredit()
+  # No wheel movement, motion away from the target, or motion matching the
+  # upcoming reference all retain the original controller exactly.
+  for rate, travel in ((0.0, 0.0), (-2.0, 0.0), (2.0, 0.24)):
+    assert motion.correction_scale(0.2, rate, travel, 0.12, 25.0) == 1.0
+  scale = motion.correction_scale(0.2, 2.0, 0.0, 0.12, 25.0)
+  assert MIN_CORRECTION_SCALE <= scale < 1.0
+  assert 0.0 < motion.credit <= MAX_ACCEL_CREDIT
+  assert motion.correction_scale(-0.2, -2.0, 0.0, 0.12, 25.0) == scale
+  assert motion.correction_scale(0.2, 2.0, 0.0, 0.12, 25.0, enabled=False) == 1.0
+  assert motion.correction_scale(0.2, float('nan'), 0.0, 0.12, 25.0) == 1.0
+  for i in range(10):
+    motion.observe(i * 0.05, i * DT)
+  assert motion.rate_deg > 0
+  assert motion.observe(0.4, 0.1) == 0.0  # reversal clears old direction
+  assert motion.observe(0.0, 1.0) == 0.0  # stale history cannot earn credit
+  motion.reset()
+  for i in range(10):
+    motion.observe(0.1 if i else 0.0, i * DT)
+    assert motion.rate_deg == 0.0  # one encoder tick is not ongoing motion

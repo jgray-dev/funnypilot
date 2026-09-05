@@ -75,6 +75,7 @@ class LatControlTorqueExtBase:
     self._gravity_adjusted_lateral_accel = 0.0
     self._steer_limited_by_safety = False
     self._freeze_integrator = False
+    self._motion_scale = 1.0
     self._output_torque = 0.0
 
     # twilsonco's Lateral Neural Network Feedforward
@@ -114,7 +115,7 @@ class LatControlTorqueExtBase:
 
   def update_friction_input(self, val_1, val_2):
     _error = val_1 - val_2
-    _value = self.lat_accel_friction_factor * _error + self.lat_jerk_friction_factor * self.lookahead_lateral_jerk
+    _value = self.lat_accel_friction_factor * _error * self._motion_scale + self.lat_jerk_friction_factor * self.lookahead_lateral_jerk
 
     return _value
 
@@ -124,7 +125,9 @@ class LatControlTorqueExtBase:
     self.lateral_jerk_measurement = 0.0
     self.lookahead_lateral_jerk = 0.0
 
-    actual_curvature_rate = -VM.calc_curvature(math.radians(CS.steeringRateDeg), CS.vEgo, 0.0)
+    motion = getattr(self.lac_torque, '_motion_credit', None)
+    wheel_rate = motion.rate_deg if motion is not None else CS.steeringRateDeg
+    actual_curvature_rate = -VM.calc_curvature(math.radians(wheel_rate), CS.vEgo, 0.0)
     self.actual_lateral_jerk = actual_curvature_rate * CS.vEgo ** 2
 
     if self.model_valid:

@@ -121,7 +121,46 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 ### v3.7.1a Changes (based on funnypilot-3.7.0 at 73a974640)
 
-Controller review and regression fixes. LOCAL DEVELOPMENT BRANCH; no device
+SECOND PASS — OWNER REQUESTED FEWER LARGE STEERING "BITES", AND A CODE CHANGE
+RATHER THAN MORE INSTRUMENTATION. `steering_motion.py` adds motion credit in
+the v1 torque controller. The existing interpolator smooths reference knots;
+it does not tell the error/friction loop that the wheel is already closing a
+gap fast enough. This change uses the actuator-delay buffer as a short known
+future: compare the next 120 ms of reference travel with the wheel's measured
+travel projected over that interval. Only surplus movement INTO the error
+earns credit. Partial lifts of correction happen before crossing the target;
+stationary wheels, growing errors, and tracking a planned ramp are no-ops.
+
+- `selfdrive/controls/lib/steering_motion.py` — NEW. Signed rate from 80 ms
+  of angle history, minus one 0.1-degree encoder quantum; at least 40 ms of
+  history required. Reversals and sample gaps invalidate the old rate. THE
+  K5'S `SAS_Speed` IS UNSIGNED, 4 DEG/S PER COUNT: verified in
+  `opendbc/dbc/hyundai_kia_generic.dbc`. Using `CS.steeringRateDeg` as signed
+  feedback would suppress the wrong steering direction. Do not repeat it.
+  Credit is smoothly bounded at 0.12 m/s² of error and a 0.35 correction
+  floor, fades out below 10 m/s, and is off below 5 m/s. No queued torque,
+  integral credit, path change, or upstream filter is introduced.
+- `latcontrol_torque.py` — compute credit before the error/friction response;
+  preserve path/gravity/offset feedforward and planned-jerk feedforward.
+  Freeze integral accumulation while meaningful credit is being applied.
+  Driver press/handback, bump, safety/EPS and curvature limiting bypass it.
+  Existing final torque scales, governor, and safety limits still run.
+- `latcontrol_torque_ext.py`, `latcontrol_torque_ext_base.py`, `nnlc/nnlc.py`
+  — pass credit into neural error and the error part of its friction input.
+  Its future plan inputs stay intact. The absolute credited error, not only
+  its percentage, bounds its effect at NNLC's different reference horizon;
+  an opposite-sign neural error receives no credit. NNLC also uses the signed
+  angle-derived wheel rate when available. Legacy v0 defaults to scale 1.
+- `controlsd.py`, `triage_recorder.py` — two fields in existing JSONL:
+  `mcs` minimum base correction scale and `mcr` maximum credited error per
+  second. No new IO channel, schema, UI widget, or Params key. Neural's final
+  scale may be closer to 1 because of the reference-horizon guard.
+- HYPOTHESIS, NOT AN ON-ROAD VERDICT: this addresses a wheel-motion/error-loop
+  mechanism; it cannot promise to fix bites originating in perception or EPS
+  mechanics. Five simple delayed-rack probes showed modest wheel-rate RMS
+  reductions, not a demonstrated vehicle cure. See the review report.
+
+Controller review and regression fixes. DEVELOPMENT BRANCH; no device
 flash or on-road verification. Full rationale and validation commands live in
 `docs/controls-review-3.7.1a.md`.
 

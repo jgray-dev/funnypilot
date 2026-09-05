@@ -131,13 +131,16 @@ class LatInterpMonitor:
     self._dt_max = 0.0
     self._div_max = 0.0
     self._pitch_max = 0.0
+    self._motion_scale_min = 1.0
+    self._motion_credit_max = 0.0
 
   def sample(self, mono_t: float, lat_active: bool, long_active: bool, v_ego: float, health_frames: float,
              lane_change: bool, curvature_limited: bool, a_target: float, accel: float,
              steering_pressed: bool = False, override_scale: float = 1.0, saturated: bool = False,
              steer_limited: bool = False, torque: float = 0.0, eps_authority: float = 1.0,
              driver_torque: float = 0.0, torque_out: float | None = None,
-             pitch_rate_deg: float = 0.0, context_fn=None) -> None:
+             pitch_rate_deg: float = 0.0, context_fn=None,
+             motion_scale: float = 1.0, motion_credit: float = 0.0) -> None:
     try:
       if self._t0 is None:
         self._t0 = mono_t
@@ -180,6 +183,8 @@ class LatInterpMonitor:
       # Correlate against "eps"/"dtx"/"sp" swings during the SAME second to
       # test whether it lines up with felt oscillation independent of torque.
       self._pitch_max = max(self._pitch_max, abs(float(pitch_rate_deg)))
+      self._motion_scale_min = min(self._motion_scale_min, float(motion_scale))
+      self._motion_credit_max = max(self._motion_credit_max, float(motion_credit))
 
       if mono_t - self._t0 < self.PERIOD:
         return
@@ -220,6 +225,8 @@ class LatInterpMonitor:
         "dtx": round(self._dt_max, 1),
         "tqd": round(self._div_max, 3),
         "pit": round(self._pitch_max, 1),
+        "mcs": round(self._motion_scale_min, 3),  # minimum error-feedback scale
+        "mcr": round(self._motion_credit_max, 4),  # maximum credit, m/s^2
       }
       if self._idle_skipped:
         rec["idl"] = self._idle_skipped  # idle seconds preceding this record

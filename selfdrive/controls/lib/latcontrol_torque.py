@@ -11,6 +11,7 @@ from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.lat_handback import LatHandback, PRESS_SCALE
 from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
 from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper
+from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME
 from openpilot.common.pid import PIDController
 
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
@@ -129,6 +130,7 @@ class LatControlTorque(LatControl):
     # friction relay. Only ever reduces the correction toward pure
     # feedforward; never adds torque.
     self._bump_damper = BumpDamper(self.dt)
+    self._motion_credit = SteeringMotionCredit()
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = 2.750  # FunnyPilot: locked LAF
@@ -144,12 +146,14 @@ class LatControlTorque(LatControl):
     super().reset()
     self.pid.reset()
     self.extension.reset()
+    self._motion_credit.reset()
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     # Override torque params from extension
     if self.extension.update_override_torque_params(self.torque_params):
       self.update_limits()
     neural = self.extension.prepare_pid(self.pid)
+    now = time.monotonic()
 
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
@@ -178,6 +182,21 @@ class LatControlTorque(LatControl):
       measurement = setpoint + damp * (measurement - setpoint)
       error = setpoint - measurement
 
+    # Motion credit (3.7.1a): the delay buffer contains commands already sent
+    # to the rack that it has not reached yet. Compare that known reference
+    # travel with signed wheel motion, and stop pushing the ERROR channel
+    # so hard when the wheel is already going to close it. Feedforward and
+    # the model's curvature knots keep their original timing and magnitude.
+    wheel_rate = self._motion_credit.observe(CS.steeringAngleDeg, now)
+    measured_rate = -VM.calc_curvature(math.radians(wheel_rate), CS.vEgo, 0.0) * CS.vEgo ** 2
+    preview_frames = min(int(PREVIEW_TIME / self.dt), delay_frames - 1)
+    reference_travel = self.lat_accel_request_buffer[-delay_frames + preview_frames] - setpoint
+    motion_scale = self._motion_credit.correction_scale(
+      error, measured_rate, reference_travel, preview_frames * self.dt, CS.vEgo,
+      enabled=active and not (CS.steeringPressed or self._handback.soft_integrator or self._bump_damper.active or
+                              self._eps_governor.driver_limited or steer_limited_by_safety or curvature_limited))
+    error *= motion_scale
+
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
     raw_lateral_jerk = (self.lat_accel_request_buffer[lookahead_idx+1] - self.lat_accel_request_buffer[lookahead_idx-1]) / (2 * self.dt)
     desired_lateral_jerk = self.jerk_filter.update(raw_lateral_jerk)
@@ -191,7 +210,6 @@ class LatControlTorque(LatControl):
 
     # FunnyPilot v3.2.1e: track active edges + whether a blinker was involved
     # while inactive, to drive the blinker-unwind re-engage torque ramp below.
-    now = time.monotonic()
     one_blinker = CS.leftBlinker != CS.rightBlinker  # exactly one blinker on
     if not active and one_blinker:
       self._inactive_saw_blinker = True
@@ -238,7 +256,7 @@ class LatControlTorque(LatControl):
       # error is still the driver's own doing.
       freeze_integrator = (steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or
                           self._eps_governor.driver_limited or self._bump_damper.active or
-                          self._handback.soft_integrator)
+                          self._handback.soft_integrator or self._motion_credit.credit > 0.001)
       output_torque = 0.0
       if not neural:
         output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
@@ -249,7 +267,7 @@ class LatControlTorque(LatControl):
       pid_log, output_torque = self.extension.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
                                                      future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                      desired_curvature, measured_curvature, steer_limited_by_safety, output_torque,
-                                                     freeze_integrator=freeze_integrator)
+                                                     freeze_integrator=freeze_integrator, motion_scale=motion_scale)
 
       # FunnyPilot v3.0.9e: soft lane change — scale the TOTAL steering torque
       # (feedforward + correction together) so the whole maneuver eases in. A floor
