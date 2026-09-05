@@ -1,0 +1,95 @@
+{
+  "release": "3.7.3e",
+  "sourceRoot": "/home/astro/sandbox/astra-web",
+  "patchSha256": "53b841343ef8470f39a85e7a64e9b8fe9f32b7f861d4f6124336baad3c2408d8",
+  "files": {
+    "README.md": {
+      "before": "2aef25f2e953c38d4fcc4bade7226915b1f9c05e24f1fb57377e098be52507ca",
+      "after": "499345148ccccb729dac478d836c3ba62e310c626d5df0938fef8f6b5df7e699"
+    },
+    "package-lock.json": {
+      "before": "86b264c6b3345015efcb48c986b1bb99b07b4405fff285082982cbd295d71b99",
+      "after": "8a3444101b00e347dd0ceff0e1814f05fdbfe418afee1c14b87a8006b305fc53"
+    },
+    "package.json": {
+      "before": "dfb023111eedad1eaed7a41f069476f8804e7420efe5404fbb374f056afd81fa",
+      "after": "5b8ba103e93d0b848269f253ed40b0c1f079b37906ea3cb9178fc76775dfd780"
+    },
+    "scripts/test-device-link.mjs": {
+      "before": null,
+      "after": "3f4af94b3009b60d15778ae4723d3593aaa7683332bfca3b1849337922d9e5a1"
+    },
+    "server/broker.mjs": {
+      "before": "200bad70abd9bb047ced926c3901a5743e43950abd24209609e87112c3547d98",
+      "after": "34cbb268fbf43f381d7aa860c6789d42330268d014aba828aa8c367c694a4366"
+    },
+    "server/chat-broker.mjs": {
+      "before": "f93a6c5b39900db4acf8482ec44c77d70ac27129029689a18870d4c26fc03484",
+      "after": "0ad248f8804749d31755f62f486996479f312d82b82cf7481bc14e06791174f1"
+    },
+    "server/device-context.mjs": {
+      "before": null,
+      "after": "082fb5f90bf2852b74dc6b49aa58a9f807dcf960c9bc062cd0c5ce51ba66ae87"
+    },
+    "server/device-tools.mjs": {
+      "before": null,
+      "after": "ad6de3cebd4a775b838004f9b6712c1c71952f049f9f9c0d78ef3b5b9cc9362c"
+    },
+    "src/linked-devices.tsx": {
+      "before": null,
+      "after": "a5af2029e85506e85e1df59925746aaa9045f2edd5cf48f42752f5e1da5604f9"
+    },
+    "src/main.tsx": {
+      "before": "068dcd436f6578488e0436b3d46a8fe849f32cdae22457d8f5ec4949326b556e",
+      "after": "eb33d461393d830afd1b394366362fb16f4a6a018a4e7a47b4b45b9cefb04905"
+    },
+    "src/style.css": {
+      "before": "c552c93c78c49eab2ea7e4b31a9faa03bfe454beb78a21c412c9d25a4d046093",
+      "after": "02e6df187d5c65b9e477465a5e1f9165eaf835f0f66eee6dba1421c9baeee112"
+    },
+    "tests/device-context.test.mjs": {
+      "before": null,
+      "after": "e59d0c8fd3ac9c285d5154720283a1b1da24277f3a9d973cbaee721d6b5bc253"
+    },
+    "tests/device-e2e.test.mjs": {
+      "before": null,
+      "after": "42b1a154d1c666e2c5d01602770d0436edca6c985d52aab541e75a156189f51a"
+    },
+    "tests/device-tools.test.mjs": {
+      "before": null,
+      "after": "58ea2d2b125d8358aa166588fb5a58ad86a9b6209dff82ca78ef82ccb9eb85b8"
+    },
+    "tests/linked-devices-storage.test.mjs": {
+      "before": null,
+      "after": "6757859a6181434ccc2b5e2bb71c69fd88537d1379a6da694f6db4b9a07200f0"
+    },
+    "tests/linked-devices-ui.test.mjs": {
+      "before": null,
+      "after": "5b95303741f044ec6cb39c444599748fb315275d8e1946156660de89bf385649"
+    },
+    "tests/linked-devices.test.mjs": {
+      "before": null,
+      "after": "be74e7d9ead78436f3cada29330bbf43d6ddb3ddf2512c4f0f2ac149eb714838"
+    },
+    "tests/relay.test.mjs": {
+      "before": "62f696535800e862d6c4d8ab47cca9749521eab8acbcdb3aa4299c074c1e243f",
+      "after": "b2373c929c8dd9a64c800d6207c92540e4f769b493c0cea87f8d8883ebab3744"
+    },
+    "tests/security.test.mjs": {
+      "before": "451a527c35bafd44f06a8949242d2e1f5ccf68478c5d3c2165ac775aa90947fd",
+      "after": "fdc8324166f367b731556b6c3599dae8fc2c7c5e1fc75b19a758cda8df608266"
+    },
+    "tests/test-config.mjs": {
+      "before": null,
+      "after": "ca767b8c4505b396185ae2a56092df01184769d8f194cee627300cdc984e15af"
+    },
+    "worker/index.ts": {
+      "before": "9e270cb2f714f9402492ad6018da03e1649d873bfd93699d5a37f52ca19593cf",
+      "after": "95aca4617fca17b148a1a937446b5b178231ea53364f479d0b46d558f8ff52ff"
+    },
+    "worker/linked-devices.ts": {
+      "before": null,
+      "after": "9682661d96823945add1585cb224a4b4e752ed6dc39c28e8b23491aaf7e8a451"
+    }
+  }
+}

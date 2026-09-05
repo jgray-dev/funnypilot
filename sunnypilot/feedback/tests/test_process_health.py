@@ -49,20 +49,28 @@ def test_recorder_loss_is_logged_but_does_not_block(process_gate):
   state, log = process_gate(['funnypilot_feedback'])
   assert state.events == set()
   log.event.assert_called_once_with('process_not_running', not_running={'funnypilot_feedback'}, error=True)
-  assert state.ignored_processes == {'mapd', 'funnypilot_feedback'}
+  assert state.ignored_processes == {'mapd', 'funnypilot_feedback', 'funnypilot_astra'}
 
 
 @pytest.mark.parametrize('required', ['controlsd', 'calibrationd', 'plannerd', 'modeld', 'camerad', 'pandad', 'radard', 'feedbackd'])
-@pytest.mark.parametrize('optional_failed', [False, True])
+@pytest.mark.parametrize('optional_failed', [[], ['funnypilot_feedback'], ['funnypilot_astra'], ['funnypilot_feedback', 'funnypilot_astra']])
 def test_every_driving_process_still_blocks(process_gate, required, optional_failed):
-  failed = [required] + (['funnypilot_feedback'] if optional_failed else [])
+  failed = [required] + optional_failed
   state, _ = process_gate(failed)
   assert 'processNotRunning' in state.events
 
 
-def test_optional_failure_cannot_hide_camera_health(process_gate):
-  state, _ = process_gate(['funnypilot_feedback'], cameras_alive=False)
+@pytest.mark.parametrize('failed', [['funnypilot_feedback'], ['funnypilot_astra'], ['funnypilot_feedback', 'funnypilot_astra']])
+def test_optional_failure_cannot_hide_camera_health(process_gate, failed):
+  state, _ = process_gate(failed, cameras_alive=False)
   assert state.events == {'cameraMalfunction'}
+
+
+@pytest.mark.parametrize('failed', [['funnypilot_astra'], ['funnypilot_feedback', 'funnypilot_astra']])
+def test_astra_failure_is_optional_and_logged(process_gate, failed):
+  state, log = process_gate(failed)
+  assert not state.events
+  log.event.assert_called_once_with('process_not_running', not_running=set(failed), error=True)
 
 
 def test_no_process_verdict_before_first_manager_message(process_gate):

@@ -1,3 +1,26 @@
+FunnyPilot v3.7.3e (2026-09-05)
+=============================
+* Based explicitly on 3.7.2 (5ec74a3c7). Add an optional, low-priority Python
+  Astra link client: outbound authenticated HTTPS to astra.jgray.cc, no VPN,
+  inbound port, on-device model, new native dependency or Params key.
+* Pair privately with a revocable hardware credential. Bounded file/log reads
+  exclude credentials, symlinks and special files; selected recordings and large
+  reads require offroad. Existing parked-Wi-Fi feedback uploads are unchanged.
+* Generic device commands require exact owner-browser approval, fresh known
+  ignition-off state, a durable receipt and a short execution grant/lease.
+  Lost grants, revoked approvals and ambiguous execution are never replayed.
+  Generic approved programs are privileged maintenance, not a sandbox.
+* Astra's native Claude Code sessions gain a linked Comma selector and scoped
+  MCP tools, fixed local c3x workspace, immutable resume binding, full-commit and
+  dirty-state comparison, and explicit recording-time provenance warnings.
+  The existing Astra model/provider and browser-login/host-relay credentials
+  remain separate. Source patch and setup: docs/astra-link-3.7.3e.md.
+* Optional Astra failure is logged/supervised by manager but does not block
+  engagement; all required process and camera/calibration gates remain intact.
+* Local production-path, SQLite, browser and MCP-to-Python fixtures tested.
+  No public Worker deployment, broker restart, live model call, device pairing,
+  device flash/settings change or vehicle validation. No controller retuning.
+
 FunnyPilot v3.7.2 (2026-09-05)
 ============================
 * Fix a 3.7.1a engagement regression: failure of the optional feedback recorder

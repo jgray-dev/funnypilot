@@ -63,28 +63,29 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.2 — Key Files
+## Current version: 3.7.3e — Key Files
 
-Based on 3.7.1b `950736eeb`; audit compared 3.7.1 `44f14a6af` to remote 3.7.1a
-`a949212af`. Detailed findings and test command: `docs/readiness-audit-3.7.2.md`
-and `docs/controls-review-3.7.1a.md`.
+Based on 3.7.2 `5ec74a3c7`. Setup, architecture and validation:
+`docs/astra-link-3.7.3e.md`; wire contract: `docs/astra-link-protocol.md`.
+Historical 3.7.2 audit remains in `docs/readiness-audit-3.7.2.md`.
 
-- `selfdrive/selfdrived/selfdrived.py`: only optional `funnypilot_feedback` joins
-  the ignored-process set. Manager still supervises/logs it; required processes
-  and the unrelated upstream `feedbackd` still gate driving.
-- `sunnypilot/feedback/{feedbackd,capture}.py`: five-second IO retry, retained
-  accepted request/capture, transactional labels/rules/finalization, atomic
-  artifacts, honest interrupted telemetry. Upload remains parked Wi-Fi only.
-- `selfdrive/ui/onroad/{augmented_road_view,availability,alert_renderer}.py`:
-  inherited 3.7.1b camera-viewport fix and visible blockers even without a selected
-  no-entry popup. Geometry mismatch predates 3.7.1a; recorder gating was new in it.
-- `sunnypilot/navd/nav_webserver.py`: version, identity hashes and literal,
-  shell-quoted diagnostic markers. Tests under `sunnypilot/feedback/tests/`,
-  `sunnypilot/navd/tests/test_diagnostic_markers.py`, and onroad UI tests.
-- Local validation: 1,405 import-light tests, Ruff clean, 172 markers resolve;
-  restored-bug mutations caught. No device diagnosis/engagement validation or
-  flash: private inbox was empty and SSH unreachable. Legacy v0 zero-delay
-  division is pre-existing and left separate. No controller retuning here.
+- `sunnypilot/astra_link/{daemon,core,state,files,execution}.py`: optional
+  outbound HTTPS client; private config, bounded reads, fresh ignition-off
+  command gate, no-replay receipts and expiring execution leases. Imports inert.
+- `tools/astra_link.py`: explicitly authorized local pairing/enable/disable.
+  Never expose `/data/astra_link/config.json` or reuse the host bridge secret.
+- `system/manager/process_config.py`, `selfdrive/selfdrived/selfdrived.py`:
+  optional `funnypilot_astra` joins `mapd`/`funnypilot_feedback` exclusions.
+  Required processes, upstream `feedbackd` and camera gates remain unchanged.
+- Astra server source: `/home/astro/sandbox/astra-web` (not a Git repository).
+  Native session/MCP, hardware auth/approvals and UI changes are preserved in
+  `docs/astra-web-3.7.3e.patch` with a source-hash manifest. No global model change.
+- Device logs are untrusted evidence. Compare full commit/branch/dirty state,
+  and obtain recording-time identity; current disk state is not running-code proof.
+  Never auto-switch shared/dirty local code to match the device.
+- No public deployment, broker restart, live device pairing/flash or driving
+  validation. Broker restart terminates active PTYs; activation is separate.
+  No controller retuning, schema changes, new Params keys or on-device LLM.
 
 ## Verification and device access
 

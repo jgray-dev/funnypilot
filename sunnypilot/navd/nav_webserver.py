@@ -96,7 +96,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.2"
+EXPECTED_VERSION = "3.7.3e"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -347,7 +347,12 @@ _CODE_MARKERS = [
   ("def model_overlay_ready", "/data/openpilot/selfdrive/ui/onroad/model_status.py", "calibrated model overlay readiness"),
   ("def availability_message", "/data/openpilot/selfdrive/ui/onroad/availability.py", "blocking faults visible without an engage request"),
   ("super()._render(self._content_rect)", "/data/openpilot/selfdrive/ui/onroad/augmented_road_view.py", "camera and lane projection share viewport"),
-  ("Optional capture must not refuse engagement", "/data/openpilot/selfdrive/selfdrived/selfdrived.py", "feedback health does not gate driving"),
+  ("self.ignored_processes = {'mapd', 'funnypilot_feedback', 'funnypilot_astra'}", "/data/openpilot/selfdrive/selfdrived/selfdrived.py",
+   "optional feedback/Astra health does not gate driving"),
+  ('PythonProcess("funnypilot_astra", "sunnypilot.astra_link.daemon", always_run, restart_if_crash=True)',
+   "/data/openpilot/system/manager/process_config.py", "optional Astra supervision"),
+  ('self.journal.record(request)', "/data/openpilot/sunnypilot/astra_link/daemon.py", "Astra command receipt before execution grant"),
+  ('self.clock() < min(self.expires, self.deadline)', "/data/openpilot/sunnypilot/astra_link/execution.py", "Astra command lease expiry"),
   ("class CaptureLoop", "/data/openpilot/sunnypilot/feedback/feedbackd.py", "bounded capture IO recovery"),
   ("candidate = dict(event, state=", "/data/openpilot/sunnypilot/feedback/capture.py", "retryable capture finalization"),
 ]

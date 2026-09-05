@@ -163,6 +163,7 @@ procs = [
   # FunnyPilot terminal server (port 8888)
   PythonProcess("terminal_server", "sunnypilot.navd.nav_webserver", always_run),
   PythonProcess("funnypilot_feedback", "sunnypilot.feedback.feedbackd", always_run),
+  PythonProcess("funnypilot_astra", "sunnypilot.astra_link.daemon", always_run, restart_if_crash=True),
 
   # sunnylink <3
   DaemonProcess("manage_sunnylinkd", "sunnypilot.sunnylink.athena.manage_sunnylinkd", "SunnylinkdPid"),
