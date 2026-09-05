@@ -340,44 +340,94 @@ class TestDriftCannotDelayASlowdown:
 class TestTheRunOut:
   """FunnyPilot v3.6.5 — a corner has an EXIT, and the cap has to know it.
 
-  Before this, the cap for a corner already behind us was
+  Before v3.6.5 the cap for a corner already behind us was
   `approach_cap(v, max(distance, 0))` — a FLAT `v_corner` right up until
   `_refresh_corners` dropped the corner at BEHIND_KEEP_M past its exit, at
   which point the constraint vanished. So the car sat at corner speed on
-  straightening road and then got its throttle back all at once, which is the
-  reported "noticeable delay in reapplying throttle to accelerate out".
+  straightening road and then got its throttle back all at once.
+
+  FunnyPilot v3.7.1 — AND THE ARC HAS AN APEX. v3.6.5 released from the EXIT
+  POINT at RELEASE_RATE, which the car cannot follow, so the target ran away
+  and the demand stepped to the clip in half a second: "abrupt and jolty". The
+  cap now begins rising AT THE APEX, proportionate to the corner's own budget
+  (EXIT_LAT_FRAC), and RELEASE_RATE takes over from the exit speed.
   """
   V, HALF = 13.0, 20.0        # a 29 mph bend, 40 m long
 
   def test_the_apex_is_the_corner_speed(self):
     assert CS.corner_cap(self.V, 0.0, self.HALF) == pytest.approx(self.V)
 
-  def test_the_whole_arc_holds_the_corner_speed(self):
-    """The measured radius applies across the detected run, so the speed limit
-    does too. MUTATION: release from the apex (ignore half_len) and the car is
-    asked to accelerate while it is still turning."""
-    for d in (self.HALF, 5.0, 0.0, -5.0, -self.HALF):
+  def test_the_entry_half_holds_the_corner_speed(self):
+    """Nothing before the apex changed: the approach envelope is flat at
+    `v_corner` through the entry half. MUTATION: start the ramp at the entry."""
+    for d in (self.HALF, 10.0, 5.0, 0.0):
       assert CS.corner_cap(self.V, d, self.HALF) == pytest.approx(self.V), d
 
+  def test_acceleration_begins_at_the_apex_not_the_exit(self):
+    """THE v3.7.1 REQUIREMENT. MUTATION: restore `return float(v_corner)` for
+    the exit half and every value below collapses to V."""
+    caps = [CS.corner_cap(self.V, -s, self.HALF) for s in (0.0, 5.0, 10.0, 15.0, self.HALF)]
+    assert caps[0] == pytest.approx(self.V)
+    assert all(b > a for a, b in zip(caps, caps[1:], strict=False)), caps
+
+  def test_the_exit_ramp_is_a_fraction_of_the_corners_own_budget(self):
+    """v(s)^2 = v^2 (1 + f s/half): at the exit point the implied lateral load
+    is (1 + EXIT_LAT_FRAC) of the corner's budget IF the road were still at
+    full curvature there. A corner learned as slow gets a proportionately small
+    ramp — the bound scales with the budget, never with a fixed rate.
+    MUTATION: use a fixed m/s^2 instead of the fraction."""
+    f = CS.EXIT_LAT_FRAC
+    assert 0.0 < f <= 0.30, "the allowance is a modest fraction of the budget"
+    for v in (8.0, 13.0, 22.0):
+      at_exit = CS.corner_cap(v, -self.HALF, self.HALF)
+      assert at_exit == pytest.approx(v * math.sqrt(1.0 + f))
+      mid = CS.corner_cap(v, -self.HALF / 2.0, self.HALF)
+      assert mid == pytest.approx(v * math.sqrt(1.0 + f / 2.0))
+    # ...and therefore the SPEED lift at the exit point is the same fraction for
+    # every corner: a slow bend is not exited disproportionately fast.
+    lifts = {round(CS.corner_cap(v, -self.HALF, self.HALF) / v, 6) for v in (8.0, 13.0, 22.0)}
+    assert len(lifts) == 1
+
+  def test_the_ramp_starts_at_a_rate_the_car_can_actually_follow(self):
+    """dv/dt at the apex is v^2 f / (2 half). For the reported kind of bend
+    that is well under the car's own accel clip (0.56..0.84 at these speeds),
+    so the MPC TRACKS the target instead of saturating against one that has run
+    off — the mechanism behind the jolt. MUTATION: raise EXIT_LAT_FRAC to 1.0."""
+    v, half = 13.0, 30.0
+    rate = v * v * CS.EXIT_LAT_FRAC / (2.0 * half)
+    assert 0.2 < rate < 0.75, rate
+    # numerically, from the function itself, over the first metre past the apex
+    dv = CS.corner_cap(v, -1.0, half) - CS.corner_cap(v, 0.0, half)
+    assert dv * v == pytest.approx(rate, rel=0.02)   # dv/dt = (dv/ds) * v
+
+  def test_it_is_continuous_at_the_exit_point(self):
+    """The ramp hands over to RELEASE_RATE at the exit with no step. MUTATION:
+    release from `v_corner` instead of from the exit speed."""
+    eps = 1e-6
+    inside = CS.corner_cap(self.V, -(self.HALF - eps), self.HALF)
+    outside = CS.corner_cap(self.V, -(self.HALF + eps), self.HALF)
+    assert inside == pytest.approx(outside, abs=1e-3)
+    assert outside == pytest.approx(CS.exit_speed(self.V, self.HALF), abs=1e-3)
+
   def test_authority_returns_progressively_past_the_exit(self):
-    """THE FIX. MUTATION: clamp the distance at zero again, i.e.
-    `approach_cap(v, max(d, 0))`. Every value below collapses to V and the
-    assertion that they are strictly increasing fails."""
+    """v3.6.5. MUTATION: clamp the distance at zero again, i.e.
+    `approach_cap(v, max(d, 0))`. Every value below collapses to V."""
     caps = [CS.corner_cap(self.V, -(self.HALF + s), self.HALF)
             for s in (0.0, 10.0, 20.0, 40.0, 80.0)]
-    assert caps[0] == pytest.approx(self.V)
-    assert caps == sorted(caps)
+    assert caps[0] == pytest.approx(CS.exit_speed(self.V, self.HALF))
     assert all(b > a for a, b in zip(caps, caps[1:], strict=False))
-    # and it is the release ramp, not something invented
-    assert caps[2] == pytest.approx(math.sqrt(self.V ** 2 + 2 * CS.RELEASE_RATE * 20.0))
+    # and it is the release ramp from the exit speed, not something invented
+    ve = CS.exit_speed(self.V, self.HALF)
+    assert caps[2] == pytest.approx(math.sqrt(ve ** 2 + 2 * CS.RELEASE_RATE * 20.0))
 
   def test_the_flat_hold_that_was_measured_is_gone(self):
-    """The specific number from the report: a 40 m bend used to hold corner
-    speed for BEHIND_KEEP_M = 25 m past its exit. It now hands back 2.2 m/s
-    (5 mph) over that same stretch."""
+    """The v3.6.5 number: a 40 m bend used to hold corner speed for
+    BEHIND_KEEP_M = 25 m past its exit. It hands back more than 2 m/s over that
+    stretch, and (v3.7.1) has already handed some back BEFORE the exit."""
     at_exit = CS.corner_cap(self.V, -self.HALF, self.HALF)
     at_keep = CS.corner_cap(self.V, -(self.HALF + 25.0), self.HALF)
     assert at_keep - at_exit > 2.0
+    assert at_exit > self.V
 
   def test_the_run_out_is_briskerthan_the_run_in(self):
     """2.5 m/s^2 out against a budget capped at 1.20 in: 'brake early,
@@ -396,12 +446,14 @@ class TestTheRunOut:
     for v, d, h in ((0.0, 10.0, 5.0), (float('nan'), 10.0, 5.0),
                     (12.0, float('inf'), 5.0)):
       assert CS.corner_cap(v, d, h) == float('inf')
+    assert CS.exit_speed(float('nan'), 5.0) == 0.0
+    assert CS.exit_speed(0.0, 5.0) == 0.0
 
   def test_a_missing_half_length_degrades_to_the_apex(self):
-    """An unknown extent must not invent one. Releasing from the apex is the
-    conservative reading of 'we do not know how long this bend is'... in the
-    sense that it matches the pre-v3.6.5 geometry rather than extending the
-    hold on a number we do not have."""
+    """An unknown extent must not invent one: with half_len 0 there is no exit
+    half to ramp through, the exit speed IS the corner speed, and the release
+    runs from the apex at RELEASE_RATE exactly as in v3.6.5."""
+    assert CS.exit_speed(self.V, 0.0) == pytest.approx(self.V)
     assert CS.corner_cap(self.V, -10.0, 0.0) == \
            pytest.approx(math.sqrt(self.V ** 2 + 2 * CS.RELEASE_RATE * 10.0))
 

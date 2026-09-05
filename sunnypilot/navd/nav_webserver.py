@@ -284,6 +284,13 @@ _CODE_MARKERS = [
   ("def plan_alpha", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/route_map.py", "minimap tint is the long-control plan"),
   # v3.6.5
   ("def corner_cap", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "corner run-out hands throttle back"),
+  # v3.7.1
+  ("EXIT_LAT_FRAC", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_speed.py", "corner exit ramp from the apex"),
+  ("def path_opening", "/data/openpilot/selfdrive/controls/lib/turn_limit.py", "turn limit exit allowance"),
+  ("STORE_ROUTE_MAX_M", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "store records must lie on the route"),
+  ("BEHIND_MAX_M", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "corners listed through their run-out"),
+  ("_v_scc_map_gated", "/data/openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py", "MAP pill reads the gated cap"),
+  ("def tint_for", "/data/openpilot/selfdrive/ui/sunnypilot/onroad/hud/follow_line.py", "guide bar white-to-red tint"),
   ("def _dead_reckon", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/scc_map_v2.py", "corner distances close between refreshes"),
   ("TAKEOVER_SEVERITY", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "a driver takeover is a verdict"),
   ("y POSITIVE RIGHT", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/corner_effort.py", "lane departure frame convention fixed"),

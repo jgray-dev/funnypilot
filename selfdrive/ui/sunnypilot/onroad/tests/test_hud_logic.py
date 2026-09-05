@@ -1098,16 +1098,29 @@ class TestTheSlowdownGradient:
     assert cap == pytest.approx(v_corner)
     assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0)
 
-  def test_the_whole_arc_is_solid(self):
-    """v3.6.5 — the corner's own extent is FULL opacity end to end, because the
-    cap holds the corner speed across it. MUTATION: release from the apex
-    (drop half_len) and the exit half of every bend goes translucent while the
-    car is still turning."""
+  def test_the_entry_half_is_solid_and_the_exit_half_fades_from_the_apex(self):
+    """v3.6.5 held the corner speed across the whole arc, so the extent was
+    full opacity end to end. v3.7.1 — the cap begins rising AT THE APEX
+    (corner_speed.EXIT_LAT_FRAC), so the ribbon is solid through the entry
+    half and fades progressively through the exit half. The ribbon takes the
+    controller's own `corner_cap`, so this is the controller's behaviour drawn,
+    not a drawing decision. MUTATION: hold `v_corner` across the exit half
+    again and the fade disappears."""
     v_set, v_corner = 60 / self.MPH, 29 / self.MPH
     ac = self._cap()
-    for m in (-self.HALF, -10.0, 0.0, 10.0, self.HALF):
+    # `corner_plan_at(s, ...)` takes the point's ARC POSITION with the apex at
+    # s_apex = 0 and evaluates `corner_cap(v, s_apex - s, half)`, so a point
+    # BEFORE the apex has negative s and a point past it has positive s.
+    for m in (-self.HALF, -10.0, 0.0):        # entry half and apex: solid
       gov, cap, _kn = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
       assert _rm.plan_alpha(v_set, gov, cap) == pytest.approx(1.0), m
+    alphas = []
+    for m in (0.0, 5.0, 10.0, self.HALF):     # apex to exit: fading
+      gov, cap, _kn = _rm.corner_plan_at(m, [(0.0, self.HALF, v_corner)], ac)
+      alphas.append(_rm.plan_alpha(v_set, gov, cap))
+    assert alphas[0] == pytest.approx(1.0)
+    assert all(b < a for a, b in zip(alphas, alphas[1:], strict=False)), alphas
+    assert alphas[-1] > 0.5, "the exit point is still mostly a corner"
 
   def test_it_builds_monotonically_through_the_approach(self):
     """MUTATION: evaluate the envelope at a fixed distance, or drop the
@@ -1133,7 +1146,10 @@ class TestTheSlowdownGradient:
       gov, cap, _kn = _rm.corner_plan_at(self.HALF + m, [(0.0, self.HALF, v_corner)], ac)
       alphas.append(_rm.plan_alpha(v_set, gov, cap))
     assert alphas == sorted(alphas, reverse=True)
-    assert alphas[0] == pytest.approx(1.0)
+    # v3.7.1: the cap has ALREADY begun rising through the exit half (see
+    # corner_speed.EXIT_LAT_FRAC), so the exit point itself is no longer full
+    # opacity — a little under, and the release runs on from there.
+    assert 0.8 < alphas[0] < 1.0
     assert alphas[-1] == 0.0
     # THE INTERMEDIATE VALUES ARE THE TEST. An earlier version asserted only
     # the ordering and the ends, and PASSED with the exit fade deleted --

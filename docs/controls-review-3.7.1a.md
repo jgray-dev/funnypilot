@@ -1,6 +1,8 @@
 # Controller review: FunnyPilot 3.7.1a
 
-Base: `funnypilot/funnypilot-3.7.0`, commit `73a974640`.
+Integrated base: `funnypilot/funnypilot-3.7.1`, commit `44f14a6af`.
+Initial work started from 3.7.0 (`73a974640`); the complete 3.7.1 release was
+subsequently merged into the published branch after the owner corrected the base.
 Working branch: `funnypilot-3.7.1a`. Review date: 2026-09-05.
 
 This change fixes reproducible controller defects. It does not establish
@@ -103,10 +105,20 @@ preserves stop-hold rate, passes the freeze decision between controllers, and
 tests production methods and publication rather than copied formulas. No
 Params keys, capnp schema changes, or generated-code changes are introduced.
 
+## 3.7.1 integration
+
+The complete 3.7.1 release is retained: the minimal white/red guide bar,
+proportional corner-cap release from the apex, model-path opening allowance,
+cruise offset before governor arbitration, route-matched learned corners,
+corner visibility through run-out, and corrected MAP/LRN indicators.
+The merged planner keeps the braking shaper synchronization and timestamp fix.
+The steering changes are unchanged by this merge. Both releases' diagnostic
+markers are retained, with the displayed version remaining 3.7.1a.
+
 ## Validation
 
 The unmodified controller/governor baseline passed 724 tests. The expanded
-regression run passes **1,256 tests**, including lateral/longitudinal helpers,
+regression run after integrating 3.7.1 passes **1,305 tests**, including lateral/longitudinal helpers,
 actual controller transitions, planner output integration, SCC/SLA, blinker
 pause, UI import/contract guards, diagnostics, and release metadata checks.
 Ruff passes across `selfdrive`, `sunnypilot`, `system`, and `common`.
@@ -155,7 +167,7 @@ x86_64 host. This is not recorded as a passed or skipped vehicle test.
 ## Required before driving
 
 Run the native build, following-distance/lead maneuvers, controller tests, and
-process replay on compatible runtime artifacts. Compare 3.7.0 and 3.7.1a on
+process replay on compatible runtime artifacts. Compare 3.7.1 and 3.7.1a on
 the same recorded inputs before device deployment. Closed-course acceptance
 must cover lead braking and cut-ins, low-speed stopping/launch, changing coast
 limits, steering disengagement in a curve, driver handback, neural model

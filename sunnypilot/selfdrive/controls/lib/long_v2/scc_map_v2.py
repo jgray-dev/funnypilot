@@ -76,10 +76,26 @@ _GEOM_PERIOD_S = 0.5      # the route is 1 Hz data; re-deriving faster buys noth
 # what a write would have merged into.
 MATCH_M = 45.0
 MATCH_BEARING_DEG = 55.0
-# How far past a corner's exit it stays in the list. Long enough for the
-# observer's pass to close on the far side, short enough that a corner cannot
-# keep capping the car down the straight after it.
+# How far past a corner's exit it stays in the list AT LEAST. Long enough for
+# the observer's pass to close on the far side.
 BEHIND_KEEP_M = 25.0
+# v3.7.1 — ...AND WHILE ITS RUN-OUT IS STILL UNDER THE SET SPEED, up to this
+# far. Owner: "sometimes the MAP pill highlights with a number despite a corner
+# not being detected on the minimap". That was this: the corner left the list
+# 25 m past its exit while CurveSpeedCap went on releasing the cap for several
+# seconds more — so the cap (and the pill, and the LRN pill) said SCC-M was
+# active and the minimap, which draws the LIST, showed no corner. The two now
+# agree by construction: a corner exists exactly as long as its cap does, and
+# the ribbon's run-out fade (which was cut short at 25 m) draws the whole
+# release. This does NOT hold the car down: `corner_cap`'s run-out rises at
+# RELEASE_RATE whether the corner is listed or not — it is what CurveSpeedCap
+# was following anyway, and it is distance-based rather than timed.
+# 150 m is the run-out from a 35 mph exit to a 60 mph set speed at
+# RELEASE_RATE, with room; road_geometry.WINDOW_BEHIND_M has to reach back
+# past this plus a corner's whole extent, or the geometry stops FINDING the
+# corner before this rule gets to keep it (measured, v3.7.1: at 120 m of
+# window the list emptied 90 m down the exit straight with the cap still live).
+BEHIND_MAX_M = 150.0
 # Two refreshes half a second apart place the same physical corner at slightly
 # different coordinates, because the ego pose they were projected from moved.
 # This is how far apart they may be and still be the same corner.
@@ -127,6 +143,21 @@ TURN_HOLD_S = 3.0
 # two describe the same bend.
 STORE_LOOKAHEAD_M = 400.0
 STORE_DEDUPE_M = 60.0      # a store record this close to a geometry corner IS it
+# v3.7.1 — A RECORD HAS TO BE ON THIS ROAD. The first cut of the store
+# injection accepted any record within 400 m whose heading was within 55
+# degrees of ours and whose along-heading projection was positive — which is
+# also a description of a bend on a parallel road, a frontage road, or the
+# far side of a junction we once struggled at. The car then capped for a bend
+# that was not on its road, with nothing on the minimap to show for it, which
+# is the other half of the owner's report. A record now has to lie within this
+# many metres of mapd's route polyline (the ROAD WE ARE MATCHED TO), its
+# distance is the ARC LENGTH along that route, and its recorded heading has to
+# agree with the route's direction AT THAT POINT rather than with ours here —
+# so a hairpin's far side counts and the other carriageway does not. NO ROUTE,
+# NO INJECTION: without a route there is nothing to say which road a record
+# is on, and braking for a corner that is not there is the failure this fork
+# has spent releases on.
+STORE_ROUTE_MAX_M = 35.0
 # How much of a bend the car has to be pulling before an undetected stretch of
 # road is a candidate corner at all. 0.0035 1/m is R = 285 m, which at 30 m/s
 # is 3.2 m/s^2 — well past anything a straight road produces.
@@ -409,7 +440,8 @@ class SCCMapV2:
 
   # ── geometry ──────────────────────────────────────────────────────────────
 
-  def _refresh_corners(self, now: float, lat: float, lon: float, bearing: float) -> None:
+  def _refresh_corners(self, now: float, lat: float, lon: float, bearing: float,
+                       v_cruise: float = 0.0) -> None:
     """Re-measure the road ahead and price every corner on it.
 
     Throttled to _GEOM_PERIOD_S because the source is 1 Hz. The DISTANCES go
@@ -421,18 +453,21 @@ class SCCMapV2:
     everything with d <= 0 would end the cap at the apex — exactly where the
     car must not accelerate — and would close the observer's pass halfway
     through the bend it is measuring. `BEHIND_KEEP_M` past the exit is enough
-    for the pass to close cleanly on the far side.
+    for the pass to close cleanly on the far side, and (v3.7.1) a corner whose
+    run-out is still under `v_cruise` stays until it is not, so the list — and
+    therefore the minimap — shows the corner for exactly as long as it caps.
     """
     if now - self._geom_at < _GEOM_PERIOD_S:
       return
     self._geom_at = now
     self._dr_at = now
 
-    corners, s_ego = RG.corners_from_route(self._read_route(), lat, lon, bearing)
+    rs, s_ego = RG.route_frame(self._read_route(), lat, lon, bearing)
+    corners = RG.corners_from_rs(rs) if rs else []
     out = []
     for rc in corners:
       d = rc.s_apex - s_ego
-      if d > CS_.MAX_LOOKAHEAD_M or d < -(rc.half_len + BEHIND_KEEP_M):
+      if d > CS_.MAX_LOOKAHEAD_M or d < -(rc.half_len + BEHIND_MAX_M):
         continue
       # the corner's own position, back in geodetic coords, so it can be looked
       # up in the store and drawn on the map
@@ -440,14 +475,33 @@ class SCCMapV2:
       cbrg = (bearing + rc.heading_rel) % 360.0
       a_lat, visits, conf, settled = self._lookup(clat, clon, cbrg)
       v = max(CS_.speed_for(rc.radius, a_lat), CS_.MIN_V_TARGET)
+      if not self._keep_behind(d, rc.half_len, v, v_cruise):
+        continue
       out.append(TrackedCorner(clat, clon, cbrg, rc.radius, rc.half_len, d,
                                a_lat, visits, conf, v, rc.sign, rc.turn_deg,
                                settled, self._unmanageable(clat, clon, cbrg)))
-    out.extend(self._corners_from_store(lat, lon, bearing, out))
+    out.extend(self._corners_from_store(lat, lon, bearing, out, rs, s_ego))
     self.corners = out
     s = self.store()
     if s is not None:
       self.learned_count = s.count
+
+  @staticmethod
+  def _keep_behind(d: float, half_len: float, v_target: float, v_cruise: float) -> bool:
+    """Does a corner at apex-distance `d` (negative = behind) stay listed?
+
+    Always within BEHIND_KEEP_M of its exit (the observer's pass needs it);
+    beyond that only while its run-out is still under the set speed, which is
+    exactly the span over which its cap is still saying something. v3.7.1.
+    """
+    if d >= -(half_len + BEHIND_KEEP_M):
+      return True
+    if d < -(half_len + BEHIND_MAX_M):
+      return False
+    try:
+      return CS_.corner_cap(v_target, d, half_len) < float(v_cruise)
+    except Exception:
+      return False
 
   def _unmanageable(self, lat: float, lon: float, bearing: float) -> bool:
     """Has this bend driven its own budget to the floor and still stressed us?
@@ -502,8 +556,9 @@ class SCCMapV2:
       self._warn_frames = max(self._warn_frames, int(WARN_MIN_S / _DT))
     self.corner_warning = self._warn_frames > 0
 
-  def _corners_from_store(self, lat, lon, bearing, geom):
-    """Learned bends ahead that the geometry did not find. v3.6.5.
+  def _corners_from_store(self, lat, lon, bearing, geom, rs=None, s_ego=0.0):
+    """Learned bends ahead ON THIS ROAD that the geometry did not find. v3.6.5,
+    rewritten v3.7.1 around the route polyline.
 
     A record in the store is a bend this car has MEASURED — position, heading,
     radius and lateral budget all from its own passes — which is better
@@ -512,35 +567,50 @@ class SCCMapV2:
     never listed, and a corner that is never listed can neither cap the car nor
     accumulate another visit, so the miss is self-perpetuating.
 
+    v3.7.1 — BUT ONLY IF IT IS ON THE ROAD WE ARE ON. See STORE_ROUTE_MAX_M:
+    the record has to sit within that distance of the resampled route `rs`,
+    its distance is the ARC LENGTH along the route from `s_ego` to the nearest
+    vertex (not a straight-line projection along our heading, which understates
+    on a curvy road and cannot tell a parallel road from ours), and its recorded
+    heading has to agree with the ROUTE'S direction at that vertex — the
+    direction the bend is driven in — rather than with our heading here.
+    Without a route nothing is injected.
+
     GEOMETRY WINS WHERE BOTH DESCRIBE THE SAME BEND. The polyline's apex is a
     live projection from the current pose, while a record's position is where
     the car was on some previous drive; deduping toward geometry keeps the
-    fresher number and stops one bend being capped twice.
-
-    Distance is straight-line along the heading, not arc length, so on a curvy
-    road it UNDERSTATES how far away the corner is. That direction is
-    deliberate: an understated distance tightens the cap early rather than
-    arriving late. Never raises — a store failure yields no extra corners.
+    fresher number and stops one bend being capped twice. Never raises — a
+    store failure yields no extra corners.
     """
     extra = []
     try:
+      if not rs or len(rs) < 2:
+        return extra
       s = self.store()
       if s is None:
         return extra
-      near = s.nearby(lat, lon, bearing, STORE_LOOKAHEAD_M,
-                      MATCH_BEARING_DEG, ahead_only=True)
-      cos_lat = math.cos(math.radians(lat))
-      hx, hy = math.sin(math.radians(bearing)), math.cos(math.radians(bearing))
+      # No bearing filter HERE (180 = accept all): the heading test is done
+      # against the route's own direction at the record, below.
+      near = s.nearby(lat, lon, bearing, STORE_LOOKAHEAD_M, 180.0, ahead_only=False)
       for _d, c in near:
         if c.r <= 0.0 or c.n < 1:
           continue
         if any(self._sep_m(c.lat, c.lon, g.lat, g.lon) <= STORE_DEDUPE_M for g in geom):
           continue
-        north = (c.lat - lat) * 111320.0
-        east = (c.lon - lon) * 111320.0 * cos_lat
-        d = north * hy + east * hx
+        x, y = RG.to_local([(c.lat, c.lon)], lat, lon, bearing)[0]
+        i = min(range(len(rs)), key=lambda k: (rs[k][1] - x) ** 2 + (rs[k][2] - y) ** 2)
+        if math.hypot(rs[i][1] - x, rs[i][2] - y) > STORE_ROUTE_MAX_M:
+          continue                       # not on this road
+        d = rs[i][0] - s_ego
         if not (0.0 < d <= CS_.MAX_LOOKAHEAD_M):
           continue
+        # the route's direction at that vertex, as an absolute bearing
+        j = i + 1 if i + 1 < len(rs) else i
+        k = i if j != i else i - 1
+        dx, dy = rs[j][1] - rs[k][1], rs[j][2] - rs[k][2]
+        route_brg = (bearing + math.degrees(math.atan2(dy, dx))) % 360.0
+        if abs((c.bearing - route_brg + 180.0) % 360.0 - 180.0) > MATCH_BEARING_DEG:
+          continue                       # driven the other way: not this bend
         a_lat = CS_.effective_a_lat(c.a_lo, c.a_hi, c.n, drift=c.d)
         # A record carries a radius but no sweep, so its extent is estimated
         # from the radius and capped. Erring short is the safe direction here:
@@ -916,7 +986,7 @@ class SCCMapV2:
     else:
       try:
         now = time.monotonic()
-        self._refresh_corners(now, lat, lon, bearing)
+        self._refresh_corners(now, lat, lon, bearing, v_cruise)
         # AFTER the refresh, which re-stamps `_dr_at`, so a frame that
         # refreshed advances nothing and a frame that did not advances exactly
         # its own dt. Without this the distances are a 0.5 s staircase that is

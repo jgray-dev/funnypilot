@@ -632,3 +632,42 @@ class TestALeadCommittedToStopping:
     for a in (float('nan'), float('inf'), float('-inf')):
       gov.update(True, 40.0, 15.0, 20.0, 25.0, a)
       assert not gov.stopping_lead
+
+
+class TestTheHiddenGovernorShavesOnlyTheSetSpeed:
+  """FunnyPilot v3.7.1 — HIDDEN_CRUISE_OFFSET used to be applied AFTER the speed
+  governors had taken their min(), so every SCC-V/SCC-M corner cap was also
+  multiplied by 0.93: the dev panel said CAP 30 and the car held 27.9. Two
+  speed reductions stacked on one corner. It now lands on the cruise candidate
+  BEFORE `update_targets`, so a corner cap is honoured at the number the
+  controller chose. Pinned on the AST: the planner imports acados."""
+
+  def _update(self):
+    import ast
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / 'longitudinal_planner.py').read_text()
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'update')
+    return fn
+
+  def test_the_offset_is_applied_before_the_governors_and_never_after(self):
+    import ast
+    fn = self._update()
+    body = ast.unparse(fn)
+    shave = body.index("HIDDEN_CRUISE_OFFSET")
+    governors = body.index("update_targets(")
+    assert shave < governors, "the offset must shave the cruise CANDIDATE, before the governors"
+    # ...and exactly once: nothing may re-apply it to the governed value
+    assert body.count("HIDDEN_CRUISE_OFFSET") == 1, body.count("HIDDEN_CRUISE_OFFSET")
+    # the shave is a multiplication of v_cruise, not something else wearing the name
+    aug = [n for n in ast.walk(fn) if isinstance(n, ast.AugAssign)
+           and "HIDDEN_CRUISE_OFFSET" in ast.unparse(n.value)]
+    assert len(aug) == 1 and ast.unparse(aug[0].target) == "v_cruise"
+
+  def test_the_governors_still_receive_a_cruise_value(self):
+    """Anti-vacuous half: `update_targets` is still called with v_cruise."""
+    import ast
+    fn = self._update()
+    call = next(n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                and ast.unparse(n.func).endswith("update_targets"))
+    assert "v_cruise" in [ast.unparse(a) for a in call.args]

@@ -6,7 +6,9 @@ Three things are pinned here and they are different kinds of claim:
     is perpendicular to the path, not to the car; on a hill it takes the road's
     height at that distance; off the end of the path it draws nothing.
   * THE VISIBILITY RULE is tested by driving the real `FollowLine` object:
-    shown only with a lead, longitudinal active, and a live published gap.
+    shown with longitudinal active and a live published gap — lead or no lead
+    since v3.7.1 — and THE TINT is pure arithmetic: white at the line, red
+    inside it, and never anything on the far side.
   * THE WIRING is an AST scan, because `augmented_road_view` cannot be imported
     off-device: the draw is behind `safe_draw`, inside the sunnypilot-UI guard,
     and after the model renderer whose transform it borrows.
@@ -126,10 +128,13 @@ class TestTheVisibilityRule:
     fl._read = lambda: (gap, 1.6, lead)
     return fl
 
-  def test_shown_only_with_lead_and_long_active_and_a_published_gap(self):
+  def test_shown_with_long_active_and_a_published_gap_lead_or_not(self):
+    """v3.7.1 — A LEAD IS NOT REQUIRED. The bar marks the gap the planner would
+    hold; an empty road still has one. MUTATION: put `and bool(lead)` back in
+    `target()` and the no-lead case goes dark."""
     assert self._line(35.0, True).target(True)[0] == 1.0
+    assert self._line(35.0, False).target(True)[0] == 1.0, "no lead is still a gap to show"
     assert self._line(35.0, True).target(False)[0] == 0.0, "no long control, no gate"
-    assert self._line(35.0, False).target(True)[0] == 0.0, "no lead, nothing to hold to"
     assert self._line(0.0, True).target(True)[0] == 0.0, "planner not publishing"
 
   def test_an_absurd_gap_is_not_drawn(self):
@@ -200,6 +205,12 @@ class TestTheVisibilityRule:
     rect = type("R", (), {"x": -1e9, "y": -1e9, "width": 2e9, "height": 2e9})()
     fl.draw(_MR(), {'carControl': type("C", (), {"longActive": True})()}, rect)
     assert calls, "nothing was drawn"
+    # v3.7.1 — two strokes (halo + line), no end posts: every call shares the
+    # same two endpoints. MUTATION: restore the end-post loop and a call with a
+    # different pair of points appears.
+    assert len(calls) == len(_fl._STROKES)
+    assert all((c[0].x, c[0].y, c[1].x, c[1].y) == (calls[0][0].x, calls[0][0].y, calls[0][1].x, calls[0][1].y)
+               for c in calls)
     a, b, _w = calls[0]
     # left endpoint: y=+HALF, z=1.2 at x=30 -> (10*1.45/30, 10*1.2/30)
     assert a.x == pytest.approx(10 * _fl.HALF_WIDTH_M / 30.0)
@@ -267,4 +278,99 @@ class TestTheWiring:
     for node in ast.walk(tree):
       if isinstance(node, ast.Call) and ast.unparse(node.func).endswith("Color"):
         raise AssertionError("follow_line.py must take its colour from tokens.py")
-    assert hasattr(_T, "HOLO")
+    assert hasattr(_T, "GUIDE") and hasattr(_T, "HOLO")
+
+  def test_the_only_colours_it_can_reach_are_white_and_the_halt_red(self):
+    """v3.7.1 — 'it should stay between the white and red colors, no green'.
+    Pinned STRUCTURALLY: the module may name no colour token other than GUIDE
+    and HALT (HOLO being GUIDE's alias). MUTATION: reference T.ENGAGED anywhere
+    in follow_line.py."""
+    tree = ast.parse((_ONROAD / 'hud' / 'follow_line.py').read_text())
+    colour_tokens = {n for n in dir(_T) if n.isupper() and isinstance(getattr(_T, n), _T.rl.Color)}
+    used = {node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+            and node.value.id == "T" and node.attr in colour_tokens}
+    assert used, "anti-vacuous: the scan found no colour tokens at all"
+    assert used <= {"GUIDE", "HOLO", "HALT"}, used
+    # ...and the neutral end really is neutral: no channel bias, i.e. no hue.
+    g = _T.GUIDE
+    assert max(g.r, g.g, g.b) - min(g.r, g.g, g.b) <= 6, "GUIDE has a hue"
+
+  def test_there_are_no_end_posts(self):
+    """v3.7.1 — 'remove the vertical lines on either end'. One draw call site,
+    inside the stroke loop. MUTATION: add a second draw_line_ex."""
+    tree = ast.parse((_ONROAD / 'hud' / 'follow_line.py').read_text())
+    n = sum(1 for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and ast.unparse(node.func).endswith("draw_line_ex"))
+    assert n == 1
+    assert "POST_H_M" not in (_ONROAD / 'hud' / 'follow_line.py').read_text()
+
+
+class TestTheTint:
+  """v3.7.1 — a lead INSIDE the line is the planner wanting more gap, and the
+  bar says so by turning red. Pure arithmetic, so it is pinned as arithmetic."""
+
+  def test_no_lead_is_white(self):
+    assert _fl.tint_for(35.0, False, 10.0) == 0.0
+
+  def test_a_lead_on_or_beyond_the_line_is_white(self):
+    assert _fl.tint_for(35.0, True, 35.0) == 0.0
+    assert _fl.tint_for(35.0, True, 60.0) == 0.0
+
+  def test_it_is_one_sided(self):
+    """NO GREEN. A lead further away than the line must produce exactly the
+    same answer as a lead on it, however far away it is: there is no branch on
+    that side. MUTATION: return a signed value."""
+    for d in (35.1, 50.0, 200.0, 1e6):
+      assert _fl.tint_for(35.0, True, d) == 0.0
+
+  def test_it_reddens_as_the_lead_moves_inside_the_line(self):
+    ts = [_fl.tint_for(35.0, True, d) for d in (34.0, 30.0, 25.0, 20.0)]
+    assert all(0.0 < t <= 1.0 for t in ts)
+    assert all(b > a for a, b in zip(ts, ts[1:], strict=False))
+
+  def test_full_red_at_the_fraction_of_the_gap(self):
+    g = 40.0
+    assert _fl.tint_for(g, True, g * (1.0 - _fl.TINT_FULL_FRAC)) == pytest.approx(1.0)
+    assert _fl.tint_for(g, True, 0.0) == 1.0
+    assert 0.0 < _fl.TINT_FULL_FRAC < 1.0
+
+  @pytest.mark.parametrize("gap,d", [(float('nan'), 10.0), (35.0, float('nan')), (0.0, 5.0),
+                                     (-5.0, 1.0), ("x", 1.0), (35.0, None)])
+  def test_garbage_is_white_not_red(self, gap, d):
+    assert _fl.tint_for(gap, True, d) == 0.0
+
+  def test_the_draw_blends_toward_halt_when_the_lead_is_inside(self):
+    """Through the real draw: the colour handed to raylib moves from GUIDE
+    toward HALT with a lead inside the line, and is EXACTLY GUIDE with the lead
+    beyond it. MUTATION: drop the radarState read, or lerp the wrong way."""
+    calls = []
+    _fl.rl.draw_line_ex = lambda a, b, w, c: calls.append(c)
+
+    class _Path:
+      raw_points = _straight()
+
+    class _MR:
+      _path = _Path()
+      _path_offset_z = 1.2
+      _car_space_transform = np.array([[0, 10, 0], [0, 0, 10], [1, 0, 0]], dtype=float)
+
+    rect = type("R", (), {"x": -1e9, "y": -1e9, "width": 2e9, "height": 2e9})()
+
+    def frame(d_rel):
+      fl = _fl.FollowLine()
+      fl._read = lambda: (30.0, 1.6, True)
+      fl._alpha.snap(1.0)
+      fl._gap.snap(30.0)
+      sm = {'carControl': type("C", (), {"longActive": True})(),
+            'radarState': type("R", (), {"leadOne": type("L", (), {"status": True, "dRel": d_rel})()})()}
+      calls.clear()
+      for _ in range(3):
+        fl.draw(_MR(), sm, rect)
+      return calls[-1]
+
+    beyond = frame(45.0)
+    assert (beyond.r, beyond.g, beyond.b) == (_fl.T.GUIDE.r, _fl.T.GUIDE.g, _fl.T.GUIDE.b)
+    inside = frame(12.0)
+    assert inside.g < _fl.T.GUIDE.g and inside.b < _fl.T.GUIDE.b, "must move toward HALT"
+    assert inside.r >= _fl.T.HALT.r - 1 or inside.r >= inside.g, "toward red, not away from it"

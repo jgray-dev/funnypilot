@@ -53,11 +53,14 @@ HALT = rl.Color(0xFF, 0x5A, 0x52, 255)
 NOMINAL = rl.Color(0x8F, 0xA3, 0xB8, 255)
 
 WHITE = rl.Color(255, 255, 255, 255)
-# v3.7.0 — the follow-distance hologram. A pale cyan-white: cool so it reads as
-# a projection rather than a warning, and DISTINCT from LAT_ONLY's saturated
-# cyan so nobody mistakes a marker on the road for the engagement state. It is
-# the one hue on the HUD that means "here", not "how".
-HOLO = rl.Color(0xC8, 0xF2, 0xFF, 255)
+# v3.7.0 introduced the follow-distance line as a pale cyan-white "hologram";
+# v3.7.1 made it a minimal guide bar at the owner's request: NEUTRAL WHITE, no
+# hue at all. Its colour now carries exactly one piece of information — how far
+# inside the desired gap the lead is — as a blend from this toward HALT (the
+# fork's one red). White-to-red only, never toward green: the bar reports a
+# reason to slow, and nothing on it may ever read as "accelerate".
+GUIDE = rl.Color(0xF2, 0xF4, 0xF6, 255)
+HOLO = GUIDE   # the v3.7.0 name, kept for the marker table and any old reader
 INK = rl.Color(0x0B, 0x0F, 0x14, 255)
 SIGN_FACE = rl.Color(0xF2, 0xF4, 0xF6, 255)
 

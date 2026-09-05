@@ -119,7 +119,16 @@ exit status — use `${PIPESTATUS[0]}` when checking git through a pipe.
 
 - `FUNNYPILOT_VERSION` - Version number only. No changelog.
 
-### v3.7.1a Changes (based on funnypilot-3.7.0 at 73a974640)
+### v3.7.1a Changes (includes funnypilot-3.7.1 at 44f14a6af)
+
+BASE CORRECTION: the initial work started at 3.7.0 (`73a974640`). The owner
+corrected the intended base to 3.7.1, so its full release commit `44f14a6af`
+is merged into this branch without rewriting the published controller work.
+The 3.7.1 guide bar, apex exit ramp/path-opening allowance, cruise-only 0.93
+offset, route-matched learned corners, and MAP/LRN display changes below are
+all retained. The planner also keeps 3.7.1a's shaper synchronization and
+timestamp fix; the lateral motion-credit implementation is unchanged.
+`FUNNYPILOT_VERSION` and diagnostic `EXPECTED_VERSION` remain `3.7.1a`.
 
 SECOND PASS — OWNER REQUESTED FEWER LARGE STEERING "BITES", AND A CODE CHANGE
 RATHER THAN MORE INSTRUMENTATION. `steering_motion.py` adds motion credit in
@@ -228,6 +237,123 @@ flash or on-road verification. Full rationale and validation commands live in
 - `FUNNYPILOT_VERSION`, `EXPECTED_VERSION` -> `3.7.1a`. Diagnostic hashes
   now include the remaining changed controllers and extension files; five
   new markers plus an updated partial-throttle-lift marker.
+
+### v3.7.1 Changes (based on funnypilot-3.7.0)
+
+Three owner requests in one cut: the follow line made minimal, the corner
+exit smoothed, and an audit of the longitudinal stack for "multiple pieces
+trying to go in the same spot in the puzzle" — which found four, two of them
+control defects.
+
+- `hud/follow_line.py`, `hud/tokens.py` — **THE GUIDE BAR.** Neutral white
+  (`T.GUIDE`; `HOLO` kept as an alias), TWO strokes at lower alpha, NO end
+  posts, and SHOWN WITHOUT A LEAD — the gap is the planner's whether radar has
+  a track or not. A lead INSIDE the line blends the bar from white toward
+  `T.HALT`, full red at `TINT_FULL_FRAC` 0.5 of the gap; `tint_for()` is pure
+  and ONE-SIDED BY CONSTRUCTION — there is no branch for a lead beyond the
+  line, so nothing on the bar can ever read as "accelerate". Pinned
+  structurally: the module may name no colour token but GUIDE/HOLO/HALT, and
+  has exactly one `draw_line_ex` call site.
+- **THE CORNER EXIT WAS THREE PIECES LETTING GO AT ONCE**, and each on its own
+  looked defensible. (1) `corner_cap` held EXACTLY `v_corner` from the arrival
+  lead to the EXIT POINT, then released at `RELEASE_RATE` 2.5 m/s^2 — three
+  times the car's accel clip at corner speeds, so the target ran away and the
+  demand stepped to the clip in the half second the jerk shaper allows. (2)
+  `turn_limit`'s total budget below 20 m/s is 1.7 m/s^2 and the corner budget
+  is 2.25, so `sqrt(max(1.7^2 - a_y^2, 0))` was ZERO for the entire arc of any
+  governed corner — no throttle until the lateral had fallen a quarter, then a
+  square-root opening. (3) SCC-V's cap `sqrt(a/k_now)` rises on its own as the
+  measured curvature unwinds, and needed nothing. ONE ALLOWANCE, TWO VIEWS:
+  * `long_v2/corner_speed.py` — `EXIT_LAT_FRAC` 0.20. Past the apex the cap is
+    `v_corner * sqrt(1 + f * s/half)`, reaching the exit point at (1+f) of the
+    corner's OWN budget if the road were still at full curvature there; then
+    `RELEASE_RATE` from `exit_speed()`, continuous. **A FRACTION OF THE BUDGET,
+    NOT A FIXED RATE**, is the safety argument: a bend learned as supporting
+    1.0 m/s^2 gets a ramp proportionate to 1.0 — a fixed 0.6 m/s^2 would have
+    exited it at +48% of its learned budget. The apex rate `v^2 f / (2 half)`
+    is 0.42-0.56 m/s^2 for ordinary bends, ~70% of the clip, so the MPC TRACKS
+    a moving target instead of saturating against one that has run off. The
+    ribbon (`corner_plan_at` takes the controller's own `corner_cap`) now fades
+    through the exit half by construction; `test_the_whole_arc_is_solid` was
+    rewritten because it pinned the hold this release removes.
+  * `selfdrive/controls/lib/turn_limit.py` — NEW `path_opening()`: `1 -
+    k_far/k_now` over `TURN_LOOKAHEAD_T` from the model path, clamped at zero
+    so the ENTRY (curvature rising) and a constant-radius arc read as exactly
+    zero, and `k_far` is the MEAN of the last quarter of the window because
+    `orientationRate.z` is noisy. `limit_accel_in_turns(..., opening)` floors
+    the ceiling at `EXIT_A_X` 0.6 * opening — a floor, never a raise of the
+    total budget, so the limit's original job (stop accelerating INTO a bend)
+    is untouched. The planner passes it; pinned on the AST.
+- **THE AUDIT.** Two control defects, two display ones, all "same spot":
+  * `selfdrive/controls/lib/longitudinal_planner.py` — **THE HIDDEN 0.93 WAS
+    STACKING ON EVERY CORNER CAP.** v3.3.3st applied `HIDDEN_CRUISE_OFFSET`
+    AFTER the governors' min(), so SCC-V/SCC-M caps were multiplied by 0.93
+    too: CAP read 30 mph, the car held 27.9. v2.0.3's own note says "lead, SLA,
+    and map constraints bypass the offset". It shaves the CRUISE CANDIDATE
+    before `update_targets` now; a cap between the shaved and the dialled speed
+    simply does not bind. SLA is unchanged in speed (its target IS the cluster).
+    **CORNERS ARE 7% FASTER AT THE APEX THAN 3.7.0 BECAUSE OF THIS ALONE**, and
+    2 mph of v3.6.6's "we're rarely actually going that speed" was this line.
+  * `long_v2/scc_map_v2.py` `_corners_from_store` — **A STORE RECORD WAS
+    INJECTED FROM ANY ROAD.** The v3.6.5 injection took any record within 400 m
+    whose heading was within 55 degrees of ours and whose along-heading
+    projection was positive — also a bend on a parallel road, a frontage road,
+    or a junction we once struggled at. So the car capped for a bend not on
+    its road with nothing on the minimap: the other half of the MAP-pill
+    report. Records now have to lie within `STORE_ROUTE_MAX_M` 35 m of mapd's
+    route polyline (NEW `road_geometry.route_frame`), distance is ARC LENGTH
+    along it, and the heading is compared with the ROUTE'S direction at the
+    record (so a hairpin's far side counts and the other carriageway does
+    not). NO ROUTE, NO INJECTION.
+  * `scc_map_v2._refresh_corners` — **THE MAP PILL WITH NO CORNER ON THE
+    MINIMAP.** A corner left the list `BEHIND_KEEP_M` 25 m past its exit while
+    the cap went on releasing for seconds; the pill reads the cap, the minimap
+    reads the list. `_keep_behind` keeps a corner while its run-out is under
+    the set speed, to `BEHIND_MAX_M` 150 — AND `road_geometry.WINDOW_BEHIND_M`
+    120 -> 300, because a probe showed the geometry simply stopped FINDING the
+    bend 90 m down the exit straight with the cap still live; the keep rule
+    alone could not fix what the window never returned. Distance-based, so
+    the exit release is now the same whether the corner is listed or not.
+  * SP `longitudinal_planner.py` — `sccMap.vTarget/active` publish the GATED
+    cap (`_v_scc_map_gated`, after scc_fusion) so the MAP pill cannot light
+    over a vetoed cap; `write_learn_shm` lights LRN only for a LEARNED
+    governing corner (`gov_confidence > 0`), which is what the minimap's own
+    LRN already meant. The raw ask still goes out on fp_scc/fp_sccdbg.
+  * FOUND AND LEFT, stated: SCC-V's friction scaling reads
+    `liveParameters.frictionCoefficientFiltered`, a field that lives on
+    `liveTorqueParameters`, so `get_fric` always returns 0.8 and the scaling
+    (and the weather cap) is inert. SCC-V's `gasGating` is published but never
+    applied by the planner (only SLA's and SCC-M's gates clip the throttle) —
+    display-only, benign. SCC-V (2.1) and SCC-M (2.25, trimmed by `R_TRIM_LO`)
+    are two budgets for one bend by design, min'd; not aligned here.
+- TESTS: **1261 green**, ruff clean, 149 markers resolve (6 new). NEW
+  `TestTheTint` (7), `TestPathOpening` (7), `TestTheExitAllowance` (8),
+  `TestThePlannerWiresTheOpeningIn`, `TestTheHiddenGovernorShavesOnlyTheSetSpeed`,
+  `TestACornerIsListedForAsLongAsItCaps` (5), `TestWhatThePillsAreTold` (3),
+  five on-this-road cases in `TestLearnedCornersEnterTheList`. **22 mutations,
+  all caught — but three survived the first pass.** (1) `floor-not-addition`
+  used a planner ceiling of 1.0, which both the floor and an addition clip
+  down to: a test that could not see the mutation. (2) The other-way heading
+  test rejected the record under BOTH rules (ours and the route's agree on a
+  straight); it needed a bend, where the two headings differ. (3) My no-route
+  mutation invented a two-vertex diagonal "route" the record was 150 m from —
+  an equivalent mutation, replaced by a real fallback. PROCESS NOTE: my first
+  membership fixture computed the car's position with a sign error and stood
+  it 90 m down the tail instead of 60 — the failure that then revealed the
+  window finding. A fixture bug that surfaces a real defect is still a bug.
+- `FUNNYPILOT_VERSION` -> 3.7.1, `EXPECTED_VERSION` -> "3.7.1", branch
+  `funnypilot-3.7.1`.
+- ON-ROAD VERIFICATION: (1) **the exit is the headline** — throttle should
+  build from the apex while the wheel is still unwinding, no step at the exit.
+  If it now accelerates INTO the second half of a constant-radius bend, the
+  model's curvature is reading the road as opening when it is not; `EXIT_A_X`
+  and `EXIT_LAT_FRAC` are the knobs, in that order. (2) corners are 7% faster
+  at the apex than 3.7.0 with NO change to CAP — if one now feels fast, the
+  demonstration/ceiling path is how a specific bend is corrected, not the
+  offset. (3) the MAP pill should now go out with the ribbon's run-out fade,
+  and never light on a road with no tinted corner ahead or behind. (4) the
+  guide bar: white on an empty road at the follow gap, reddening only when a
+  lead is inside it.
 
 ### v3.7.0 Changes (based on funnypilot-3.6.9)
 
