@@ -4,6 +4,17 @@ Includes funnypilot-3.7.1 at 44f14a6af, merged into the existing 3.7.1a work.
 All 3.7.1 guide-bar, corner-exit, cruise-offset, and map fixes are retained
 alongside the controller changes below.
 
+* Web Drives: Save/Unsave from the drive list or playback, plus a saved-only
+  filter and saved storage total. Saving protects the entire drive, including
+  new segments, across restarts and flashes to versions supporting saves.
+* Automatic cleanup checks every 60 seconds. Unsaved drives expire seven days
+  after their latest segment; the latest drive and active recordings are not
+  age-expired. Existing low-space cleanup can remove unsaved segments sooner.
+  Saved drives are never automatically deleted, including on external storage.
+  Manual deletion requires unsaving first and refuses an active recording.
+* Save and deletion share a process lock. Save metadata is written atomically
+  outside the checkout; unreadable metadata pauses deletion.
+
 Controller review: fixes to steering state transitions and delivery of
 planned braking. This is a development branch; vehicle behavior has not been
 validated on a device or closed course.

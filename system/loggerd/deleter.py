@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import time
 import shutil
 import threading
 from pathlib import Path
@@ -9,6 +8,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.system.loggerd.config import get_available_bytes, get_available_percent
 from openpilot.system.loggerd.uploader import listdir_by_creation
 from openpilot.system.loggerd.xattr_cache import getxattr
+from openpilot.system.loggerd import drive_retention
 
 MIN_BYTES = 5 * 1024 * 1024 * 1024
 MIN_PERCENT = 10
@@ -47,66 +47,75 @@ def get_preserved_segments(dirs_by_creation: list[str]) -> set[str]:
   return preserved
 
 
+def _clean_one(root, saved, low_space, preserved=(), archive_root=None):
+  dirs = listdir_by_creation(root)
+  expired = drive_retention.expired_routes(root, dirs)
+  for name in sorted(dirs, key=lambda d: (d in DELETE_LAST, d in preserved)):
+    route = drive_retention.segment_route(name)
+    if route in saved or (not low_space and route not in expired):
+      continue
+    path = os.path.join(root, name)
+    if os.path.islink(path) or drive_retention.is_locked(path):
+      continue
+    # Expired recordings are removed, not shuffled onto another disk forever.
+    if archive_root is not None and route not in expired:
+      target = os.path.join(archive_root, name)
+      try:
+        if os.path.lexists(target):
+          # Never nest a segment into an existing segment or follow a symlink.
+          continue
+        cloudlog.warning(f"moving {path} to {target}")
+        shutil.move(path, target)
+        return True
+      except OSError:
+        cloudlog.exception(f"issue moving {path} to {target}")
+        # Keep the source on a failed/partial copy; retry after the next scan.
+        continue
+    try:
+      cloudlog.info(f"deleting {path}")
+      shutil.rmtree(path)
+      return True
+    except OSError:
+      cloudlog.exception(f"issue deleting {path}")
+  return False
+
+
+def cleanup_once():
+  root = Paths.log_root()
+  if not os.path.isdir(root):
+    return False
+  # One lock and one saved set for both disks. It also serializes manual web
+  # deletion; a saved route is a hard exclusion, even below the free-space floor.
+  with drive_retention.locked_saved(root) as saved:
+    low_space = (get_available_bytes(default=MIN_BYTES + 1) < MIN_BYTES or
+                 get_available_percent(default=MIN_PERCENT + 1) < MIN_PERCENT)
+    changed = False
+    archive_root = None
+    external = Paths.log_root_external()
+    if Path(external).is_mount():
+      low_external = (get_available_bytes(default=MIN_BYTES + 1, path_type="external") < MIN_BYTES or
+                      get_available_percent(default=MIN_PERCENT + 1, path_type="external") < MIN_PERCENT)
+      changed = _clean_one(external, saved, low_external)
+      # Only archive when the external disk has room. Its saved data is never
+      # evicted to make space for an internal unsaved recording.
+      if (get_available_bytes(default=0, path_type="external") >= MIN_BYTES and
+          get_available_percent(default=0, path_type="external") >= MIN_PERCENT):
+        archive_root = external
+    preserved = get_preserved_segments(listdir_by_creation(root)) if low_space else set()
+    return _clean_one(root, saved, low_space, preserved, archive_root) or changed
+
+
 def deleter_thread(exit_event: threading.Event):
   while not exit_event.is_set():
-    out_of_bytes = get_available_bytes(default=MIN_BYTES + 1) < MIN_BYTES
-    out_of_percent = get_available_percent(default=MIN_PERCENT + 1) < MIN_PERCENT
-
-    if out_of_percent or out_of_bytes:
-      dirs = listdir_by_creation(Paths.log_root())
-      preserved_dirs = get_preserved_segments(dirs)
-
-      # remove the earliest directory we can
-      for delete_dir in sorted(dirs, key=lambda d: (d in DELETE_LAST, d in preserved_dirs)):
-        delete_path = os.path.join(Paths.log_root(), delete_dir)
-
-        if any(name.endswith(".lock") for name in os.listdir(delete_path)):
-          continue
-
-        if Path(Paths.log_root_external()).is_mount():
-          out_of_bytes_external = get_available_bytes(default=MIN_BYTES + 1, path_type="external") < MIN_BYTES
-          out_of_percent_external = get_available_percent(default=MIN_PERCENT + 1, path_type="external") < MIN_PERCENT
-
-          if out_of_percent_external or out_of_bytes_external:
-            dirs_external = listdir_by_creation(Paths.log_root_external())
-
-            # remove the earliest external directory we can
-            for delete_dir_external in sorted(dirs_external):
-              delete_path_external = os.path.join(Paths.log_root_external(), delete_dir_external)
-              try:
-                cloudlog.warning(f"deleting {delete_path_external}")
-                shutil.rmtree(delete_path_external)
-                break
-              except OSError:
-                cloudlog.exception(f"issue deleting {delete_path_external}")
-
-          # move directory from internal to external
-          path_external = os.path.join(Paths.log_root_external(), delete_dir)
-          try:
-            cloudlog.warning(f"moving {delete_path} to {path_external}")
-            start = time.monotonic()
-            shutil.move(delete_path, path_external)
-            cloudlog.warning(f"moved {delete_path} to {path_external} in {time.monotonic() - start:.2f}s")
-            break
-          except Exception:
-            cloudlog.error(f"issue moving {delete_path} to {path_external}")
-            try:
-              cloudlog.warning(f"deleting {delete_path}")
-              shutil.rmtree(delete_path)
-              break
-            except OSError:
-              cloudlog.exception(f"issue deleting {delete_path}")
-          continue
-
-        try:
-          cloudlog.info(f"deleting {delete_path}")
-          shutil.rmtree(delete_path)
-          break
-        except OSError:
-          cloudlog.exception(f"issue deleting {delete_path}")
-      exit_event.wait(.1)
-    else:
-      exit_event.wait(30)
+    try:
+      changed = cleanup_once()
+    except (OSError, ValueError):
+      # Corrupt/unreadable save metadata must never silently mean "none saved".
+      cloudlog.exception("drive cleanup paused: cannot read retention state")
+      changed = False
+    # Drain eligible data one segment at a time. If everything is saved/locked,
+    # wait a full interval instead of busy-looping on an unreclaimable disk.
+    exit_event.wait(.1 if changed else drive_retention.CLEANUP_INTERVAL)
 
 
 def main():

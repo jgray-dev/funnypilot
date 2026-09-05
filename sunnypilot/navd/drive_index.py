@@ -44,6 +44,8 @@ import shutil
 import stat
 import time
 
+from openpilot.system.loggerd import drive_retention
+
 # Where loggerd puts drives. Every entry point takes `root=None` and resolves
 # it HERE, at call time, rather than as a default argument — a module constant
 # used as a default is bound when the `def` runs, so it can never be redirected
@@ -168,6 +170,7 @@ def scan_routes(root: str | None = None) -> list[dict]:
   same answer from the logs would be minutes and hundreds of megabytes.
   """
   root = root or REALDATA_ROOT
+  saved = drive_retention.read_saved(root)
   routes: dict[str, dict] = {}
   try:
     entries = list(os.scandir(root))
@@ -203,6 +206,7 @@ def scan_routes(root: str | None = None) -> list[dict]:
     started = route_started_at(r["route"])
     out.append({
       "route": r["route"],
+      "saved": r["route"] in saved,
       "segments": segs,
       "n_segments": len(segs),
       "bytes": r["bytes"],
@@ -276,6 +280,22 @@ def segment_path(route: str, seg: int, root: str | None = None) -> str | None:
   return _safe_segment_dir(root, f"{route}--{int(seg)}")
 
 
+def set_route_saved(route: str, saved: bool, root: str | None = None) -> bool:
+  root = root or REALDATA_ROOT
+  drive_retention.validate_route(route)
+  if type(saved) is not bool:
+    raise ValueError('saved must be true or false')
+  with drive_retention.locked_saved(root) as routes:
+    if not route_segments(route, root):
+      raise FileNotFoundError('no such drive')
+    if saved:
+      routes.add(route)
+    else:
+      routes.discard(route)
+    drive_retention.write_saved(root, routes)
+  return saved
+
+
 def delete_route(route: str, root: str | None = None) -> tuple[int, int]:
   """Remove every segment of one drive. Returns (segments removed, bytes freed).
 
@@ -287,16 +307,28 @@ def delete_route(route: str, root: str | None = None) -> tuple[int, int]:
   """
   root = root or REALDATA_ROOT
   removed = freed = 0
-  for seg in route_segments(route, root):
-    path = _safe_segment_dir(root, f"{route}--{seg}")
-    if path is None or not os.path.isdir(path):
-      continue
-    freed += _dir_size(path)
-    try:
-      shutil.rmtree(path)
-      removed += 1
-    except OSError:
-      freed -= _dir_size(path)
+  if not os.path.isdir(root):
+    return removed, freed
+  with drive_retention.locked_saved(root) as saved:
+    if route in saved:
+      raise drive_retention.SavedDriveError('Unsave this drive before deleting it.')
+    segments = route_segments(route, root)
+    # Check the whole drive first: do not partially delete a recording in use.
+    for seg in segments:
+      path = _safe_segment_dir(root, f"{route}--{seg}")
+      if path is not None and drive_retention.is_locked(path):
+        raise drive_retention.ActiveDriveError('This drive is still recording. Try again when it has finished.')
+    for seg in segments:
+      path = _safe_segment_dir(root, f"{route}--{seg}")
+      if path is None or not os.path.isdir(path):
+        continue
+      size = _dir_size(path)
+      try:
+        shutil.rmtree(path)
+        removed += 1
+        freed += size
+      except OSError:
+        pass
   return removed, freed
 
 
@@ -308,8 +340,12 @@ def storage_stats(path: str | None = None) -> dict:
     free = st.f_bavail * st.f_frsize
   except OSError:
     return {"total": 0, "free": 0, "used": 0, "drives": 0}
-  drives = sum(r["bytes"] for r in scan_routes(path))
-  return {"total": total, "free": free, "used": total - free, "drives": drives}
+  routes = scan_routes(path)
+  drives = sum(r["bytes"] for r in routes)
+  return {"total": total, "free": free, "used": total - free, "drives": drives,
+          "saved_bytes": sum(r["bytes"] for r in routes if r["saved"]),
+          "retention_days": drive_retention.RETENTION_DAYS,
+          "cleanup_interval": drive_retention.CLEANUP_INTERVAL}
 
 
 # ── the HLS playlist ────────────────────────────────────────────────────────

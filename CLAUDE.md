@@ -130,6 +130,34 @@ all retained. The planner also keeps 3.7.1a's shaper synchronization and
 timestamp fix; the lateral motion-credit implementation is unchanged.
 `FUNNYPILOT_VERSION` and diagnostic `EXPECTED_VERSION` remain `3.7.1a`.
 
+WEB DRIVE RETENTION (owner requested):
+- `system/loggerd/drive_retention.py` — stdlib-only shared policy. A bounded,
+  versioned `.fp_saved_drives.json` in the log root records whole-route saves;
+  `.fp_drive_retention.lock` uses flock across web/deleter processes. Atomic
+  replace and fsync precede success. No Params key or compiled schema. Metadata
+  survives branch checkout; older software lacking this feature cannot honor it.
+  Corrupt/unreadable metadata pauses deletion, never means "nothing saved".
+- `system/loggerd/deleter.py` — the existing always-run process checks every
+  60 seconds and drains one eligible segment per 100 ms. Unsaved routes expire
+  seven days after their newest segment mtime; active and newest routes are
+  excluded from age expiry. The 5 GB / 10% pressure policy can evict unsaved
+  segments sooner. Saved routes are HARD exclusions on both disks, even when
+  space is low; stock `user.preserve` is still only delete-last. No second web
+  cleanup loop, log parsing, transcoding, or boot-time git work. Failed external
+  copies retain their source, and existing destination directories are not nested.
+- `sunnypilot/navd/drive_index.py`, `nav_webserver.py`, `nav_web/index.html` —
+  PUT `/api/drives/{route}/saved`, Save/Unsave in list and playback, saved filter,
+  persisted state in catalogue/detail, and saved storage/policy text. No success
+  indication before the write completes. Manual deletion shares the lock,
+  refuses saved drives (unsave first), and preflights active segment locks.
+  All delete paths still validate names/containment and reject symlinks.
+- `sunnypilot/navd/tests/test_drive_retention.py` exercises real temporary trees,
+  cleanup decisions and aiohttp endpoints, persistence, pressure, external
+  storage, concurrent saving, locked recordings, and corrupt metadata. Native
+  uploader/xattr imports are isolated on the x86 development host. A mobile
+  Chromium check uses real save/list/delete handlers, including reload and
+  saved-filter behavior; no actual drive data or device is touched.
+
 SECOND PASS — OWNER REQUESTED FEWER LARGE STEERING "BITES", AND A CODE CHANGE
 RATHER THAN MORE INSTRUMENTATION. `steering_motion.py` adds motion credit in
 the v1 torque controller. The existing interpolator smooths reference knots;

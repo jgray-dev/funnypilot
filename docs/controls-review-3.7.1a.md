@@ -118,10 +118,14 @@ markers are retained, with the displayed version remaining 3.7.1a.
 ## Validation
 
 The unmodified controller/governor baseline passed 724 tests. The expanded
-regression run after integrating 3.7.1 passes **1,305 tests**, including lateral/longitudinal helpers,
+regression run after integrating 3.7.1 and drive retention passes **1,317 tests**, including lateral/longitudinal helpers,
 actual controller transitions, planner output integration, SCC/SLA, blinker
 pause, UI import/contract guards, diagnostics, and release metadata checks.
 Ruff passes across `selfdrive`, `sunnypilot`, `system`, and `common`.
+The drive-retention addition has 12 focused checks against temporary recordings
+and real HTTP handlers. A mobile Chromium check also covers save, reload,
+saved filtering, protected deletion, playback unsave, and confirmed deletion.
+Its local server uses temporary fixture files, not device recordings.
 
 Thirteen mutations were applied individually, confirmed to fail their targeted
 behavioral test, and restored: double PID integration; omitted handback freeze;

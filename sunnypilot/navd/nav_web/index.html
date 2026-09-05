@@ -133,6 +133,7 @@ select{padding:9px 11px;border-radius:var(--r-m);border:1px solid var(--line);ba
 }
 .drive:hover{border-color:var(--faint)}
 .drive .when{flex:1;min-width:0}
+.drive-open{background:none;border:0;color:inherit;text-align:left;cursor:pointer;padding:0;font:inherit}
 .drive .when b{display:block;font-size:15px;font-weight:600}
 .drive .when small{color:var(--dim);font-size:12.5px;font-family:var(--mono)}
 .drive .meta{display:flex;gap:18px;align-items:center;flex:0 0 auto}
@@ -262,6 +263,8 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
     <section class="page" id="p-drives">
       <h1>Drives</h1>
       <p class="sub">Recorded on this device. Nothing is uploaded anywhere.</p>
+      <p class="sub" id="retentionPolicy">Loading cleanup policy…</p>
+      <p class="sub" id="savedStorage"></p>
       <div id="toolbar">
         <input id="q" placeholder="Filter by date…" autocomplete="off"/>
         <select id="sortBy">
@@ -269,6 +272,11 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
           <option value="old">Oldest first</option>
           <option value="big">Largest first</option>
           <option value="long">Longest first</option>
+        </select>
+        <select id="showBy" aria-label="Show drives">
+          <option value="all">All drives</option>
+          <option value="saved">Saved drives</option>
+          <option value="unsaved">Unsaved drives</option>
         </select>
         <button class="btn sm" id="bRefresh">Refresh</button>
       </div>
@@ -285,6 +293,7 @@ pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break
         <button class="btn sm" id="bDlVid">Video</button>
         <button class="btn sm" id="bDlData">Data</button>
         <button class="btn sm" id="bDlAll">All</button>
+        <button class="btn sm" id="bSave" disabled>Save drive</button>
         <button class="btn sm d" id="bDel">Delete</button>
       </div>
       <video id="vid" controls playsinline preload="metadata"></video>
@@ -400,13 +409,17 @@ async function loadOverview(){
 
 /* ── drives ───────────────────────────────────────────────────────────── */
 let DRIVES = [], EMPTY_WHY = null;
-async function loadDrives(force){
-  if(DRIVES.length && !force) return render();
+const SAVING = new Set();
+async function loadDrives(){
   $("#driveList").innerHTML = '<div class="empty">Loading…</div>';
   try{
     const d = await api("/api/drives");
     DRIVES = d.drives;
     EMPTY_WHY = d.status || null;
+    const s = d.storage;
+    $("#retentionPolicy").textContent = `Cleanup checks every ${s.cleanup_interval || 60} seconds. Unsaved drives expire after ${s.retention_days || 7} days, or sooner when space is low. The latest drive is kept until space is needed. Saved drives stay until you unsave them.`;
+    $("#savedStorage").textContent = `Saved recordings: ${bytes(s.saved_bytes)}.` +
+      (s.saved_bytes && (s.free < 5*1024**3 || s.free < s.total*.1) ? " Storage is low. Download and unsave drives you no longer need; saved drives will not be removed automatically." : "");
     $("#sDrives").textContent = DRIVES.length;
     $("#fDrives").textContent = DRIVES.length;
     render();
@@ -415,32 +428,44 @@ async function loadDrives(force){
 $("#bRefresh").onclick = () => loadDrives(true);
 $("#q").oninput = render;
 $("#sortBy").onchange = render;
+$("#showBy").onchange = render;
+setInterval(() => {
+  if(!document.hidden && $("#p-drives").classList.contains("on") && !SAVING.size) loadDrives(true);
+}, 60000);
 
 function render(){
   const q = $("#q").value.trim().toLowerCase();
   const key = $("#sortBy").value;
-  let rows = DRIVES.filter(d => !q || label(d).toLowerCase().includes(q));
+  const show = $("#showBy").value;
+  let rows = DRIVES.filter(d => (!q || label(d).toLowerCase().includes(q)) &&
+    (show === "all" || (show === "saved" ? d.saved : !d.saved)));
   const t = d => d.started_at || d.mtime || 0;
   rows.sort((a,b) => key==="old" ? t(a)-t(b) : key==="big" ? b.bytes-a.bytes
                    : key==="long" ? b.n_segments-a.n_segments : t(b)-t(a));
-  if(!rows.length){ $("#driveList").innerHTML = emptyState(q); return; }
+  if(!rows.length){ $("#driveList").innerHTML = show !== "all" && DRIVES.length ? '<div class="empty">No matching drives.</div>' : emptyState(q); return; }
   $("#driveList").innerHTML = rows.map(d => `
-    <div class="drive" data-r="${encodeURIComponent(d.route)}" tabindex="0" role="button">
-      <div class="when">
+    <div class="drive" data-r="${encodeURIComponent(d.route)}">
+      <button class="when drive-open" aria-label="Play drive ${label(d)}">
         <b>${label(d)}</b>
         <small>${d.route}</small>
-      </div>
+      </button>
       <div class="meta">
         <div><div class="lbl">Length</div><div class="num">${clock(d.duration_est)}</div></div>
         <div><div class="lbl">Size</div><div class="num">${bytes(d.bytes)}</div></div>
         <div><div class="lbl">Cameras</div><div class="num">${d.cameras.length||"—"}</div></div>
         <div>${d.has_timeline ? '<span class="pill">indexed</span>' : ""}</div>
+        <button class="btn sm save-drive" aria-pressed="${!!d.saved}" ${SAVING.has(d.route)?"disabled":""}>${d.saved ? "Saved · Unsave" : "Save drive"}</button>
       </div>
     </div>`).join("");
   $$("#driveList .drive").forEach(el => {
     const open = () => openDrive(decodeURIComponent(el.dataset.r));
     el.onclick = open;
-    el.onkeydown = e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } };
+    el.querySelector(".save-drive").onclick = e => {
+      e.stopPropagation();
+      const route = decodeURIComponent(el.dataset.r);
+      const d = DRIVES.find(d => d.route === route);
+      if(d) saveDrive(route, !d.saved);
+    };
   });
 }
 /* AN EMPTY LIST HAS FOUR CAUSES AND THEY LOOK IDENTICAL. Say which one, with
@@ -457,7 +482,7 @@ function emptyState(q){
     Drives appear here after you drive. Note that flashing a branch from
     <b>v3.5.8 through v3.6.7</b> emptied this directory as part of the flash —
     including the flash that installed this dashboard. From v3.6.8 on it does
-    not, so recordings made from now on will stay.</div>`;
+    not. Unsaved recordings are now managed by the cleanup policy above.</div>`;
 }
 function label(d){
   const t = d.started_at || d.mtime;
@@ -472,7 +497,8 @@ let PB = null, hls = null, poll = null;
 async function openDrive(route){
   if(poll){ clearTimeout(poll); poll = null; }
   const meta = DRIVES.find(d => d.route === route) || {};
-  PB = { route, tl:null, dur:0, cams:[] };
+  PB = { route, tl:null, dur:0, cams:[], saved:!!meta.saved, loaded:false };
+  updateSaveButton();
   $("#pbTitle").textContent = label(meta.route ? meta : {route});
   $("#kSize").textContent = bytes(meta.bytes || 0);
   ["#kSpeed","#kAccel","#kLead","#kAuth","#kDur","#kDist","#kMarks"].forEach(s => {
@@ -483,11 +509,17 @@ async function openDrive(route){
 
   try{
     const det = await api(`/api/drives/${encodeURIComponent(route)}`);
+    if(!PB || PB.route !== route) return;
+    PB.saved = det.saved;
+    PB.loaded = true;
+    updateSaveButton();
     PB.cams = det.cameras;
     $("#camSel").innerHTML = det.cameras.map(c =>
       `<option value="${c.key}" ${c.playable?"":"disabled"}>${c.label}${c.playable?"":" — download only"}</option>`
     ).join("") || "<option>No video</option>";
-  }catch{}
+  }catch(e){ toast("Could not load drive: " + e.message); }
+
+  if(!PB || PB.route !== route) return;
 
   attachVideo(route);
   loadTimeline(route);
@@ -659,6 +691,28 @@ const dl = what => { if(PB) location.href =
 $("#bDlVid").onclick = () => dl("video");
 $("#bDlData").onclick = () => dl("data");
 $("#bDlAll").onclick = () => dl("all");
+function updateSaveButton(){
+  $("#bSave").textContent = PB?.saved ? "Saved · Unsave" : "Save drive";
+  $("#bSave").setAttribute("aria-pressed", !!PB?.saved);
+  $("#bSave").disabled = !PB?.loaded || SAVING.has(PB.route);
+  $("#bDel").disabled = !PB?.loaded || PB.saved || SAVING.has(PB.route);
+  $("#bDel").title = PB?.saved ? "Unsave this drive before deleting it" : "";
+}
+async function saveDrive(route, saved){
+  if(SAVING.has(route)) return;
+  SAVING.add(route); render(); updateSaveButton();
+  try{
+    const r = await api(`/api/drives/${encodeURIComponent(route)}/saved`, {
+      method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({saved})
+    });
+    const d = DRIVES.find(d => d.route === route);
+    if(d) d.saved = r.saved;
+    if(PB?.route === route) PB.saved = r.saved;
+    toast(r.saved ? "Drive saved. Automatic cleanup will skip it." : "Drive unsaved. Automatic cleanup can now remove it.");
+  }catch(e){ toast("Could not change saved status: " + e.message); }
+  finally{ SAVING.delete(route); render(); updateSaveButton(); loadDrives(true); }
+}
+$("#bSave").onclick = () => { if(PB?.loaded) saveDrive(PB.route, !PB.saved); };
 $("#camSel").onchange = () => {
   const cam = PB.cams.find(c => c.key === $("#camSel").value);
   if(cam && !cam.playable)
@@ -667,13 +721,14 @@ $("#camSel").onchange = () => {
 
 $("#bDel").onclick = () => {
   if(!PB) return;
+  const route = PB.route;
   confirmModal("Delete this drive?",
     "Every segment, video and log is removed from the device. This frees the space immediately and cannot be undone.",
     async () => {
       try{
-        const r = await api(`/api/drives/${encodeURIComponent(PB.route)}`, {method:"DELETE"});
+        const r = await api(`/api/drives/${encodeURIComponent(route)}`, {method:"DELETE"});
         toast(`Deleted ${r.segments} segments, freed ${bytes(r.bytes)}`);
-        DRIVES = DRIVES.filter(d => d.route !== PB.route);
+        DRIVES = DRIVES.filter(d => d.route !== route);
         closeModal(); go("drives"); render(); loadOverview();
       }catch(e){ toast("Delete failed: " + e.message); }
     });

@@ -117,8 +117,9 @@ KEEP_BRANCH_SUFFIX = "st"
 # in the tail of a command whose visible job is to change branches.
 #
 # STORAGE IS STILL BOUNDED, JUST NOT BY THIS. `deleter.py` holds free space at
-# its 5 GB / 10% floor by evicting the oldest segments, and the dashboard has a
-# per-drive delete with the sizes shown next to it -- so the disk is managed by
+# its 5 GB / 10% floor by evicting unsaved segments, and expires old unsaved
+# drives every minute. Explicitly saved drives are exempt from both policies.
+# The dashboard has per-drive save/delete with sizes -- so the disk is managed by
 # something the owner can see and steer, rather than by a side effect of
 # flashing.
 PURGE_DRIVE_DATA_ON_FLASH = False
@@ -135,6 +136,10 @@ _GIT = "git -c safe.directory='*' -C /data/openpilot"
 # (grep pattern, file, short label). A missing marker means the on-disk code
 # is not the shipped branch — the single "code" row fails and names it.
 _CODE_MARKERS = [
+  ("def locked_saved", "/data/openpilot/system/loggerd/drive_retention.py", "persistent drive saves serialize with deletion"),
+  ("with drive_retention.locked_saved(root)", "/data/openpilot/system/loggerd/deleter.py", "automatic cleanup honors saved drives"),
+  ("def handle_drive_save", "/data/openpilot/sunnypilot/navd/nav_webserver.py", "web drive save endpoint"),
+  ("async function saveDrive", "/data/openpilot/sunnypilot/navd/nav_web/index.html", "web save controls"),
   ("class LatSmoother", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "lat knot smoother"),
   ("SPLINE", "/data/openpilot/selfdrive/controls/lib/lat_smooth.py", "C1 spline shaping"),
   ("class EpsTorqueGovernor", "/data/openpilot/selfdrive/controls/lib/eps_limit.py", "EPS torque governor"),
@@ -1073,6 +1078,7 @@ async def handle_drive_detail(request: web.Request) -> web.Response:
                               "playable": playable, "segments": []})["segments"].append(s)
   return web.json_response({
     "route": route, "segments": segs,
+    "saved": route in await _run(drive_index.drive_retention.read_saved, drive_index.REALDATA_ROOT),
     "cameras": sorted(cams.values(), key=lambda c: not c["playable"]),
     "started_at": drive_index.route_started_at(route),
   })
@@ -1191,9 +1197,31 @@ async def handle_drive_download(request: web.Request) -> web.StreamResponse:
   return resp
 
 
+async def handle_drive_save(request: web.Request) -> web.Response:
+  route = _route_arg(request)
+  try:
+    body = await request.json()
+  except (ValueError, web.HTTPBadRequest):
+    raise web.HTTPBadRequest(text="Expected a JSON saved flag") from None
+  if not isinstance(body, dict) or type(body.get("saved")) is not bool:
+    raise web.HTTPBadRequest(text="saved must be true or false")
+  try:
+    saved = await _run(drive_index.set_route_saved, route, body["saved"])
+  except FileNotFoundError:
+    raise web.HTTPNotFound(text="no such drive") from None
+  except (OSError, ValueError):
+    raise web.HTTPServiceUnavailable(text="Could not confirm saved status. Refresh before relying on protection.") from None
+  return web.json_response({"ok": True, "route": route, "saved": saved})
+
+
 async def handle_drive_delete(request: web.Request) -> web.Response:
   route = _route_arg(request)
-  removed, freed = await _run(drive_index.delete_route, route)
+  try:
+    removed, freed = await _run(drive_index.delete_route, route)
+  except (drive_index.drive_retention.SavedDriveError, drive_index.drive_retention.ActiveDriveError) as e:
+    raise web.HTTPConflict(text=str(e)) from None
+  except (OSError, ValueError):
+    raise web.HTTPServiceUnavailable(text="Could not read saved status; deletion paused.") from None
   if not removed:
     raise web.HTTPNotFound(text="no such drive")
   return web.json_response({"ok": True, "segments": removed, "bytes": freed})
@@ -1251,6 +1279,7 @@ def main():
   app.router.add_get("/api/drives", handle_drives)
   app.router.add_get("/api/drives/{route}", handle_drive_detail)
   app.router.add_delete("/api/drives/{route}", handle_drive_delete)
+  app.router.add_put("/api/drives/{route}/saved", handle_drive_save)
   app.router.add_get("/api/drives/{route}/timeline", handle_drive_timeline)
   app.router.add_get("/api/drives/{route}/hls.m3u8", handle_drive_playlist)
   app.router.add_get("/api/drives/{route}/download", handle_drive_download)
