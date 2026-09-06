@@ -73,20 +73,20 @@ class Device:
         raise ValueError("invalid command timeout")
 
   def command(self, request):
-    if not self.safety.offroad() or not identity_equal(request["identity"], self.identity()):
-      raise ValueError("offroad or approval identity mismatch")
-    if not self.safety.offroad():
-      raise ValueError("offroad permission expired")
+    if not self.safety.can_modify() or not identity_equal(request["identity"], self.identity()):
+      raise ValueError("vehicle moving, engaged, state unknown, or approval identity mismatch")
+    if not self.safety.can_modify():
+      raise ValueError("stationary/disengaged permission expired")
     self.journal.record(request)
-    if not self.safety.offroad():
-      raise ValueError("offroad permission expired")
+    if not self.safety.can_modify():
+      raise ValueError("stationary/disengaged permission expired")
     started = self.clock()
     grant = self.transport.post("grant", {"id": request["id"], "generation": self.generation, "digest": request["digest"]})
     received = self.clock()
     if (received - started > 2 or grant.get("id") != request["id"] or grant.get("digest") != request["digest"] or
         grant.get("generation") != self.generation or grant.get("leaseSeconds") != 5):
       raise ValueError("unconfirmed grant")
-    if not self.safety.offroad() or not identity_equal(request["identity"], self.identity()):
+    if not self.safety.can_modify() or not identity_equal(request["identity"], self.identity()):
       raise ValueError("approval no longer valid")
     if self.clock() - received > 2 or self.wall() * 1000 >= request["expires"]:
       raise ValueError("grant expired before spawn")

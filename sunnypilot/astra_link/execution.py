@@ -100,7 +100,7 @@ class Lease:
     self.failed = threading.Event()
 
   def valid(self):
-    return not self.failed.is_set() and self.safety.offroad() and self.clock() < min(self.expires, self.deadline)
+    return not self.failed.is_set() and self.safety.can_modify() and self.clock() < min(self.expires, self.deadline)
 
   def renew(self):
     while not self.stop.wait(2):

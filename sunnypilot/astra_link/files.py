@@ -128,11 +128,7 @@ class Files:
         os.close(fd)
     length = integer(args, "length", 4096, 1, MAX_CHUNK)
     offset = integer(args, "offset", 0, 0, 2**63 - MAX_CHUNK)
-    if (recording or length > 4096) and not safety.offroad():
-      raise ValueError("offroad required")
     data, result = self.raw(path, offset, length, allow, kind == "tail_log")
-    if (recording or length > 4096) and not safety.offroad():
-      raise ValueError("offroad permission expired")
     clean = redact(data)
     if len(clean) > MAX_CHUNK:
       clean = clean[:MAX_CHUNK]

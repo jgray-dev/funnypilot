@@ -101,8 +101,9 @@ commit, upload or paste this config or feedback `cloud.json` into a conversation
   recording directory enumeration, automatic syncing and decompression are not
   supported. Known secrets are redacted, but arbitrary logs cannot be guaranteed
   secret-free. Redacted bytes are marked, not claimed to be original file bytes.
-- Default file reads are 4096 bytes. Larger reads and selected recordings require
-  offroad. Maximum raw chunk/command output is 32768 bytes; listings scan bounded
+- Default file reads are 4096 bytes. All bounded reads, including larger chunks
+  and selected recordings, are allowed in any vehicle state. Maximum raw
+  chunk/command output is 32768 bytes; listings scan bounded
   pages of at most 200 entries. Request/result JSON is bounded; extra escaped
   command output may be shortened to preserve exact argv/provenance. Browser
   history is byte-budgeted with Older/Newest pages, not unbounded result dumps.
@@ -110,15 +111,22 @@ commit, upload or paste this config or feedback `cloud.json` into a conversation
   deleted after one hour by an idle alarm (cleanup can lag by the alarm interval),
   not retained forever if the device disconnects. Pairing/hardware/session counts
   are bounded; durable native bindings remain to prevent resume rebinding.
-- All generic commands require valid, recently received `deviceState` and known,
-  nonempty `pandaStates`, with ignition off. Freshness is computed from consumer
-  monotonic `sm.recv_time`, not epoch time. Disengaged, startup-blocked,
-  `started=false` alone, or an unknown/disconnected panda is not parked proof.
+- All generic commands require fresh stationary/disengaged telemetry from
+  `carState`, `selfdriveState`, `selfdriveStateSP` (including MADS), and
+  `carControl`. Ignition-on/onroad mode alone does not block commands. Freshness
+  uses consumer monotonic `sm.recv_time`, not epoch time. Missing/stale motion or
+  engagement remains unknown and blocks commands, including when offroad native
+  services are absent; dedicated reads remain available. Motion is relayed by the
+  existing FunnyPilot feedback consumer through a bounded 5 Hz `/dev/shm` snapshot
+  carrying the original monotonic receive time. Astra adds no carState subscriber,
+  preserving the 15-reader capacity fix; a stale/missing producer stays read-only.
+  See the protocol for
+  field semantics. Older clients missing these fields cannot authorize commands.
 - The independent native monitor continues during HTTP/command execution.
   Commands use exact argv with no implicit shell, no sudo, fixed environment,
   closed stdin, bounded output/time, process-group termination and a 5s lease.
-  A lost lease, ignition/state/identity change or revocation cancels eligible work.
-- An offroad-only durable receipt precedes the fresh server execution grant.
+  A lost lease, motion/engagement/identity change or revocation cancels eligible work.
+- A stationary/disengaged-only durable receipt precedes the fresh execution grant.
   Duplicate/expired grants cannot restart a command. Lost grants/results and
   interrupted execution are not automatically replayed. Receipt storage is capped
   at 256 entries and fails closed if corrupt/full/unwritable; resetting it requires
@@ -135,8 +143,10 @@ commit, upload or paste this config or feedback `cloud.json` into a conversation
 The optional `funnypilot_astra` process is manager-supervised and excluded only
 from the driving required-process gate, alongside the existing optional entries.
 Failure does not disable driving; required processes and camera/calibration
-checks remain. The client imports inertly, runs at lower priority, and does not
-write application-owned durable `/data` state onroad. It does not keep the vehicle
+checks remain. The client imports inertly and runs at lower priority. Command
+receipts can write durable `/data` state with fresh stationary/disengaged permission,
+including ignition-on; reads and result acknowledgments do not add durable writes.
+It does not keep the vehicle
 awake or change feedback's parked-Wi-Fi upload policy. A manager-supervised client
 is **not** a rescue service when manager cannot start at all.
 

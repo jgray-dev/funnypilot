@@ -184,6 +184,7 @@ def main():
   pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='feedback-upload')
   future = None
   next_upload = 0.0
+  next_motion = 0.0
 
   def upload_queued():
     capture = capture_loop.capture
@@ -207,6 +208,9 @@ def main():
     while True:
       sm.update(50)
       now = time.monotonic()
+      if now >= next_motion:
+        P.publish_motion(sm, now)
+        next_motion = now + 0.2
       upload_allowed = (sm.valid['deviceState'] and sm.alive['deviceState'] and
                         not sm['deviceState'].started and
                         sm['deviceState'].networkType == log.DeviceState.NetworkType.wifi)

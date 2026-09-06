@@ -1,5 +1,6 @@
 """Small, import-light messages; no disk/network work at import or construction."""
 import json
+import math
 import os
 import socket
 import time
@@ -9,6 +10,7 @@ SOCKET = '/dev/shm/fp_feedback.sock'
 STATUS = '/dev/shm/fp_feedback_status.json'
 CORNER_CONTEXT = '/dev/shm/fp_feedback_corner.json'
 CORNER_RULES = '/dev/shm/fp_feedback_rules.json'
+MOTION = '/dev/shm/fp_motion.json'
 LABELS = {
   'steering_bite': 'Steering bite',
   'steering_wander': 'Steering wander',
@@ -48,6 +50,21 @@ def atomic_json(path, data, durable=False):
       os.fsync(directory)
     finally:
       os.close(directory)
+
+
+def publish_motion(sm, now):
+  # Reuse feedbackd's carState reader: another subscriber exceeds msgq capacity.
+  # Preserve the original receive time, never refresh stale data by publishing it.
+  observed = sm.recv_time['carState']
+  stationary = None
+  if sm.seen['carState'] and sm.valid['carState'] and 0 <= now - observed <= 2:
+    car = sm['carState']
+    if car.canValid and math.isfinite(car.vEgo) and math.isfinite(car.vEgoRaw):
+      stationary = bool(car.standstill and abs(car.vEgo) < 0.01 and abs(car.vEgoRaw) < 0.01)
+  try:
+    atomic_json(MOTION, {'stationary': stationary, 'observed': observed})
+  except (OSError, ValueError):
+    pass  # Prior snapshot ages out; diagnostics never block capture on failure.
 
 
 def send_report(event_id, labels, started):
