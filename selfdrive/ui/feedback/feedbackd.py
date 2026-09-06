@@ -6,13 +6,19 @@ from cereal import car
 from openpilot.system.micd import SAMPLE_RATE, SAMPLE_BUFFER
 
 FEEDBACK_MAX_DURATION = 10.0
+# Disabled pending commaai/openpilot#36015. Do not consume scarce carState
+# reader slots for inactive LKAS feedback (msgq supports 15 readers).
+LKAS_FEEDBACK_ENABLED = False
 ButtonType = car.CarState.ButtonEvent.Type
 
 
 def main():
   params = Params()
   pm = messaging.PubMaster(['userBookmark', 'audioFeedback'])
-  sm = messaging.SubMaster(['rawAudioData', 'bookmarkButton', 'carState', 'selfdriveStateSP'])
+  services = ['rawAudioData', 'bookmarkButton']
+  if LKAS_FEEDBACK_ENABLED:
+    services += ['carState', 'selfdriveStateSP']
+  sm = messaging.SubMaster(services)
   should_record_audio = False
   block_num = 0
   waiting_for_release = False
@@ -24,7 +30,7 @@ def main():
 
     # TODO: https://github.com/commaai/openpilot/issues/36015
     # only allow the LKAS button to record feedback when MADS is disabled
-    if False and sm.updated['carState'] and sm['carState'].canValid and not sm['selfdriveStateSP'].mads.available:
+    if LKAS_FEEDBACK_ENABLED and sm.updated['carState'] and sm['carState'].canValid and not sm['selfdriveStateSP'].mads.available:
       for be in sm['carState'].buttonEvents:
         if be.type == ButtonType.lkas:
           if be.pressed:

@@ -63,9 +63,16 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.3e — Key Files
+## Current version: 3.7.4 — Key Files
 
-Based on 3.7.2 `5ec74a3c7`. Setup, architecture and validation:
+Based on 3.7.3e `c318c073cfdfcb160f8ee41e6f4cd319cae2000c`.
+Engagement investigation: `docs/engagement-3.7.4.md`. Stock
+`selfdrive/ui/feedback/feedbackd.py` must not subscribe to carState while LKAS
+feedback is disabled: normal C3X driving already consumes all 15 msgq reader
+slots after adding the Report recorder. Do not add another reader casually.
+Exact device refusal remains unconfirmed; no vehicle validation or flash.
+
+Astra setup, architecture and validation:
 `docs/astra-link-3.7.3e.md`; wire contract: `docs/astra-link-protocol.md`.
 Historical 3.7.2 audit remains in `docs/readiness-audit-3.7.2.md`.
 

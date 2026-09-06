@@ -1,3 +1,19 @@
+FunnyPilot v3.7.4 (2026-09-06)
+============================
+* Based explicitly on 3.7.3e (c318c073cfdfcb160f8ee41e6f4cd319cae2000c).
+* Stop unused carState/selfdriveStateSP subscriptions in the stock feedback
+  service while its LKAS feedback path remains disabled. The 3.7.1a Report
+  recorder raised the normal C3X carState subscriber count from 15 to 16,
+  exceeding msgq's 15-reader limit and allowing repeated reader eviction.
+  Removing the inactive subscriber restores the previous capacity budget.
+* Preserve bookmark handling, Report recording, calibration/localization checks
+  and every engagement gate. No native IPC layout, Params or controller changes.
+* Linked device diagnostic excerpts confirm clean 3.7.3e c3454b726; the exact
+  engagement event and live reader population were not obtained. This fixes a
+  source-confirmed capacity defect, not a vehicle-validated diagnosis. See
+  docs/engagement-3.7.4.md for evidence and verification limitations.
+* GitHub release only; no device flash, restart or settings change.
+
 FunnyPilot v3.7.3e (2026-09-05)
 =============================
 * Based explicitly on 3.7.2 (5ec74a3c7). Add an optional, low-priority Python
