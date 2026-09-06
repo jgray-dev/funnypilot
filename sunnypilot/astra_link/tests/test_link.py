@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -128,10 +129,10 @@ def test_invalid_binding(device, change):
   assert not device.transport.calls
 
 
-def native(now, pandas=None, started=False):
+def native(now, pandas=None):
   class SM(dict):
     pass
-  sm = SM(deviceState=SimpleNamespace(started=started), pandaStates=pandas if pandas is not None else [
+  sm = SM(pandaStates=pandas if pandas is not None else [
     SimpleNamespace(ignitionLine=False, ignitionCan=False, pandaType="uno")])
   sm.seen = dict.fromkeys(sm, True)
   sm.valid = dict.fromkeys(sm, True)
@@ -154,11 +155,16 @@ def test_safety_fails_closed(fault):
   elif fault == "invalid":
     sm.valid["pandaStates"] = False
   elif fault == "unseen":
-    sm.seen["deviceState"] = False
-  else:
-    sm["deviceState"].started = True
-  safety.update(sm)
+    sm.seen["pandaStates"] = False
+  safety.update(sm, started=fault == "started")
   assert not safety.offroad()
+
+
+def test_safety_holds_no_device_state_reader():
+  # deviceState is a full msgq service once sunnylink is registered; the
+  # monitor takes `started` from manager's IsOnroad param instead.
+  source = (Path(__file__).resolve().parents[1] / "state.py").read_text()
+  assert '"deviceState"' not in source and 'IsOnroad' in source
 
 
 def test_safety_expires_by_receive_clock_not_last_monitor_update():

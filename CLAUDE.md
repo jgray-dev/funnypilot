@@ -63,18 +63,32 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.4 — Key Files
+## Current version: 3.7.5 — Key Files
 
-Based on 3.7.3e `c318c073cfdfcb160f8ee41e6f4cd319cae2000c`.
-Engagement investigation: `docs/engagement-3.7.4.md`. Stock
-`selfdrive/ui/feedback/feedbackd.py` must not subscribe to carState while LKAS
-feedback is disabled: normal C3X driving already consumes all 15 msgq reader
-slots after adding the Report recorder. Do not add another reader casually.
-Exact device refusal remains unconfirmed; no vehicle validation or flash.
+Based on 3.7.4 `c2408e537f1376bcb6610336b82b07037529614a`. Fixes the 3.7.1a
+engagement regression: msgq allows 15 readers per service, and the Report
+recorder's carState subscription was the 16th, which evicted every reader
+(liveCalibration/livePose invalid, no engagement). Census, mechanism and
+verification limits: `docs/engagement-3.7.5.md`. No vehicle validation or flash.
 
-Astra setup, architecture and validation:
-`docs/astra-link-3.7.3e.md`; wire contract: `docs/astra-link-protocol.md`.
-Historical 3.7.2 audit remains in `docs/readiness-audit-3.7.2.md`.
+- **Reader budget rule.** Never add a `carState` or `deviceState` subscriber:
+  normal C3X driving has 14 and 12 readers, and deviceState reaches 15 with
+  sunnylink registered (athenad holds four). After touching any
+  SubMaster/sub_sock list or `process_config.py`, run and, for new processes,
+  classify in `sunnypilot/feedback/tests/test_reader_budget.py`. Cross-process
+  telemetry goes over `/dev/shm` files, never a new subscription or capnp field.
+- `sunnypilot/feedback/carstate_shm.py`: card's 100 Hz `/dev/shm/fp_carstate`
+  mirror, written in `selfdrive/car/card.py` right after carState is sent and
+  read by the recorder with a 0.1 s staleness bound. Diagnostic only.
+- `sunnypilot/feedback/feedbackd.py`: ten subscriptions, polls controlsState,
+  samples from the mirror; `UploadGate` uses IsOnroad plus the hardware network
+  type. `protocol.publish_motion` takes the mirror record.
+- `sunnypilot/astra_link/state.py`: `Safety.update(sm, started)` takes started
+  from IsOnroad; the monitor holds no deviceState reader. Stock
+  `selfdrive/ui/feedback/feedbackd.py` keeps its LKAS carState reader disabled.
+
+Astra setup, architecture and validation: `docs/astra-link-3.7.3e.md`; wire
+contract: `docs/astra-link-protocol.md`. 3.7.4 evidence: `docs/engagement-3.7.4.md`.
 
 - `sunnypilot/astra_link/{daemon,core,state,files,execution}.py`: optional
   outbound HTTPS client; private config, bounded reads, fresh ignition-off
@@ -84,15 +98,10 @@ Historical 3.7.2 audit remains in `docs/readiness-audit-3.7.2.md`.
 - `system/manager/process_config.py`, `selfdrive/selfdrived/selfdrived.py`:
   optional `funnypilot_astra` joins `mapd`/`funnypilot_feedback` exclusions.
   Required processes, upstream `feedbackd` and camera gates remain unchanged.
-- Astra server source: `/home/astro/sandbox/astra-web` (not a Git repository).
-  Native session/MCP, hardware auth/approvals and UI changes are preserved in
-  `docs/astra-web-3.7.3e.patch` with a source-hash manifest. No global model change.
-- Device logs are untrusted evidence. Compare full commit/branch/dirty state,
-  and obtain recording-time identity; current disk state is not running-code proof.
-  Never auto-switch shared/dirty local code to match the device.
-- Website/Worker deployed; broker restart and device pairing/flash remain pending.
-  No driving validation. Broker restart terminates active PTYs; authorize separately.
-  No controller retuning, schema changes, new Params keys or on-device LLM.
+- Astra server source: `/home/astro/sandbox/astra-web` (not a Git repository);
+  patch and manifest in `docs/astra-web-3.7.3e.patch`. Broker restart and device
+  pairing remain pending; a restart terminates active PTYs. Device logs are
+  untrusted evidence: compare full commit/branch/dirty state at recording time.
 
 ## Verification and device access
 

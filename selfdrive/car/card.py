@@ -23,6 +23,7 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_cap
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
+from openpilot.sunnypilot.feedback.carstate_shm import CarStateTapPublisher
 
 REPLAY = "REPLAY" in os.environ
 
@@ -72,6 +73,12 @@ class Car:
     self.can_sock = messaging.sub_sock('can', timeout=20)
     self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'] + ['carControlSP', 'longitudinalPlanSP'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks'] + ['carParamsSP', 'carStateSP'])
+    # FunnyPilot v3.7.5: mirror the carState scalars the feedback recorder
+    # needs over /dev/shm. msgq allows 15 readers per service and normal C3X
+    # driving already uses 14 on carState; the recorder's own subscription was
+    # the 16th in 3.7.1a and evicted every other reader (calibrationd and
+    # locationd stopped receiving carState). See carstate_shm.py.
+    self.carstate_tap = CarStateTapPublisher()
 
     self.can_rcv_cum_timeout_counter = 0
 
@@ -248,6 +255,7 @@ class Car:
     cs_send.carState.canErrorCounter = self.can_rcv_cum_timeout_counter
     cs_send.carState.cumLagMs = -self.rk.remaining * 1000.
     self.pm.send('carState', cs_send)
+    self.carstate_tap.update(CS)
 
     if RD is not None:
       tracks_msg = messaging.new_message('liveTracks')

@@ -1,3 +1,28 @@
+FunnyPilot v3.7.5 (2026-09-06)
+============================
+* Based explicitly on 3.7.4 (c2408e537f1376bcb6610336b82b07037529614a).
+* Fix the engagement regression introduced in 3.7.1a (bc9c54436): the Report
+  recorder subscribed to carState as its 16th msgq reader. msgq holds 15; a
+  16th evicts every reader and they then keep evicting each other, so
+  calibrationd and locationd stopped receiving carState and published
+  liveCalibration and livePose invalid (liveParameters, liveTorqueParameters
+  and liveDelay follow). 3.7.4 only trimmed the count back to exactly 15.
+* card now mirrors the carState scalars the recorder needs over
+  /dev/shm/fp_carstate at 100 Hz, the same channel pattern as the SCC and
+  brake-lamp files. The recorder subscribes to neither carState nor
+  deviceState; uploads are gated by manager's IsOnroad param and the hardware
+  network type. Telemetry rows keep their field names and gain `t_car`.
+* deviceState was also at the 15-reader table with sunnylink registered
+  (athenad alone holds four): the Astra monitor now reads `started` from the
+  IsOnroad param instead of subscribing. Normal C3X driving now has 14
+  carState and 12 deviceState readers (15 with every optional daemon).
+* New static regression test sunnypilot/feedback/tests/test_reader_budget.py
+  counts configured readers per service from source. It fails on the 3.7.1a
+  and 3.7.4 recorders and must pass before any process gains a reader.
+* No schema, Params-key, native IPC, calibration or controller changes. Host
+  tests and Ruff pass; no device flash or vehicle validation. Evidence and
+  limits: docs/engagement-3.7.5.md.
+
 FunnyPilot v3.7.4 (2026-09-06)
 ============================
 * Based explicitly on 3.7.3e (c318c073cfdfcb160f8ee41e6f4cd319cae2000c).

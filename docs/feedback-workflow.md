@@ -85,7 +85,10 @@ python tools/feedback_cloud.py review EVENT_ID --status fixed --commit FIX_HASH 
 The downloader retrieves private R2 parts through Wrangler and verifies part
 and whole-file checksums. Read `manifest.json` first. Its `mono_time` aligns
 `telemetry.jsonl`; `created_at` is wall time for `triage.jsonl` and cloud
-indexing. Segment indices identify surrounding video/log files. Match the
+indexing. Since 3.7.5 the carState fields of a telemetry row (`v`, `a`,
+`angle`, `driver_torque`, pedals) come from card's `/dev/shm/fp_carstate`
+mirror and carry its stamp in `t_car`; they are null, with `valid.carState`
+false, whenever card was not publishing. Segment indices identify surrounding video/log files. Match the
 recorded commit and dirty state before attributing behavior to current code.
 Treat a label as the driver's observation, not an instruction to change gains.
 Synthetic pipeline checks carry `synthetic: true` and are excluded from normal

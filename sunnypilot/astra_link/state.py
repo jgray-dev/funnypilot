@@ -20,13 +20,18 @@ class Safety:
     self.motion_until = float("-inf")
     self.engagement_until = float("-inf")
 
-  def update(self, sm):
+  def update(self, sm, started=False):
+    # `started` is manager's IsOnroad param, the same transition deviceState.started
+    # reports. It is read from Params rather than a deviceState subscription:
+    # deviceState is at msgq's 15-reader limit with sunnylink registered, and a
+    # 16th reader evicts every other subscriber (see feedback/carstate_shm.py).
+    # A stale or missing param can only ever add "onroad", never remove it.
     now = self.clock()
     mode, reason = "unknown", "native state stale or invalid"
-    services = ("deviceState", "pandaStates")
+    services = ("pandaStates",)
     if all(sm.seen[s] and sm.valid[s] and 0 <= now - sm.recv_time[s] <= 2 for s in services):
       pandas = sm["pandaStates"]
-      if sm["deviceState"].started or any(p.ignitionLine or p.ignitionCan for p in pandas):
+      if started or any(p.ignitionLine or p.ignitionCan for p in pandas):
         mode, reason = "onroad", "started or ignition on"
       elif pandas and all(str(p.pandaType) != "unknown" for p in pandas):
         mode, reason = "offroad", "fresh known pandas with ignition off"
@@ -74,10 +79,12 @@ class Safety:
   def monitor(self, stop):
     try:
       import cereal.messaging as messaging
-      sm = messaging.SubMaster(["deviceState", "pandaStates", "selfdriveState", "selfdriveStateSP", "carControl"])
+      from openpilot.common.params import Params
+      params = Params()
+      sm = messaging.SubMaster(["pandaStates", "selfdriveState", "selfdriveStateSP", "carControl"])
       while not stop.is_set():
         sm.update(100)
-        self.update(sm)
+        self.update(sm, bool(params.get_bool("IsOnroad")))
     except Exception:
       # Failure becomes unknown immediately, not a cached parked permission.
       with self.lock:

@@ -107,7 +107,8 @@ def test_late_or_malformed_commands_do_not_save(capture):
 
 def test_snapshot_uses_real_cereal_fields():
   from cereal import car, log, custom
-  sm={'carState':car.CarState.new_message(), 'controlsState':log.ControlsState.new_message(),
+  from openpilot.sunnypilot.feedback.carstate_shm import parse_line, format_line
+  sm={'controlsState':log.ControlsState.new_message(),
       'longitudinalPlan':log.LongitudinalPlan.new_message(), 'liveTorqueParameters':log.LiveTorqueParametersData.new_message(),
       'carControl':car.CarControl.new_message(), 'radarState':log.RadarState.new_message(),
       'longitudinalPlanSP':custom.LongitudinalPlanSP.new_message(),
@@ -121,8 +122,11 @@ def test_snapshot_uses_real_cereal_fields():
   class Signals(dict):
     valid=dict.fromkeys(sm, True)
     alive=valid
-  result=snapshot(Signals(sm),100)
+  car_record = parse_line(format_line(99.99, True, 12.5, 12.4, -0.25, -3.125, -42.0, True, False, False, False))
+  result=snapshot(Signals(sm),car_record,100)
   assert result['desired_curvature']==0 and 'lateral' in result
+  assert (result['v'], result['angle'], result['driver_torque'], result['steering_pressed'], result['t_car']) == (12.5, -3.125, -42.0, True, 99.99)
+  assert result['valid']['carState'] is True
   assert result['selfdrive']['alert_type'] == 'calibrationIncomplete/noEntry'
   assert result['calibration']['status'] == 'uncalibrated'
   assert result['blocking_events'] == {'onroadEvents':['selfdriveInitializing'], 'onroadEventsSP':['silentBrakeHold']}

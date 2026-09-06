@@ -137,7 +137,7 @@ def test_nonfinite_sample_backoff_and_recovery(loop):
   assert loop.capture.ring[-1]['t'] == 107
 
 
-def test_main_keeps_running_without_niceness_and_closes_socket(loop, monkeypatch, mocker):
+def test_main_keeps_running_without_niceness_and_closes_socket(loop, tmp_path, monkeypatch, mocker):
   # Execute main's real body, replacing only its device-only imports. This
   # checks that the tested IO boundary is actually driven by the shipped loop.
   tree = ast.parse(Path(D.__file__).read_text())
@@ -145,15 +145,18 @@ def test_main_keeps_running_without_niceness_and_closes_socket(loop, monkeypatch
   main.body = [n for n in main.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
 
   class Signals(dict):
-    valid = alive = {'deviceState':True}
-    updated = {'carState':False}
+    valid = alive = {}
+    updated = {'controlsState':False}
     update = mocker.Mock(side_effect=[None, KeyboardInterrupt()])
 
-  sm = Signals(deviceState=NS(started=True, networkType=0))
+  subscribed = []
+  sm = Signals()
   monkeypatch.setattr(D.os, 'nice', mocker.Mock(side_effect=PermissionError('priority')))
-  scope = vars(D) | {'messaging':NS(SubMaster=lambda *a, **kw: sm),
-                     'log':NS(DeviceState=NS(NetworkType=NS(wifi=1))),
-                     'Params':lambda: NS(get=lambda _: ROUTE), 'Paths':NS(log_root=lambda: loop.log_root),
+  monkeypatch.setattr(D.P, 'MOTION', str(tmp_path / 'motion.json'))
+  scope = vars(D) | {'messaging':NS(SubMaster=lambda services, **kw: subscribed.extend(services) or sm),
+                     'log':NS(DeviceState=NS(NetworkType=NS(wifi=1))), 'HARDWARE':NS(get_network_type=lambda: 1),
+                     'Params':lambda: NS(get=lambda _: ROUTE, get_bool=lambda _: False), 'Paths':NS(log_root=lambda: loop.log_root),
+                     'CarStateTapReader':lambda: D.CarStateTapReader(str(tmp_path / 'fp_carstate')),
                      'cloudlog':loop.logger, 'CaptureLoop':lambda *a: loop,
                      'identity':lambda _: {}, 'time':NS(monotonic=lambda: 100)}
   exec(compile(ast.fix_missing_locations(ast.Module(body=[main], type_ignores=[])), D.__file__, 'exec'), scope)
@@ -161,6 +164,9 @@ def test_main_keeps_running_without_niceness_and_closes_socket(loop, monkeypatch
     scope['main']()
   assert loop.capture is not None and loop.sock.fileno() == -1
   loop.logger.exception.assert_called_once_with('feedback scheduling priority unavailable')
+  # The shipped loop must never hold the two full msgq services.
+  assert subscribed and 'carState' not in subscribed and 'deviceState' not in subscribed
+  assert json.load(open(D.P.MOTION)) == {'stationary':None, 'observed':0.0}
 
 
 def test_unexpected_programming_error_remains_visible(loop, monkeypatch, mocker):

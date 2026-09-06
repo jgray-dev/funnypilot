@@ -10,6 +10,7 @@ import time
 
 from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.capture import Capture
+from openpilot.sunnypilot.feedback.carstate_shm import CarStateTapReader
 from openpilot.sunnypilot.feedback.uploader import upload_event
 
 
@@ -28,11 +29,19 @@ def identity(repo):
           'dirty':bool(git('status', '--porcelain', '--untracked-files=no'))}
 
 
-def snapshot(sm, now):
-  cs, ctrl, lp = sm['carState'], sm['controlsState'], sm['longitudinalPlan']
-  row = {'t':now, 'v':cs.vEgo, 'a':cs.aEgo, 'angle':cs.steeringAngleDeg,
-         'driver_torque':cs.steeringTorque, 'steering_pressed':cs.steeringPressed,
-         'brake_pressed':cs.brakePressed, 'gas_pressed':cs.gasPressed,
+def snapshot(sm, car, now):
+  # `car` is a fresh record of card's /dev/shm carState mirror (carstate_shm),
+  # or None when card is not publishing. The recorder holds no carState
+  # subscription: msgq allows 15 readers per service, normal C3X driving uses
+  # 14 on carState, and the 3.7.1a subscription here was the 16th, which
+  # evicted calibrationd and locationd from carState and blocked engagement.
+  # Field names are unchanged so existing telemetry tooling keeps working.
+  ctrl, lp = sm['controlsState'], sm['longitudinalPlan']
+  car = car or {}
+  row = {'t':now, 't_car':car.get('observed'), 'v':car.get('v_ego'), 'a':car.get('a_ego'),
+         'angle':car.get('steering_angle_deg'), 'driver_torque':car.get('steering_torque'),
+         'steering_pressed':car.get('steering_pressed'), 'brake_pressed':car.get('brake_pressed'),
+         'gas_pressed':car.get('gas_pressed'),
          'a_target':lp.aTarget, 'curvature':ctrl.curvature,
          'desired_curvature':ctrl.desiredCurvature,
          'long_source':str(lp.longitudinalPlanSource)}
@@ -63,12 +72,40 @@ def snapshot(sm, now):
     events = sm[service] if service == 'onroadEvents' else sm[service].events
     row['blocking_events'][service] = [str(e.name) for e in events if e.noEntry or e.softDisable or e.immediateDisable]
   # Include timestamps/validity so stale samples cannot masquerade as fresh data.
+  # carState is valid only from a fresh mirror record whose CAN was valid.
   row['valid'] = {s:bool(sm.valid[s] and sm.alive[s]) for s in
-                  ('carState','controlsState','longitudinalPlan','selfdriveState','liveCalibration','onroadEvents','onroadEventsSP')}
+                  ('controlsState','longitudinalPlan','selfdriveState','liveCalibration','onroadEvents','onroadEventsSP')}
+  row['valid']['carState'] = bool(car.get('can_valid', False))
   return row
 
 
 RETRY_S = 5.0
+UPLOAD_GATE_S = 2.0  # deviceState is 2 Hz; the parked-on-Wi-Fi gate keeps that latency
+
+
+class UploadGate:
+  """Parked on Wi-Fi, without a deviceState subscription.
+
+  deviceState is another full msgq service in normal driving (loggerd, selfdrived,
+  modeld, ui, manager, statsd, four athenad upload workers, sunnylink, pandad),
+  so the recorder asks the sources deviceState is built from: manager's IsOnroad
+  param and the hardware's own network type, at most every UPLOAD_GATE_S.
+  Any failure reads as "not allowed"; a wrong answer can only delay an upload.
+  """
+
+  def __init__(self, params, hardware, wifi):
+    self.params, self.hardware, self.wifi = params, hardware, wifi
+    self.allowed = False
+    self.next_check = 0.0
+
+  def update(self, now):
+    if now >= self.next_check:
+      self.next_check = now + UPLOAD_GATE_S
+      try:
+        self.allowed = bool(not self.params.get_bool('IsOnroad') and self.hardware.get_network_type() == self.wifi)
+      except Exception:
+        self.allowed = False
+    return self.allowed
 
 
 def report_socket():
@@ -168,6 +205,7 @@ def main():
   import cereal.messaging as messaging
   from cereal import log
   from openpilot.common.params import Params
+  from openpilot.system.hardware import HARDWARE
   from openpilot.system.hardware.hw import Paths
   from openpilot.common.swaglog import cloudlog
 
@@ -177,9 +215,16 @@ def main():
     cloudlog.exception('feedback scheduling priority unavailable')
   params = Params()
   capture_loop = CaptureLoop(Paths.log_root(), identity(Path(__file__).resolve().parents[2]), cloudlog)
-  sm = messaging.SubMaster(['carState','controlsState','longitudinalPlan','deviceState','selfdriveState',
+  # NO carState AND NO deviceState READER HERE — both services are at msgq's
+  # 15-reader limit in normal C3X driving (see carstate_shm.py and
+  # sunnypilot/feedback/tests/test_reader_budget.py before adding any service).
+  # carState scalars arrive through card's /dev/shm mirror; the 100 Hz cadence
+  # comes from controlsState, which has six readers.
+  sm = messaging.SubMaster(['controlsState','longitudinalPlan','selfdriveState',
                            'liveTorqueParameters','carControl','radarState','longitudinalPlanSP','liveCalibration',
-                           'onroadEvents','onroadEventsSP'], poll='carState')
+                           'onroadEvents','onroadEventsSP'], poll='controlsState')
+  tap = CarStateTapReader()
+  gate = UploadGate(params, HARDWARE, log.DeviceState.NetworkType.wifi)
   upload_allowed = False
   pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='feedback-upload')
   future = None
@@ -208,14 +253,15 @@ def main():
     while True:
       sm.update(50)
       now = time.monotonic()
+      car = tap.poll(now)
       if now >= next_motion:
-        P.publish_motion(sm, now)
+        P.publish_motion(tap.latest, now)
         next_motion = now + 0.2
-      upload_allowed = (sm.valid['deviceState'] and sm.alive['deviceState'] and
-                        not sm['deviceState'].started and
-                        sm['deviceState'].networkType == log.DeviceState.NetworkType.wifi)
-      capture_loop.tick(now, (lambda now=now: snapshot(sm, now)) if sm.updated['carState'] else None,
-                        lambda: params.get('CurrentRoute'))
+      upload_allowed = gate.update(now)
+      # Sample whenever the car is publishing: a fresh mirror record, or a
+      # controlsState frame (its carState fields are then null, visibly).
+      sample = (lambda now=now, car=car: snapshot(sm, car, now)) if (car is not None or sm.updated['controlsState']) else None
+      capture_loop.tick(now, sample, lambda: params.get('CurrentRoute'))
       if future is not None and future.done():
         try:
           future.result()

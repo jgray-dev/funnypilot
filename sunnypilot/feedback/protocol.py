@@ -52,15 +52,16 @@ def atomic_json(path, data, durable=False):
       os.close(directory)
 
 
-def publish_motion(sm, now):
-  # Reuse feedbackd's carState reader: another subscriber exceeds msgq capacity.
-  # Preserve the original receive time, never refresh stale data by publishing it.
-  observed = sm.recv_time['carState']
+def publish_motion(car, now):
+  # `car` is the newest record of card's /dev/shm carState mirror at any age
+  # (carstate_shm.CarStateTapReader.latest), or None. The recorder holds no
+  # carState subscription: a 16th msgq reader evicts every other subscriber.
+  # Preserve the original observation time; never refresh stale data by
+  # publishing it.
+  observed = car['observed'] if car else 0.0
   stationary = None
-  if sm.seen['carState'] and sm.valid['carState'] and 0 <= now - observed <= 2:
-    car = sm['carState']
-    if car.canValid and math.isfinite(car.vEgo) and math.isfinite(car.vEgoRaw):
-      stationary = bool(car.standstill and abs(car.vEgo) < 0.01 and abs(car.vEgoRaw) < 0.01)
+  if car and 0 <= now - observed <= 2 and car['can_valid'] and math.isfinite(car['v_ego']) and math.isfinite(car['v_ego_raw']):
+    stationary = bool(car['standstill'] and abs(car['v_ego']) < 0.01 and abs(car['v_ego_raw']) < 0.01)
   try:
     atomic_json(MOTION, {'stationary': stationary, 'observed': observed})
   except (OSError, ValueError):
