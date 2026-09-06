@@ -11,9 +11,10 @@ and history live on the version branches.
   `a`, `b`, `e` and `st` denote separate cuts, not interchangeable aliases.
   Compare numeric components (3.7.10 > 3.7.2); a suffixed cut follows its bare
   version. Newest does not mean vehicle-tested or appropriate for every task.
-- Current development version: **`funnypilot-3.7.3e`**. Astra-linked diagnostics
-  passed local Python, browser, SQLite and MCP/device-fixture checks. No live
-  activation or vehicle validation. Read that branch's instructions for details.
+- Current development version: **`funnypilot-3.7.4`**. Removes unused feedback
+  IPC subscriptions to restore the carState reader budget. Exact device
+  refusal remains unconfirmed; no vehicle validation. Read that branch's
+  instructions and `docs/engagement-3.7.4.md` for evidence limits.
 - The user's requested version takes precedence over this pointer. If already
   working on a version branch, do not switch away or discard changes just to
   follow the newest branch. For device diagnosis, match its actual branch/hash;
@@ -37,7 +38,7 @@ and history live on the version branches.
 3. Choose the requested branch, or the current-development branch above if none
    was specified. Read its guidance **before** editing:
    ```bash
-   BRANCH=funnypilot-3.7.3e  # replace if a different version was requested
+   BRANCH=funnypilot-3.7.4  # replace if a different version was requested
    git show "funnypilot/$BRANCH:CLAUDE.md"
    ```
 4. If no local branch of that name exists:
