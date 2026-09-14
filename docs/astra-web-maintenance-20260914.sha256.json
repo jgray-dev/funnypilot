@@ -1,0 +1,42 @@
+{
+  "README.md": {
+    "before": "2f0ea00078fcdf653a9a9843cdced0fd37a1e4ed8830272d45b50bebb744f171",
+    "after": "ff9bb64b3f0ace1ccf75bd98b2fba61af6ace481f2c72469505f15dce0d2065b"
+  },
+  "server/device-context.mjs": {
+    "before": "eb9f1669ad0d16482420e79ff412c10ca9f4c19c0b1507c19029f5191af56e26",
+    "after": "f4e69c0b84b242ce9803540b768b08562669f9c2e5c1089ebcbe7012610ddd52"
+  },
+  "server/device-tools.mjs": {
+    "before": "ff2419de01aac8bbe451d0fdd8011103dd8634fa5906d7c6eb66b82df3640159",
+    "after": "fc82b8627b153e4ff66b2dea5c72d7476c7d483124b4bc24a8f8115190c6957a"
+  },
+  "server/feedback-tools.mjs": {
+    "before": null,
+    "after": "326dc410b8b920d3ccbbf04d5ee94c3e892dea82a2d4b7ebb6faf2fa3b93b5c7"
+  },
+  "worker/linked-devices.ts": {
+    "before": "b5bcd0849f86f3ff7478942083bb39bded51c23b6572e3ceb041c3a2fd3edf58",
+    "after": "d94264d960964622578f87787bf989c8e8429ba6590e772ceacd34bff657deff"
+  },
+  "src/linked-devices.tsx": {
+    "before": "c75047567b71f45b018ee3bd492917843c4e549b63b66e085d04f2c19cac29be",
+    "after": "8ef8d2b697aeb76f9c7c3158f2e7f0a0b754f9bb23985698b16b790c61619d4e"
+  },
+  "tests/device-tools.test.mjs": {
+    "before": "58ea2d2b125d8358aa166588fb5a58ad86a9b6209dff82ca78ef82ccb9eb85b8",
+    "after": "0e09b7ee6cdd5ec05c8e6832a45dd58d9d248ea1f97407c478273b47c8814af1"
+  },
+  "tests/feedback-tools.test.mjs": {
+    "before": null,
+    "after": "159897dbc379e6d353371ce77cf866849d1c4a6953b38bfc714e5c72d8f76c3d"
+  },
+  "tests/linked-devices-storage.test.mjs": {
+    "before": "6757859a6181434ccc2b5e2bb71c69fd88537d1379a6da694f6db4b9a07200f0",
+    "after": "85bdc649747de6d6206ed03c229364511c7462ea35d9c58e9f07f816c06927b5"
+  },
+  "tests/device-e2e.test.mjs": {
+    "before": "42b1a154d1c666e2c5d01602770d0436edca6c985d52aab541e75a156189f51a",
+    "after": "05ce715793c2f447d9907e16fb76d968cfdd19ebb952c016abbd8dc3bada4aad"
+  }
+}

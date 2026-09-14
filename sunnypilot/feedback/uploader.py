@@ -9,8 +9,8 @@ from openpilot.sunnypilot.navd import drive_index as D
 from openpilot.system.loggerd.drive_retention import is_locked
 
 CHUNK = 4 * 1024 * 1024
-MAX_FILE = 32 * 1024 * 1024
-MAX_EVENT = 64 * 1024 * 1024
+MAX_FILE = 128 * 1024 * 1024
+MAX_EVENT = 512 * 1024 * 1024
 
 
 def describe_file(path):
@@ -46,7 +46,7 @@ def upload_event(event_dir, config, log_root=D.REALDATA_ROOT, allowed=lambda: Tr
       continue
     if is_locked(path):
       return False  # immutable files only; revisit when loggerd closes them
-    for name in ('qlog.zst', 'qcamera.ts'):
+    for name in ('qlog.zst', 'qcamera.ts', 'rlog.zst'):
       p = Path(path) / name
       if p.is_file() and not p.is_symlink():
         files[f'segment-{seg}-{name}'] = p

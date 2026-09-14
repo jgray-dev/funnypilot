@@ -63,9 +63,9 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.5 — Key Files
+## Current version: 3.7.6 — Key Files
 
-Based on 3.7.4 `c2408e537f1376bcb6610336b82b07037529614a`. Fixes the 3.7.1a
+Based on clean 3.7.5 `d8bec23cbe50f54e7f4aa53a94cc7078c6d3ab25`. Preserves its fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
@@ -91,17 +91,25 @@ Astra setup, architecture and validation: `docs/astra-link-3.7.3e.md`; wire
 contract: `docs/astra-link-protocol.md`. 3.7.4 evidence: `docs/engagement-3.7.4.md`.
 
 - `sunnypilot/astra_link/{daemon,core,state,files,execution}.py`: optional
-  outbound HTTPS client; private config, bounded reads, fresh ignition-off
-  command gate, no-replay receipts and expiring execution leases. Imports inert.
+  outbound HTTPS client; private config, bounded reads, verified offroad (manager flags + Panda noOutput/silent) or
+  stationary/disengaged command gate, no-replay receipts and expiring execution leases. Imports inert.
 - `tools/astra_link.py`: explicitly authorized local pairing/enable/disable.
   Never expose `/data/astra_link/config.json` or reuse the host bridge secret.
 - `system/manager/process_config.py`, `selfdrive/selfdrived/selfdrived.py`:
   optional `funnypilot_astra` joins `mapd`/`funnypilot_feedback` exclusions.
   Required processes, upstream `feedbackd` and camera gates remain unchanged.
 - Astra server source: `/home/astro/sandbox/astra-web` (not a Git repository);
-  patch and manifest in `docs/astra-web-3.7.3e.patch`. Broker restart and device
-  pairing remain pending; a restart terminates active PTYs. Device logs are
+  original patch in `docs/astra-web-3.7.3e.patch`; September maintenance changes
+  in `docs/astra-web-maintenance-20260914.patch`. A broker restart terminates active PTYs. Device logs are
   untrusted evidence: compare full commit/branch/dirty state at recording time.
+
+September 2026 owner policy: authenticated linked sessions may execute requested
+maintenance without a second browser approval. Verified offroad permits it
+regardless of ignition, gear, or motion; do not require stopped onroad publishers.
+Preserve authentication, revocation, execution leases and no-replay handling.
+Read-only work and local development remain available independently. Installation
+and restart are distinct from source edits; honor the session's explicit scope.
+Investigation, fixes and activation state: `docs/astra-feedback-20260914.md`.
 
 ## Verification and device access
 

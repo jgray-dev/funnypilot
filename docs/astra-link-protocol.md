@@ -1,3 +1,30 @@
+# Current maintenance policy (2026-09-14)
+
+This section supersedes the ignition/stationary-only policy in the original
+protocol below. The owner authorized their linked Astra sessions to perform
+requested device maintenance directly, without a second browser confirmation.
+
+- Reads remain available in every mode. Private cloud feedback is retrieved on
+  the host through dedicated feedback tools, independently of the device link.
+- Offroad means both manager flags agree and fresh known Pandas use `noOutput`
+  or `silent` with `controlsAllowed=false`. Ignition, gear and motion are not
+  blockers in this mode. The existing fresh stationary/disengaged path remains.
+- `/tool/request` accepts top-level `authorization: "owner-session"` for commands
+  from an authenticated, device-bound capability. They enter `approved` directly;
+  legacy proposals still support exact browser approval. Revoked/expired
+  capabilities never authorize execution. State is checked again on claim, grant,
+  every lease, and locally while the process runs.
+- Full checkout identity is matched before spawn. A running edit may change its
+  own identity; leases report the changed identity rather than terminate the edit.
+  Other queued commands still require their original identity and boot/generation.
+- Idle polling is 5 seconds (active 2); results post immediately after completion.
+  Completed commands invalidate the identity cache. Receipts with recorded expiry
+  can be removed once the request itself is expired; legacy receipts are retained.
+- Native errors expose only curated explanations and exception type, never raw
+  credential-bearing HTTP exceptions. No automatic replay of uncertain commands.
+
+## Original protocol and historical design
+
 # Astra link protocol v1 (3.7.3e)
 
 Implementation contract. HTTPS fixed origin `https://astra.jgray.cc`; no redirects. JSON UTF-8, maximum wire body 65536 bytes. All credentials are random 32-byte lowercase hex, bearer headers except pairing. No token logging. Poll idle 15s, active 2s, backoff with jitter. One dispatched request per device; up to 16 unfinished requests, 64 retained requests/device, results expire after 1h. Raw file/output chunks <=32768 bytes (base64 for file bytes); listings <=200 entries.

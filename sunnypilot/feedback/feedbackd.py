@@ -11,6 +11,7 @@ import time
 from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.capture import Capture
 from openpilot.sunnypilot.feedback.carstate_shm import CarStateTapReader
+from openpilot.sunnypilot.feedback.control_tap import read_control
 from openpilot.sunnypilot.feedback.uploader import upload_event
 
 
@@ -76,6 +77,12 @@ def snapshot(sm, car, now):
   row['valid'] = {s:bool(sm.valid[s] and sm.alive[s]) for s in
                   ('controlsState','longitudinalPlan','selfdriveState','liveCalibration','onroadEvents','onroadEventsSP')}
   row['valid']['carState'] = bool(car.get('can_valid', False))
+  row['control_diagnostics'] = read_control(now)
+  row['valid']['control_diagnostics'] = row['control_diagnostics'] is not None
+  # Record original service clocks for every copied stream, including torque
+  # parameters and carControl, not just a subset of booleans.
+  row['service_times'] = {s: {'mono_ns': sm.logMonoTime[s], 'received': sm.recv_time[s],
+                             'valid': bool(sm.valid[s] and sm.alive[s])} for s in sm.services}
   return row
 
 
@@ -157,7 +164,7 @@ class CaptureLoop:
         self.capture.report(cmd, current_route, accepted_at)
         self.pending_report = None
         cmd = None
-      if sample is not None and now - self.last_sample >= .01:
+      if sample is not None and now - self.last_sample >= .005:
         self.capture.sample(sample())
         self.last_sample = now
       # Bound work per tick even if a broken client floods the socket.

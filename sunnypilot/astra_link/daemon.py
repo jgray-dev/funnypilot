@@ -74,12 +74,12 @@ class Device:
 
   def command(self, request):
     if not self.safety.can_modify() or not identity_equal(request["identity"], self.identity()):
-      raise ValueError("vehicle moving, engaged, state unknown, or approval identity mismatch")
+      raise ValueError("maintenance state unavailable or command identity mismatch")
     if not self.safety.can_modify():
-      raise ValueError("stationary/disengaged permission expired")
+      raise ValueError("maintenance permission expired")
     self.journal.record(request)
     if not self.safety.can_modify():
-      raise ValueError("stationary/disengaged permission expired")
+      raise ValueError("maintenance permission expired")
     started = self.clock()
     grant = self.transport.post("grant", {"id": request["id"], "generation": self.generation, "digest": request["digest"]})
     received = self.clock()
@@ -124,9 +124,20 @@ class Device:
         return {"ok": True, "identity": self.observe_identity(), "startupIdentity": self.startup_identity,
                 "runningCode": "not established by disk checkout", "source": "device"}
       return self.files.execute(request["kind"], request["args"], self.safety)
-    except Exception:
+    except Exception as error:
       # Do not serialize exceptions: HTTP/library messages can contain credentials.
-      return {"ok": False, "error": "device request refused or unconfirmed", "source": "device"}
+      known = {
+        "maintenance state unavailable or command identity mismatch": "Verify offroad state and refresh checkout identity before a new command.",
+        "maintenance permission expired": "Native maintenance state changed or became stale.",
+        "approval no longer valid": "State or checkout changed before command execution.",
+        "receipt replay or journal full": "Command already recorded or replay journal capacity reached; inspect before retrying.",
+        "recording permission required": "Select the recording explicitly with allowRecording=true.",
+        "private path": "This read targets a credential or hidden path.",
+        "path outside diagnostic roots": "Use a supported diagnostic path or an owner-authorized offroad command.",
+      }
+      reason = known.get(str(error)) if isinstance(error, ValueError) else None
+      return {"ok": False, "error": reason or "Device operation failed or completion is unconfirmed; inspect command status before retrying.",
+              "errorType": type(error).__name__, "source": "device"}
 
   def step(self):
     if self.pending is not None:
@@ -140,7 +151,15 @@ class Device:
     if request is not None:
       result = self.dispatch(request)
       self.pending = {"id": request["id"], "generation": self.generation, "result": result}
-    return 2 if request is not None or reply.get("pollAfter") == 2 else 15
+      # Publish immediately: a completed read used to sit idle for another poll
+      # interval. A failed acknowledgement retains pending for the next step.
+      reply = self.transport.post("result", self.pending)
+      if reply.get("ok") is not True:
+        raise ValueError("result not acknowledged")
+      self.pending = None
+      if request["kind"] == "command":
+        self.identity_observed = float("-inf")
+    return 2 if request is not None or reply.get("pollAfter") == 2 else 5
 
   def uncertain(self):
     # Never carry executable work across a failed exchange. Server invalidates it.

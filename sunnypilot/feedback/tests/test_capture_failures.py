@@ -131,9 +131,9 @@ def test_final_metadata_failure_keeps_active_candidate_and_collected_triage(cap,
   with monkeypatch.context() as fault:
     fault.setattr(P, 'atomic_json', fail)
     with pytest.raises(OSError):
-      cap.finish(121)
+      cap.finish(141)
   assert cap.active[ID]['state'] == 'capturing'
-  cap.finish(126)
+  cap.finish(146)
   assert ID not in cap.active
   assert calls == [ID]
   assert P.read_json(str(cap.events / ID / 'event.json'))['state'] == 'queued'
@@ -165,12 +165,12 @@ def test_failed_triage_preserves_prior_artifact_and_propagates_destination_error
     if fault_stage == 'fsync':
       fault.setattr(C.os, 'fsync', no_space)
     with pytest.raises(OSError):
-      cap.finish(121)
+      cap.finish(141)
   assert artifact.read_text() == 'previous diagnostic\n'
   assert cap.active[ID]['state'] == 'capturing'
   with monkeypatch.context() as retry:
     retry.setattr(C, 'open', lambda path, *a, **kw: original(source if str(path).startswith('/data/funnypilot_triage/') else path, *a, **kw), raising=False)
-    cap.finish(126)
+    cap.finish(146)
   assert ID not in cap.active
   assert 'previous diagnostic' not in artifact.read_text()
 
@@ -185,7 +185,7 @@ def test_missing_triage_sources_are_tolerated_but_other_source_errors_retry(cap,
   with monkeypatch.context() as fault:
     fault.setattr(C, 'open', fail_source, raising=False)
     with pytest.raises(PermissionError):
-      cap.finish(121)
+      cap.finish(141)
   assert ID in cap.active
   def absent_source(path, *args, **kwargs):
     if str(path).startswith('/data/funnypilot_triage/'):
@@ -193,7 +193,7 @@ def test_missing_triage_sources_are_tolerated_but_other_source_errors_retry(cap,
     return original(path, *args, **kwargs)
   with monkeypatch.context() as retry:
     retry.setattr(C, 'open', absent_source, raising=False)
-    cap.finish(126)
+    cap.finish(146)
   assert ID not in cap.active
   assert (cap.events / ID / 'triage.jsonl').read_text() == ''
 
@@ -221,7 +221,7 @@ def test_sample_enospc_marks_interrupted_and_reraises(cap, monkeypatch):
     with pytest.raises(OSError):
       cap.sample({'t':110})
   assert cap.active[ID]['capture_interrupted']
-  cap.finish(121)
+  cap.finish(141)
   assert P.read_json(str(cap.events / ID / 'event.json'))['capture_interrupted']
 
 
@@ -238,10 +238,10 @@ def test_actual_directory_fsync_failure_retries_renamed_metadata(cap, monkeypatc
   with monkeypatch.context() as fault:
     fault.setattr(os, 'fsync', fail_directory)
     with pytest.raises(OSError):
-      cap.finish(121) if finalizing else report(cap)
+      cap.finish(141) if finalizing else report(cap)
   assert cap.active[ID]['state'] == 'capturing'
   if finalizing:
-    cap.finish(126)
+    cap.finish(146)
     assert ID not in cap.active
   else:
     report(cap)

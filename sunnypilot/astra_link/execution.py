@@ -107,9 +107,12 @@ class Lease:
       started = self.clock()
       try:
         identity = self.identity()
-        from sunnypilot.astra_link.core import identity_equal
-        if not identity_equal(identity, self.request["identity"]) or not self.valid():
-          raise ValueError("approval identity changed")
+        # Identity is bound immediately before spawn. An authorized edit, commit
+        # or checkout naturally changes it; do not kill that command mid-write.
+        # Continue reporting the actual identity while state/revocation/expiry
+        # remain enforced throughout execution.
+        if not self.valid():
+          raise ValueError("execution permission expired")
         reply = self.transport.post("lease", {"id": self.request["id"], "generation": self.generation,
                                                "identity": identity, "state": self.safety.snapshot()})
         if reply.get("leaseSeconds") != 5 or self.clock() - started > 2 or not self.valid():

@@ -8,18 +8,31 @@ Selections retry until acknowledged even if the popup closes. Driving alerts
 hide the popup. No keyboard, confirmation, or cloud connection is required.
 
 The whole route is saved using the same protection as the web Drives page.
-The capture includes roughly 20 seconds before and after the report, the
-software commit/branch/version/dirty state, controller and actuator samples,
+The capture includes roughly 40 seconds before and after the report, the
+software commit/branch/version/dirty state, controller and actuator samples (up to 100 Hz),
 lead/governor data, torque parameters, and the matching steering triage lines.
 Samples also include calibration status/progress/angles and the exact selfdrive
 alert type/text, including refusal reasons that older UI versions hid.
 From 3.7.1b, `blocking_events` includes stock and MADS fault names even when
 the state machine selected no popup; check each stream's recorded validity.
-The enclosing road-video (`qcamera.ts`) and decimated-log (`qlog.zst`) minute
-segments are included without transcoding. Missing or oversized artifacts are
+The enclosing road-video (`qcamera.ts`), decimated-log (`qlog.zst`), and full-rate
+log (`rlog.zst`) minute segments are included without transcoding. Missing or oversized artifacts are
 listed in the manifest. Cabin video, audio, credentials and unrelated drives
 are not uploaded. A reboot can truncate the post-event window; the report is
 then explicitly marked `capture_interrupted`.
+
+The per-frame control tap records model and interpolated curvature, effective
+lateral delay/roll/angle offset, signed wheel rate, motion credit, friction input
+and contribution, effective torque tuning, bump/override/lane-change scales, and
+requested versus applied torque. Every copied service has its original publish
+and receive timestamp and validity. Missing/stale diagnostic taps are explicit.
+No new IPC subscribers or compiled schema fields are added. The pre-event memory
+ring remains capped at 4,500 samples; uploads stay separate from capture/control.
+
+Astra linked conversations expose `feedback_list`, `feedback_download`, and
+`feedback_review` using host Cloudflare account authentication. These tools work
+with an offline Comma. Downloads resume already verified artifacts and only
+publish complete, checksum-verified files; recordings remain private.
 
 ## Unneeded map slowdown
 
@@ -49,8 +62,8 @@ A single background worker uploads only while parked on Wi-Fi. It checks the
 condition between requests and retries failed work every minute. An in-flight
 request has a bounded timeout; it does not run in UI or control processes.
 
-Files are split into checksummed 4 MiB parts; a file is capped at 32 MiB and
-an event at 64 MiB. R2 checks each part's SHA-256, and D1 marks the event
+Files are split into checksummed 4 MiB parts; a file is capped at 128 MiB and
+an event at 512 MiB. R2 checks each part's SHA-256, and D1 marks the event
 complete only after every declared part exists. A lost response can be retried.
 Original routes remain saved until the owner unsaves them. Local completed
 report history is pruned as needed to retain at most 200 reports; unuploaded

@@ -35,6 +35,9 @@ def main():
       mode = (root / "mode").read_text().strip()
       return {"mode": mode, "reason": "synthetic fixture, not vehicle evidence"}
 
+    def can_modify(self):
+      return self.offroad()
+
     def offroad(self):
       return not stop.is_set() and self.snapshot()["mode"] == "offroad"
 

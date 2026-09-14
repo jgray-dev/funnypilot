@@ -1,3 +1,16 @@
+## 3.7.6 — 2026-09-14
+
+- Fix stale steering-limit feedback in MADS lateral-only mode: update while lateral
+  control is active, reset when inactive. Preserves genuine torque-limit detection.
+- Astra: verified offroad maintenance regardless of ignition/gear/motion, direct
+  authenticated owner commands, edits that survive their own identity changes,
+  immediate results, 5-second idle polls, expiring replay receipts, useful errors.
+- Feedback: 40 seconds before/after, effective controller/friction/motion terms,
+  service timestamps and validity, full-rate rlogs, 128 MiB/file and 512 MiB/event.
+  Private host feedback tools and resumable checksum-verified downloads.
+- Driving reports remain triaged pending vehicle validation; no speculative
+  steering gain changes. See docs/astra-feedback-20260914.md for evidence/limits.
+
 FunnyPilot v3.7.5 (2026-09-06)
 ============================
 * Based explicitly on 3.7.4 (c2408e537f1376bcb6610336b82b07037529614a).

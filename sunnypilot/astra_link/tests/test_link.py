@@ -24,6 +24,9 @@ class Parked:
   def offroad(self):
     return self.parked
 
+  def can_modify(self):
+    return self.parked
+
   def snapshot(self):
     return {"mode": "offroad" if self.parked else "onroad", "reason": "test"}
 
@@ -109,11 +112,10 @@ def test_lost_grant_never_spawn_or_replay(device):
 
 def test_lost_result_rotates_generation_without_reexecution(device):
   device.transport.request = request(device)
-  device.step()
-  assert device.pending["result"]["ok"]
   device.transport.fail = "result"
   with pytest.raises(OSError):
     device.step()
+  assert device.pending["result"]["ok"]
   old = device.generation
   device.uncertain()
   assert device.generation != old and device.pending is None
@@ -133,14 +135,17 @@ def native(now, pandas=None):
   class SM(dict):
     pass
   sm = SM(pandaStates=pandas if pandas is not None else [
-    SimpleNamespace(ignitionLine=False, ignitionCan=False, pandaType="uno")])
+    SimpleNamespace(ignitionLine=False, ignitionCan=False, pandaType="uno", safetyModel="noOutput", controlsAllowed=False)])
+  sm.update(selfdriveState=SimpleNamespace(enabled=False, active=False),
+            selfdriveStateSP=SimpleNamespace(mads=SimpleNamespace(enabled=False, active=False)),
+            carControl=SimpleNamespace(enabled=False, latActive=False, longActive=False))
   sm.seen = dict.fromkeys(sm, True)
   sm.valid = dict.fromkeys(sm, True)
   sm.recv_time = dict.fromkeys(sm, now)
   return sm
 
 
-@pytest.mark.parametrize("fault", ["empty", "unknown", "ignition", "stale", "invalid", "unseen", "started"])
+@pytest.mark.parametrize("fault", ["empty", "unknown", "output_enabled", "stale", "invalid", "unseen", "started"])
 def test_safety_fails_closed(fault):
   safety = Safety(clock=lambda: 10)
   sm = native(10)
@@ -148,15 +153,15 @@ def test_safety_fails_closed(fault):
     sm["pandaStates"] = []
   elif fault == "unknown":
     sm["pandaStates"][0].pandaType = "unknown"
-  elif fault == "ignition":
-    sm["pandaStates"][0].ignitionCan = True
+  elif fault == "output_enabled":
+    sm["pandaStates"][0].safetyModel = "hyundai"
   elif fault == "stale":
     sm.recv_time["pandaStates"] = 7
   elif fault == "invalid":
     sm.valid["pandaStates"] = False
   elif fault == "unseen":
     sm.seen["pandaStates"] = False
-  safety.update(sm, started=fault == "started")
+  safety.update(sm, started=fault == "started", offroad=True)
   assert not safety.offroad()
 
 
@@ -170,7 +175,7 @@ def test_safety_holds_no_device_state_reader():
 def test_safety_expires_by_receive_clock_not_last_monitor_update():
   now = [10.0]
   safety = Safety(clock=lambda: now[0])
-  safety.update(native(8.1))
+  safety.update(native(8.1), started=False, offroad=True)
   assert safety.offroad()
   now[0] = 10.2
   assert not safety.offroad()
@@ -212,15 +217,14 @@ def test_bounded_reads_redaction_and_onroad_gate(tmp_path):
   assert result["truncated"] and result["redacted"]
   safety.parked = False
   assert files.execute("tail_log", {"path": str(path), "length": 100}, safety)["offset"] == path.stat().st_size - 100
-  with pytest.raises(ValueError):
-    files.execute("read_file", {"path": str(path), "length": 32768}, safety)
+  assert files.execute("read_file", {"path": str(path), "length": 32768}, safety)["truncated"]
 
 
-def test_recording_requires_explicit_offroad(tmp_path):
+def test_recording_requires_selection_in_every_mode(tmp_path):
   path = tmp_path / "rlog"
   path.write_bytes(b"recording")
   files = Files(roots=(), recordings=(str(tmp_path),))
-  for args, parked in [({}, True), ({"allowRecording": True}, False)]:
+  for args, parked in [({}, True), ({}, False)]:
     safety = Parked()
     safety.parked = parked
     with pytest.raises(ValueError):
@@ -494,3 +498,61 @@ assert 'requests' not in sys.modules
 assert 'cereal.messaging' not in sys.modules
 """
   subprocess.run([sys.executable, "-c", code], check=True)
+
+
+@pytest.mark.parametrize('ignition', [False, True])
+def test_offroad_maintenance_does_not_require_motion_or_engagement_publishers(ignition):
+  safety = Safety(clock=lambda: 10)
+  sm = native(10)
+  sm['pandaStates'][0].ignitionCan = ignition
+  for service in ('selfdriveState', 'selfdriveStateSP', 'carControl'):
+    sm.valid[service] = False
+  safety.update(sm, started=False, offroad=True)
+  assert safety.offroad() and safety.can_modify()
+  assert safety.snapshot()['engaged'] is None
+
+
+@pytest.mark.parametrize('started,offroad', [(None, True), (False, None), (False, False), (True, True)])
+def test_missing_or_conflicting_manager_flags_do_not_establish_offroad(started, offroad):
+  safety = Safety(clock=lambda: 10)
+  safety.update(native(10), started=started, offroad=offroad)
+  assert not safety.offroad()
+
+
+def test_offroad_requires_disabled_output_and_cancels_on_transition():
+  safety = Safety(clock=lambda: 10)
+  sm = native(10)
+  safety.update(sm, started=False, offroad=True)
+  assert safety.can_modify()
+  sm['pandaStates'][0].controlsAllowed = True
+  safety.update(sm, started=False, offroad=True)
+  assert not safety.offroad()
+  sm['pandaStates'][0].controlsAllowed = False
+  safety.update(sm, started=True, offroad=False)
+  assert not safety.can_modify()
+
+
+def test_read_result_is_published_without_an_extra_poll_delay(device):
+  device.transport.request = request(device, 'identity', {})
+  device.step()
+  assert [r for r, _ in device.transport.calls] == ['poll', 'result']
+  assert device.pending is None
+
+
+def test_running_edit_can_change_identity_without_losing_lease():
+  server = Server()
+  lease = Lease(server, {'id': 'id', 'identity': IDENTITY}, 'generation', Parked(), time.monotonic() + 8,
+                identity=lambda: {**IDENTITY, 'dirty': True})
+  lease.start()
+  result = run_process(['/bin/sleep', '2.2'], '/tmp', 4, lease.valid)
+  lease.stop.set()
+  assert result['ok']
+  assert server.calls[0][1]['identity']['dirty'] is True
+
+
+def test_expired_receipts_do_not_permanently_exhaust_command_capacity(tmp_path):
+  path = str(tmp_path / 'private' / 'receipts.json')
+  receipts = {str(i): 'a' * 64 for i in range(256)}
+  private_write(path, {'version': 1, 'receipts': receipts, 'expires': dict.fromkeys(receipts, 1)})
+  Journal(path).record({'id': 'new', 'digest': 'b' * 64, 'expires': 9999999999999})
+  assert private_read(path)['receipts'] == {'new': 'b' * 64}

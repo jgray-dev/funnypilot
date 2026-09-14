@@ -13,8 +13,8 @@ from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.corner_feedback import MAX_RULES, matches
 from openpilot.sunnypilot.navd import drive_index
 
-PRE_SECONDS = 20
-POST_SECONDS = 20
+PRE_SECONDS = 40
+POST_SECONDS = 40
 MAX_PENDING = 200
 
 
@@ -45,7 +45,7 @@ class Capture:
     self.root, self.log_root = Path(root), log_root
     self.events = self.root / 'events'
     self.events.mkdir(parents=True, exist_ok=True)
-    self.ring = deque(maxlen=4500)  # 45 seconds at 100 Hz; scalars only
+    self.ring = deque(maxlen=4500)  # bounded 45 seconds at 100 Hz; scalars only
     self.active = {}
     self._initializing = {}
     self._prerolled = set()

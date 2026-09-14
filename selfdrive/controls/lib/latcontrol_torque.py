@@ -206,7 +206,17 @@ class LatControlTorque(LatControl):
     ff -= self.torque_params.latAccelOffset
     # v3.3.8: the jerk-lookahead term also replays the delay buffer, so its
     # contribution to the friction relay is damped by the same factor.
-    ff += get_friction(error + damp * JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+    friction_input = error + damp * JERK_GAIN * desired_lateral_jerk
+    friction = get_friction(friction_input, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+    ff += friction
+    self.feedback_diagnostics = {
+      'neural': bool(neural), 'error_raw': float(setpoint - raw_measurement),
+      'error_corrected': float(error), 'friction_input': float(friction_input), 'friction': float(friction),
+      'friction_coefficient': float(self.torque_params.friction), 'laf': float(self.torque_params.latAccelFactor),
+      'offset': float(self.torque_params.latAccelOffset), 'bump_scale': float(damp),
+      'future_accel': float(future_desired_lateral_accel), 'setpoint': float(setpoint),
+      'measured_accel': float(raw_measurement), 'reference_travel': float(reference_travel),
+    }
 
     # FunnyPilot v3.2.1e: track active edges + whether a blinker was involved
     # while inactive, to drive the blinker-unwind re-engage torque ramp below.

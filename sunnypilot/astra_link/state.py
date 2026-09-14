@@ -20,21 +20,24 @@ class Safety:
     self.motion_until = float("-inf")
     self.engagement_until = float("-inf")
 
-  def update(self, sm, started=False):
+  def update(self, sm, started=None, offroad=None):
     # `started` is manager's IsOnroad param, the same transition deviceState.started
     # reports. It is read from Params rather than a deviceState subscription:
     # deviceState is at msgq's 15-reader limit with sunnylink registered, and a
     # 16th reader evicts every other subscriber (see feedback/carstate_shm.py).
-    # A stale or missing param can only ever add "onroad", never remove it.
+    # Require both manager flags and fresh disabled Panda output for maintenance.
+    # Ignition and gear do not establish whether openpilot controls the vehicle.
     now = self.clock()
     mode, reason = "unknown", "native state stale or invalid"
     services = ("pandaStates",)
     if all(sm.seen[s] and sm.valid[s] and 0 <= now - sm.recv_time[s] <= 2 for s in services):
       pandas = sm["pandaStates"]
-      if started or any(p.ignitionLine or p.ignitionCan for p in pandas):
-        mode, reason = "onroad", "started or ignition on"
-      elif pandas and all(str(p.pandaType) != "unknown" for p in pandas):
-        mode, reason = "offroad", "fresh known pandas with ignition off"
+      if started is True:
+        mode, reason = "onroad", "manager onroad"
+      elif (started is False and offroad is True and pandas and
+            all(str(p.pandaType) != "unknown" and str(p.safetyModel) in ("silent", "noOutput") and
+                not p.controlsAllowed for p in pandas)):
+        mode, reason = "offroad", "manager offroad and fresh Panda output disabled"
     stationary, engaged = None, None
     motion_until = engagement_until = float("-inf")
     # feedbackd already consumes carState; subscribing here would exceed msgq's
@@ -74,7 +77,7 @@ class Safety:
 
   def can_modify(self):
     state = self.snapshot()
-    return state["stationary"] is True and state["engaged"] is False
+    return state["mode"] == "offroad" or (state["stationary"] is True and state["engaged"] is False)
 
   def monitor(self, stop):
     try:
@@ -84,7 +87,10 @@ class Safety:
       sm = messaging.SubMaster(["pandaStates", "selfdriveState", "selfdriveStateSP", "carControl"])
       while not stop.is_set():
         sm.update(100)
-        self.update(sm, bool(params.get_bool("IsOnroad")))
+        onroad, offroad = params.get("IsOnroad"), params.get("IsOffroad")
+        def flag(value):
+          return True if value == b"1" else False if value == b"0" else None
+        self.update(sm, flag(onroad), flag(offroad))
     except Exception:
       # Failure becomes unknown immediately, not a cached parked permission.
       with self.lock:

@@ -83,14 +83,14 @@ def test_finalization_failure_preserves_capture_and_limits_retries(loop, monkeyp
   finish = capture.finish
   broken = mocker.Mock(side_effect=unavailable)
   monkeypatch.setattr(capture, 'finish', broken)
-  loop.tick(121, None, lambda: ROUTE)
+  loop.tick(141, None, lambda: ROUTE)
   assert capture.active[ID]['state'] == 'capturing'
   assert capture.active[ID]['capture_interrupted']
-  for now in (121.01, 122, 125.99):
+  for now in (141.01, 142, 145.99):
     loop.tick(now, lambda now=now: {'t':now}, lambda: ROUTE)
   assert broken.call_count == 1
   monkeypatch.setattr(capture, 'finish', finish)
-  loop.tick(126, None, lambda: ROUTE)
+  loop.tick(146, None, lambda: ROUTE)
   assert loop.capture is capture and ID not in capture.active
   event = P.read_json(str(capture.events / ID / 'event.json'))
   assert event['state'] == 'queued' and event['capture_interrupted']

@@ -21,7 +21,7 @@ function validManifest(x: unknown): x is Manifest {
   for (const a of m.artifacts) {
     if (!a || typeof a.name !== 'string' || !NAME.test(a.name) || a.name === '.' || a.name === '..' || names.has(a.name) ||
         !Number.isSafeInteger(a.size) || a.size < 0 || typeof a.sha256 !== 'string' || !HASH.test(a.sha256) ||
-        !Array.isArray(a.parts) || a.parts.length > 16 || a.parts.length === 0) return false;
+        !Array.isArray(a.parts) || a.parts.length > 32 || a.parts.length === 0) return false;
     names.add(a.name);
     let size = 0;
     for (const p of a.parts) {
@@ -30,7 +30,7 @@ function validManifest(x: unknown): x is Manifest {
     }
     if (size !== a.size) return false;
   }
-  return total <= 64;
+  return total <= 128;
 }
 
 function reply(body: unknown, status = 200) {

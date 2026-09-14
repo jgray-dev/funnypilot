@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -116,7 +117,7 @@ def load_config(path=CONFIG):
 
 
 class Journal:
-  """Never evict receipts: full/corrupt storage requires explicit local maintenance."""
+  """Retain replay receipts through request expiry; bound long-lived storage."""
 
   def __init__(self, path=JOURNAL):
     self.path = path
@@ -131,9 +132,20 @@ class Journal:
     receipts = value["receipts"]
     if any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for k, v in receipts.items()):
       raise ValueError("invalid receipt journal")
+    expiries = value.setdefault("expires", {})
+    if not isinstance(expiries, dict) or any(type(t) not in (int, float) or not math.isfinite(t) for t in expiries.values()):
+      raise ValueError("invalid receipt expiry")
+    # Expired requests are rejected by Device.validate before journal access.
+    # Legacy receipts without an expiry stay retained rather than guessed old.
+    now = time.time() * 1000  # noqa: TID251 - server request expiry uses Unix milliseconds
+    for key in list(receipts):
+      if key in expiries and expiries[key] <= now:
+        del receipts[key]
+        del expiries[key]
     if request["id"] in receipts or len(receipts) >= 256:
       raise ValueError("receipt replay or journal full")
     receipts[request["id"]] = request["digest"]
+    expiries[request["id"]] = request["expires"]
     private_write(self.path, value)
 
 

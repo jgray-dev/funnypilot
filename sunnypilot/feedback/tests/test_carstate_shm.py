@@ -86,6 +86,9 @@ def test_snapshot_without_car_is_visibly_incomplete():
   class Signals(dict):
     valid = dict.fromkeys(sm, True)
     alive = valid
+    services = list(sm)
+    logMonoTime = dict.fromkeys(sm, 0)
+    recv_time = dict.fromkeys(sm, 0)
 
   row = snapshot(Signals(sm), None, 5.0)
   assert row['v'] is None and row['driver_torque'] is None and row['t_car'] is None

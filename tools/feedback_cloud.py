@@ -71,7 +71,7 @@ def main():
     parser.error('no completed event with that id')
   manifest = json.loads(rows[0]['manifest'])
   destination = args.directory / args.id
-  destination.mkdir(parents=True, exist_ok=True)
+  destination.mkdir(parents=True, exist_ok=True, mode=0o700)
   (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
   for artifact in manifest['artifacts']:
     name = artifact['name']
@@ -80,18 +80,29 @@ def main():
     target = destination / name
     if target.is_symlink():
       raise ValueError('artifact destination is a symlink')
+    # Resume large reports without downloading already verified artifacts again.
+    if target.is_file() and target.stat().st_size == artifact['size']:
+      existing = hashlib.sha256()
+      with target.open('rb') as stream:
+        while chunk := stream.read(4 * 1024 * 1024):
+          existing.update(chunk)
+      if existing.hexdigest() == artifact['sha256']:
+        continue
     digest = hashlib.sha256()
-    with tempfile.TemporaryDirectory() as temp, open(target, 'wb') as out:
-      for i, part in enumerate(artifact['parts']):
-        path = Path(temp) / 'chunk'
-        wrangler('r2','object','get',f'{BUCKET}/events/{args.id}/{name}/{i}','--remote','--file',str(path))
-        data = path.read_bytes()  # bounded to the protocol's 4 MiB part size
-        if len(data) != part['size'] or hashlib.sha256(data).hexdigest() != part['sha256']:
-          raise ValueError('download checksum mismatch')
-        digest.update(data)
-        out.write(data)
-    if target.stat().st_size != artifact['size'] or digest.hexdigest() != artifact['sha256']:
-      raise ValueError('artifact checksum mismatch')
+    with tempfile.TemporaryDirectory(dir=destination) as temp:
+      staged = Path(temp) / 'artifact'
+      with staged.open('wb') as out:
+        for i, part in enumerate(artifact['parts']):
+          path = Path(temp) / 'chunk'
+          wrangler('r2','object','get',f'{BUCKET}/events/{args.id}/{name}/{i}','--remote','--file',str(path))
+          data = path.read_bytes()  # bounded to the protocol's 4 MiB part size
+          if len(data) != part['size'] or hashlib.sha256(data).hexdigest() != part['sha256']:
+            raise ValueError('download checksum mismatch')
+          digest.update(data)
+          out.write(data)
+      if staged.stat().st_size != artifact['size'] or digest.hexdigest() != artifact['sha256']:
+        raise ValueError('artifact checksum mismatch')
+      staged.replace(target)
   print(destination)
 
 

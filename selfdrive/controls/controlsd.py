@@ -17,6 +17,7 @@ from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother
 from openpilot.selfdrive.controls.lib.knot_filter import KnotFilter
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
+from openpilot.sunnypilot.feedback.control_tap import ControlTap
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -73,6 +74,7 @@ class Controls(ControlsExt):
     # recurring "smoothing feels off after sitting parked" report. Viewable and
     # copyable from the web UI (Logs button). Best-effort: never breaks controls.
     self.triage = LatInterpMonitor(TriageRecorder("lat_interp"))
+    self.feedback_control = ControlTap()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -252,6 +254,28 @@ class Controls(ControlsExt):
     # long targets, plus lateral-oscillation evidence (steeringPressed edges,
     # driver-override scale, saturation) for the "bite then loosen" report;
     # live-tuning context every 10 s (drift is hypothesis C for "feels off").
+    # Per-frame evidence, not 1 Hz extrema: preserves the ordering of model
+    # corrections, torque limiting, handback and wheel response in a corner.
+    self.feedback_control.publish({
+      't': time.monotonic(), 'frame': self.sm.frame,
+      'model_t': self.sm.logMonoTime['modelV2'], 'model_updated': bool(self.sm.updated['modelV2']),
+      'model_curvature': float(model_v2.action.desiredCurvature),
+      'interpolated_curvature': float(new_desired_curvature), 'desired_curvature': float(self.desired_curvature),
+      'lat_delay': float(lat_delay), 'angle_offset': float(lp.angleOffsetDeg), 'roll': float(lp.roll),
+      'steer_limited': bool(self.steer_limited_by_safety), 'curvature_limited': bool(curvature_limited),
+      'applied_torque': float(self.sm['carOutput'].actuatorsOutput.torque),
+      'applied_torque_can': float(self.sm['carOutput'].actuatorsOutput.torqueOutputCan),
+      'car_output_t': self.sm.logMonoTime['carOutput'],
+      'override_scale': float(getattr(self.LaC, '_override_scale', 1.0)),
+      'lane_change_scale': float(getattr(self.LaC, 'lane_change_torque_scale', 1.0)),
+      'eps_authority': float(getattr(getattr(self.LaC, '_eps_governor', None), 'authority', 1.0)),
+      'eps_limited': bool(getattr(getattr(self.LaC, '_eps_governor', None), 'driver_limited', False)),
+      'motion_scale': float(getattr(getattr(self.LaC, '_motion_credit', None), 'scale', 1.0)),
+      'motion_credit': float(getattr(getattr(self.LaC, '_motion_credit', None), 'credit', 0.0)),
+      'wheel_rate_signed': float(getattr(getattr(self.LaC, '_motion_credit', None), 'rate_deg', 0.0)),
+      'pitch_rate': float(pitch_rate_deg),
+      'torque_controller': getattr(self.LaC, 'feedback_diagnostics', {}),
+    })
     self.triage.sample(time.monotonic(), CC.latActive, CC.longActive, CS.vEgo,
                        self.lat_smooth.health_frames, lane_change_active, curvature_limited,
                        long_plan.aTarget, actuators.accel,
@@ -350,13 +374,18 @@ class Controls(ControlsExt):
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
 
-    if self.sm['selfdriveState'].active:
+    # MADS can steer with longitudinal/selfdriveState inactive. Updating only
+    # during ACC latched the last limit flag for entire lateral-only drives,
+    # freezing torque integral correction and disabling steering motion credit.
+    if CC.latActive:
       CO = self.sm['carOutput']
       if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
         self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
                                               STEER_ANGLE_SATURATION_THRESHOLD
       else:
         self.steer_limited_by_safety = abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
+    else:
+      self.steer_limited_by_safety = False
 
     # TODO: both controlsState and carControl valids should be set by
     #       sm.all_checks(), but this creates a circular dependency

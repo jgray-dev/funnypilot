@@ -42,11 +42,11 @@ def test_capture_protects_route_and_all_labels_immediately(capture):
   assert event['labels'] == ['steering_bite']
   report(capture,['late_braking'],102)
   capture.sample({'t':110,'angle':2.0})
-  capture.finish(121)
+  capture.finish(141)
   saved = P.read_json(str(capture.events / ID / 'event.json'))
   assert saved['state'] == 'queued' and saved['labels'] == ['late_braking','steering_bite']
   rows = [json.loads(l) for l in (capture.events / ID / 'telemetry.jsonl').read_text().splitlines()]
-  assert [r['t'] for r in rows] == [81,99,100,110]
+  assert [r['t'] for r in rows] == [70,81,99,100,110]
 
 
 def test_unnecessary_map_slowdown_persists_exact_corner(capture):
@@ -122,6 +122,9 @@ def test_snapshot_uses_real_cereal_fields():
   class Signals(dict):
     valid=dict.fromkeys(sm, True)
     alive=valid
+    services=list(sm)
+    logMonoTime=dict.fromkeys(sm, 99000000000)
+    recv_time=dict.fromkeys(sm, 99.99)
   car_record = parse_line(format_line(99.99, True, 12.5, 12.4, -0.25, -3.125, -42.0, True, False, False, False))
   result=snapshot(Signals(sm),car_record,100)
   assert result['desired_curvature']==0 and 'lateral' in result
