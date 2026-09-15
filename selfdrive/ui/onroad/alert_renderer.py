@@ -9,7 +9,6 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import Label
-from openpilot.selfdrive.ui.onroad.availability import availability_message
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -31,6 +30,11 @@ ALERT_HEIGHTS = {
 # Complete event/type pairs: even a routine event must show if it refuses entry.
 QUIET_ALERT_TYPES = frozenset({
   "startup/permanent",
+  "startupMaster/permanent", "startupNoControl/permanent", "dashcamMode/permanent",
+  "calibrationIncomplete/permanent", "calibrationRecalibrating/permanent",
+  "personalityChanged/warning", "userBookmark/permanent", "audioFeedback/permanent",
+  "manualSteeringRequired/userDisable", "manualLongitudinalRequired/warning",
+  "reverseGear/permanent", "silentReverseGear/permanent",
   "preLaneChangeLeft/warning", "preLaneChangeRight/warning", "laneChange/warning",
   "laneTurnLeft/warning", "laneTurnRight/warning",
   "experimentalModeSwitched/warning",
@@ -119,16 +123,18 @@ class AlertRenderer(Widget):
 
     # Severity is not an availability classification: NoEntryAlert and
     # calibration faults also use normal. Quiet only named routine notices;
-    # unknown/future faults, refusal reasons and all raised severities show.
-    quiet = (gui_app.sunnypilot_ui() and ss.alertStatus.raw == AlertStatus.normal
-             and ss.alertSize.raw != AlertSize.full and ss.alertType in QUIET_ALERT_TYPES)
+    # unknown/future faults and refusal reasons show. Reverse status is the
+    # sole routine full-screen notice; its noEntry/userDisable variants show.
+    quiet = (gui_app.sunnypilot_ui() and (ss.alertStatus.raw == AlertStatus.normal or
+             (ss.alertType == "startupMaster/permanent" and ss.alertStatus.raw == AlertStatus.userPrompt))
+             and (ss.alertSize.raw != AlertSize.full or
+                  ss.alertType in ("reverseGear/permanent", "silentReverseGear/permanent"))
+             and ss.alertType in QUIET_ALERT_TYPES)
     if ss.alertSize != 0 and not quiet:
       return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
-    # No popup does not mean ready. A blocked/initializing state machine may
-    # never have recognized an engage attempt and thus never select noEntry.
-    message = availability_message(sm, ui_state.started_frame, time.monotonic() - ui_state.started_time)
-    if message is not None:
-      return Alert(text1=message[0], text2=message[1], size=AlertSize.mid, status=AlertStatus.normal)
+    # Readiness diagnostics remain in the event streams and feedback recorder.
+    # Do not manufacture a persistent banner without an attempted action.
+    # Actual noEntry alerts and the process-loss watchdog above remain visible.
     return None
 
   def _render(self, rect: rl.Rectangle):

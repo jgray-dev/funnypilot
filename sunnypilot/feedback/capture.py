@@ -166,7 +166,7 @@ class Capture:
     start = event['created_at'] - PRE_SECONDS
     end = event['created_at'] + POST_SECONDS
     with _artifact(self.events / event['id'] / 'triage.jsonl') as out:
-      for name in ('lat_interp.jsonl.1', 'lat_interp.jsonl'):
+      for name in ('lat_interp.jsonl.1', 'lat_interp.jsonl', 'process_health.jsonl.1', 'process_health.jsonl'):
         try:
           source = open('/data/funnypilot_triage/' + name)
         except FileNotFoundError:

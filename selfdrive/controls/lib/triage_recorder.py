@@ -25,6 +25,9 @@ never grow unbounded (size-based rotation, .1 backup), import-light
 import json
 import os
 import time
+import copy
+import queue
+import threading
 
 TRIAGE_DIR = "/data/funnypilot_triage"
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024  # per file; one .1 backup is kept
@@ -64,6 +67,48 @@ class TriageRecorder:
       return True
     except Exception:
       return False
+
+
+class AsyncTriageRecorder:
+  """Bounded diagnostic writes outside the caller's real-time loop.
+
+  A stuck disk can lose diagnostics, never block controls or radar. One worker
+  and 32 queued records per process; enqueue success is not durable completion.
+  """
+  def __init__(self, name, directory=TRIAGE_DIR, max_bytes=DEFAULT_MAX_BYTES):
+    self.recorder = TriageRecorder(name, directory, max_bytes)
+    self.queue = queue.Queue(maxsize=32)
+    self.dropped = 0
+    self.thread = threading.Thread(target=self._run, name="triage-writer", daemon=True)
+    self.thread.start()
+
+  def write(self, record):
+    try:
+      row = copy.deepcopy(record)
+      row.setdefault("t", round(time.time(), 2))  # noqa: TID251
+      row["diagnostic_dropped"] = self.dropped
+      self.queue.put_nowait(row)
+      return True
+    except Exception:
+      self.dropped += 1
+      return False
+
+  def _run(self):
+    # Linux threads inherit the caller's real-time policy. Disk diagnostics
+    # must not retain controlsd's priority while draining the queue.
+    try:
+      os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+    except (AttributeError, OSError):
+      pass
+    while True:
+      row = self.queue.get()
+      try:
+        if not self.recorder.write(row):
+          self.dropped += 1
+      except Exception:
+        self.dropped += 1
+      finally:
+        self.queue.task_done()
 
 
 class LatInterpMonitor:

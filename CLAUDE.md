@@ -63,9 +63,9 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.6 — Key Files
+## Current version: 3.7.7 — Key Files
 
-Based on clean 3.7.5 `d8bec23cbe50f54e7f4aa53a94cc7078c6d3ab25`. Preserves its fix for the 3.7.1a
+Based on clean 3.7.6 `0cc713db1ba65b849471497914e278f0a5d26e83`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
@@ -111,9 +111,19 @@ Read-only work and local development remain available independently. Installatio
 and restart are distinct from source edits; honor the session's explicit scope.
 Investigation, fixes and activation state: `docs/astra-feedback-20260914.md`.
 
+3.7.7 investigation and remaining device-access limit: `docs/communication-3.7.7.md`.
+- `selfdrive/selfdrived/follow_distance.py`: main-loop button selection, revisioned
+  background persistence/readback; stale Params reads cannot undo a gap request.
+- `selfdrive/controls/lib/triage_recorder.py`: controlsd/radard/selfdrived use
+  AsyncTriageRecorder (32 queued records); durable IO stays out of real-time loops.
+- `selfdrive/selfdrived/process_health.py`: failed-service and recovery evidence,
+  original timestamps and last gap-button edge; no additional subscriptions.
+- `selfdrive/ui/onroad/alert_renderer.py`: no unsolicited availability fallback;
+  explicit routine notices are quiet. Preserve rejected actions and takeover alerts.
+
 ## Verification and device access
 
-- Use Python 3.11+; existing host environment: `/tmp/fp-audit-venv/bin/python`.
+- Use Python 3.11+; existing host environment: `/tmp/fp-comma-venv/bin/python`.
   Import-light pytest flags: `PYTHONPATH=. python -m pytest --noconftest -q
   -p no:cacheprovider -o addopts='' <tests>`. Full regression command and native-only
   exclusions are in `docs/controls-review-3.7.1a.md`. Do not trust leaked mock

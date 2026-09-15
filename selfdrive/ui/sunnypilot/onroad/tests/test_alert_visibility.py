@@ -49,11 +49,12 @@ def signal(kind, status='normal', size='mid'):
 
 
 @pytest.mark.parametrize('kind', [
-  'calibrationIncomplete/noEntry', 'calibrationIncomplete/permanent',
-  'calibrationInvalid/permanent', 'calibrationRecalibrating/permanent',
+  'calibrationIncomplete/noEntry', 'calibrationRecalibrating/noEntry',
+  'calibrationInvalid/permanent',
   'commIssue/noEntry', 'processNotRunning/noEntry', 'controlsInitializing/noEntry',
-  'startupNoCar/permanent', 'startupNoControl/permanent', 'futureFault/permanent',
+  'startupNoCar/permanent', 'startupNoControl/noEntry', 'futureFault/permanent',
   'laneChange/noEntry', 'cameraMalfunction/permanent',
+  'reverseGear/noEntry', 'reverseGear/userDisable', 'laneChangeBlocked/warning',
 ])
 def test_refusals_calibration_and_unknown_faults_are_visible(selector, kind):
   alert = selector['get_alert'](None, signal(kind))
@@ -64,7 +65,12 @@ def test_routine_notices_stay_quiet_but_never_hide_raised_severity(selector):
   for kind in selector['QUIET_ALERT_TYPES']:
     assert selector['get_alert'](None, signal(kind)) is None
     for status, size in [('userPrompt','mid'), ('critical','full'), ('normal','full')]:
-      assert selector['get_alert'](None, signal(kind,status,size)) is not None
+      if kind == 'startupMaster/permanent' and status == 'userPrompt':
+        assert selector['get_alert'](None, signal(kind,status,size)) is None
+      elif kind in ('reverseGear/permanent', 'silentReverseGear/permanent') and status == 'normal':
+        assert selector['get_alert'](None, signal(kind,status,size)) is None
+      else:
+        assert selector['get_alert'](None, signal(kind,status,size)) is not None
   selector['gui_app'].sunnypilot_ui = lambda:False
   assert selector['get_alert'](None, signal('laneChange/warning')) is not None
 
@@ -115,13 +121,13 @@ def test_readiness_gates_both_model_and_follow_distance_projection():
   assert 'self._follow_line.draw' in bodies
 
 
-def test_no_selected_popup_still_explains_blocked_engagement(selector):
+def test_no_attempt_does_not_manufacture_blocked_engagement_banner(selector):
   sm = signal('', size='none')
   sm['selfdriveState'].engageable = False
-  assert selector['get_alert'](None, sm).text1 == 'Engagement blocked'
+  assert selector['get_alert'](None, sm) is None
   sm['liveCalibration'].calStatus = 'uncalibrated'
   sm['liveCalibration'].calPerc = 37
-  assert '37%' in selector['get_alert'](None, sm).text2
+  assert selector['get_alert'](None, sm) is None
   sm['liveCalibration'].calStatus = 'calibrated'
   sm['selfdriveState'].engageable = True
   assert selector['get_alert'](None, sm) is None
@@ -153,10 +159,10 @@ def test_blocking_events_explain_unrecognized_button_and_include_mads():
 
 
 @pytest.mark.parametrize('service', ['selfdriveState','liveCalibration','modelV2','controlsState','longitudinalPlan'])
-def test_invalid_or_missing_services_are_visible_without_selected_alert(selector, service):
+def test_no_selected_alert_does_not_add_readiness_banners(selector, service):
   sm = signal('', size='none')
   sm.valid[service] = False
-  assert selector['get_alert'](None, sm) is not None
+  assert selector['get_alert'](None, sm) is None
   assert availability_message(sm,10,4) is None  # bounded startup grace
   sm.valid[service] = True
   assert selector['get_alert'](None, sm) is None

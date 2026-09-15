@@ -12,7 +12,7 @@ from sunnypilot.astra_link.core import Journal, canonical, digest, identity_equa
 from sunnypilot.astra_link.daemon import Device
 from sunnypilot.astra_link.execution import Lease, probe_identity, run_process
 from sunnypilot.astra_link.files import Files
-from sunnypilot.astra_link.state import Safety
+from sunnypilot.astra_link.state import Safety, manager_flag
 from openpilot.tools.astra_link import configure
 
 IDENTITY = {"branch": "test", "commit": "1" * 40, "dirty": False, "version": "3.7.3e"}
@@ -556,3 +556,8 @@ def test_expired_receipts_do_not_permanently_exhaust_command_capacity(tmp_path):
   private_write(path, {'version': 1, 'receipts': receipts, 'expires': dict.fromkeys(receipts, 1)})
   Journal(path).record({'id': 'new', 'digest': 'b' * 64, 'expires': 9999999999999})
   assert private_read(path)['receipts'] == {'new': 'b' * 64}
+
+
+@pytest.mark.parametrize("value, expected", [(True, True), (False, False), (None, None), (b"0", None), (b"1", None), (0, None), (1, None)])
+def test_manager_flag_uses_typed_params_api(value, expected):
+  assert manager_flag(value) is expected

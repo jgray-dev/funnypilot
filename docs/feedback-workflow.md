@@ -26,6 +26,9 @@ lateral delay/roll/angle offset, signed wheel rate, motion credit, friction inpu
 and contribution, effective torque tuning, bump/override/lane-change scales, and
 requested versus applied torque. Every copied service has its original publish
 and receive timestamp and validity. Missing/stale diagnostic taps are explicit.
+Communication-fault transitions, exact failed services, receive ages, recovery
+duration and the last gap-button edge are also retained in the bounded
+`process_health.jsonl` history and copied into matching feedback triage windows.
 No new IPC subscribers or compiled schema fields are added. The pre-event memory
 ring remains capped at 4,500 samples; uploads stay separate from capture/control.
 

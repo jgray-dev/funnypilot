@@ -12,7 +12,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
-from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, RadarTracksMonitor
+from openpilot.selfdrive.controls.lib.triage_recorder import AsyncTriageRecorder, RadarTracksMonitor
 
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
@@ -310,7 +310,7 @@ def main() -> None:
   # radar_tracks.jsonl). 1 Hz; every operation best-effort.
   # v3.3.1: startup identity record — car, radar fw versions (the device
   # fingerprint), and whether the 0x7D0 enable claimed success.
-  triage = RadarTracksMonitor(TriageRecorder("radar_tracks"))
+  triage = RadarTracksMonitor(AsyncTriageRecorder("radar_tracks"))
   triage.log_identity(CP)
 
   while 1:

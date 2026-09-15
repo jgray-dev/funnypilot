@@ -20,6 +20,9 @@ from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
+from openpilot.selfdrive.selfdrived.process_health import ProcessHealthMonitor
+from openpilot.selfdrive.selfdrived.follow_distance import FollowDistanceSetting
+from openpilot.selfdrive.controls.lib.triage_recorder import AsyncTriageRecorder
 
 from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
@@ -131,6 +134,7 @@ class SelfdriveD(CruiseHelper):
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.process_health = ProcessHealthMonitor(AsyncTriageRecorder("process_health"))
     self.not_running_prev = None
     self.experimental_mode = False
     self.personality = get_sanitize_int_param(
@@ -139,6 +143,7 @@ class SelfdriveD(CruiseHelper):
       max(log.LongitudinalPersonality.schema.enumerants.values()),
       self.params
     )
+    self.follow_distance = FollowDistanceSetting(self.personality)
     self.recalibrating_seen = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
@@ -368,7 +373,9 @@ class SelfdriveD(CruiseHelper):
     # generic catch-all. ideally, a more specific event should be added above instead
     has_disable_events = self.events.contains(ET.NO_ENTRY) and (self.events.contains(ET.SOFT_DISABLE) or self.events.contains(ET.IMMEDIATE_DISABLE))
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
-    if not self.sm.all_checks() and no_system_errors:
+    checks_failed = not self.sm.all_checks()
+    comm_fault = checks_failed and no_system_errors
+    if comm_fault:
       if not self.sm.all_alive():
         self.events.add(EventName.commIssue)
       elif not self.sm.all_freq_ok():
@@ -386,6 +393,8 @@ class SelfdriveD(CruiseHelper):
         self.logged_comm_issue = logs
     else:
       self.logged_comm_issue = None
+
+    self.process_health.update(self.sm, CS, time.monotonic(), checks_failed, self.enabled, self.personality)
 
     if not self.CP.notCar:
       if not self.sm['livePose'].posenetOK:
@@ -452,8 +461,7 @@ class SelfdriveD(CruiseHelper):
     if self.CP.openpilotLongitudinalControl:
       if any(not be.pressed and be.type == ButtonType.gapAdjustCruise for be in CS.buttonEvents):
         if not self.experimental_mode_switched:
-          self.personality = (self.personality - 1) % 3
-          self.params.put_nonblocking('LongitudinalPersonality', self.personality)
+          self.personality = self.follow_distance.cycle()
           self.events.add(EventName.personalityChanged)
         self.experimental_mode_switched = False
 
@@ -579,6 +587,7 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = self.events_sp.names.copy()
 
   def step(self):
+    self.personality = self.follow_distance.snapshot()
     CS = self.data_sample()
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
@@ -592,12 +601,16 @@ class SelfdriveD(CruiseHelper):
     self.CS_prev = CS
 
   def params_thread(self, evt):
+    follow_sync_failed = False
     while not evt.is_set():
       self.is_metric = self.params.get_bool("IsMetric")
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
-      self.personality = self.params.get("LongitudinalPersonality", return_default=True)
+      follow_sync_ok = self.follow_distance.sync(self.params)
+      if not follow_sync_ok and not follow_sync_failed:
+        cloudlog.warning("Follow-distance setting persistence failed; retaining requested setting and retrying")
+      follow_sync_failed = not follow_sync_ok
 
       self.mads.read_params()
       time.sleep(0.1)

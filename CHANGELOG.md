@@ -1,3 +1,20 @@
+## 3.7.7 — 2026-09-15
+
+- Fix a demonstrated follow-distance Params race: background reads cannot undo
+  button selections while writes are pending. Persist and verify in the worker;
+  keep disk IO outside the button/control path and reject invalid stored enums.
+- Isolate control/radar diagnostic disk writes behind bounded background queues;
+  remove controlsd's duplicate liveDelay subscription.
+- Record exact service failures/recoveries and recent gap-button context in a
+  bounded process-health history; include it in feedback bundles.
+- Remove the unsolicited engagement/readiness banners. Quiet routine lane-change,
+  personality, calibration-progress, bookmark, mode and reverse-status notices;
+  actual rejected-action, fault and takeover alerts remain visible.
+- Correct Astra's offroad monitor for the typed BOOL Params API.
+- The device was unreachable during investigation. The available 3.7.6 recording
+  contains no gap-button or communication failure, so the reported takeover and
+  transient alerts are not yet proven fixed. See docs/communication-3.7.7.md.
+
 ## 3.7.6 — 2026-09-14
 
 - Fix stale steering-limit feedback in MADS lateral-only mode: update while lateral

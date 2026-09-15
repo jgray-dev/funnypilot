@@ -156,3 +156,31 @@ def test_map_cap_gas_gate_and_ribbon_use_one_bounded_target():
   scc.gas_gating_active=False
   scc._update_gas_gate(speed,25.)
   assert scc.gas_gating_active and not with_feedback
+
+
+def test_triage_bundle_includes_process_health_window(tmp_path, monkeypatch):
+  import builtins
+  import openpilot.sunnypilot.feedback.capture as module
+
+  source = tmp_path / 'source'
+  source.mkdir()
+  (source / 'process_health.jsonl').write_text(
+    json.dumps({'t': 1000, 'kind': 'process_health', 'failed': {'longitudinalPlan': {'valid': False}}}) + '\n' +
+    json.dumps({'t': 900, 'kind': 'process_health', 'failed': {}}) + '\n')
+  (source / 'lat_interp.jsonl').write_text(json.dumps({'t': 1000, 'n': 100}) + '\n')
+  original_open = builtins.open
+
+  def redirected(path, *args, **kwargs):
+    if isinstance(path, str) and path.startswith('/data/funnypilot_triage/'):
+      path = source / path.rsplit('/', 1)[-1]
+    return original_open(path, *args, **kwargs)
+
+  monkeypatch.setattr(module, 'open', redirected, raising=False)
+  capture = module.Capture.__new__(module.Capture)
+  capture.events = tmp_path / 'events'
+  (capture.events / 'event').mkdir(parents=True)
+  capture._triage({'created_at': 1000, 'id': 'event'})
+  rows = [json.loads(line) for line in (capture.events / 'event' / 'triage.jsonl').read_text().splitlines()]
+  assert len(rows) == 2
+  assert rows[0]['n'] == 100
+  assert rows[1]['failed']['longitudinalPlan']['valid'] is False

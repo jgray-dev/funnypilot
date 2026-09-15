@@ -7,6 +7,11 @@ import time
 from sunnypilot.feedback.protocol import MOTION, read_json
 
 
+def manager_flag(value):
+  # Params.get returns typed bool for BOOL keys; missing values remain unknown.
+  return value if type(value) is bool else None
+
+
 class Safety:
   def __init__(self, clock=time.monotonic):
     self.clock = clock
@@ -88,9 +93,7 @@ class Safety:
       while not stop.is_set():
         sm.update(100)
         onroad, offroad = params.get("IsOnroad"), params.get("IsOffroad")
-        def flag(value):
-          return True if value == b"1" else False if value == b"0" else None
-        self.update(sm, flag(onroad), flag(offroad))
+        self.update(sm, manager_flag(onroad), manager_flag(offroad))
     except Exception:
       # Failure becomes unknown immediately, not a cached parked permission.
       with self.lock:

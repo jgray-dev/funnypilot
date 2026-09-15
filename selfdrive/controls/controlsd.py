@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_c
 from openpilot.selfdrive.controls.lib.lat_smooth import LatSmoother
 from openpilot.selfdrive.controls.lib.knot_filter import KnotFilter
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.selfdrive.controls.lib.triage_recorder import TriageRecorder, LatInterpMonitor
+from openpilot.selfdrive.controls.lib.triage_recorder import AsyncTriageRecorder, LatInterpMonitor
 from openpilot.sunnypilot.feedback.control_tap import ControlTap
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -47,7 +47,7 @@ class Controls(ControlsExt):
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
                                    'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
-                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'liveDelay'] + self.sm_services_ext,
+                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance'] + self.sm_services_ext,
                                   poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'] + self.pm_services_ext)
 
@@ -73,7 +73,7 @@ class Controls(ControlsExt):
     # FunnyPilot v3.2.7: triage flight recorder — 1 Hz onroad evidence for the
     # recurring "smoothing feels off after sitting parked" report. Viewable and
     # copyable from the web UI (Logs button). Best-effort: never breaks controls.
-    self.triage = LatInterpMonitor(TriageRecorder("lat_interp"))
+    self.triage = LatInterpMonitor(AsyncTriageRecorder("lat_interp"))
     self.feedback_control = ControlTap()
 
     self.pose_calibrator = PoseCalibrator()
