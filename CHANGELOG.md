@@ -1,3 +1,16 @@
+## 3.7.8 — 2026-09-16
+
+- Fix deviceState publication stalling behind the shared Params disk lock, the
+  failed service recorded in all four driving fault episodes on clean 3.7.7.
+  Clearing an absent offroad alert previously acquired that lock every tick.
+- Move hardware status writes/removals to one bounded, coalescing worker. Skip
+  unchanged values, retry failed writes, and verify readback. Engagement metadata,
+  uptime, battery persistence and offroad alerts no longer block the publisher.
+- Preserve communication-fault detection, takeover alerts, thermal/ignition gates,
+  and the existing shutdown/cycle command ordering. No controller gain changes.
+- Native fault injection reproduces the stall on 3.7.7 and passes with the fix;
+  real vehicle validation remains necessary. See docs/communication-3.7.8.md.
+
 ## 3.7.7 — 2026-09-15
 
 - Fix a demonstrated follow-distance Params race: background reads cannot undo

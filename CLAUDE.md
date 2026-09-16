@@ -63,13 +63,14 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.7 — Key Files
+## Current version: 3.7.8 — Key Files
 
-Based on clean 3.7.6 `0cc713db1ba65b849471497914e278f0a5d26e83`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.7 `daef46d950d30a9d9993951d40b78c6d09833e9c`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. No vehicle validation or flash.
+verification limits: `docs/engagement-3.7.5.md`. Current deployment/validation
+status: `docs/communication-3.7.8.md`.
 
 - **Reader budget rule.** Never add a `carState` or `deviceState` subscriber:
   normal C3X driving has 14 and 12 readers, and deviceState reaches 15 with
@@ -111,7 +112,14 @@ Read-only work and local development remain available independently. Installatio
 and restart are distinct from source edits; honor the session's explicit scope.
 Investigation, fixes and activation state: `docs/astra-feedback-20260914.md`.
 
-3.7.7 investigation and remaining device-access limit: `docs/communication-3.7.7.md`.
+3.7.8 device-status stall investigation: `docs/communication-3.7.8.md`.
+- `system/hardware/params_writer.py`: one bounded worker coalesces hardware status
+  persistence; no status writes or alert removals in the deviceState publishing
+  loop. Shutdown/cycle commands retain their existing ordering.
+- `system/hardware/tests/test_hardwared_storage.py`: native Params lock fault
+  injection against the production hardware loop using isolated storage/transport.
+
+Earlier follow-distance investigation: `docs/communication-3.7.7.md`.
 - `selfdrive/selfdrived/follow_distance.py`: main-loop button selection, revisioned
   background persistence/readback; stale Params reads cannot undo a gap request.
 - `selfdrive/controls/lib/triage_recorder.py`: controlsd/radard/selfdrived use

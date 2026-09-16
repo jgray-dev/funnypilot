@@ -19,8 +19,9 @@ DELAY_SHUTDOWN_TIME_S = 300 # Wait at least DELAY_SHUTDOWN_TIME_S seconds after 
 VOLTAGE_SHUTDOWN_MIN_OFFROAD_TIME_S = 60
 
 class PowerMonitoring:
-  def __init__(self):
+  def __init__(self, status_writer=None):
     self.params = Params()
+    self.status_writer = status_writer
     self.last_measurement_time = None           # Used for integration delta
     self.last_save_time = 0                     # Used for saving current value in a param
     self.power_used_uWh = 0                     # Integrated power usage in uWh since going into offroad
@@ -56,7 +57,10 @@ class PowerMonitoring:
       self.car_battery_capacity_uWh = max(self.car_battery_capacity_uWh, 0)
       self.car_battery_capacity_uWh = min(self.car_battery_capacity_uWh, CAR_BATTERY_CAPACITY_uWh)
       if now - self.last_save_time >= 10:
-        self.params.put_nonblocking("CarBatteryCapacity", int(self.car_battery_capacity_uWh))
+        if self.status_writer is None:
+          self.params.put_nonblocking("CarBatteryCapacity", int(self.car_battery_capacity_uWh))
+        else:
+          self.status_writer.put("CarBatteryCapacity", int(self.car_battery_capacity_uWh))
         self.last_save_time = now
 
       # First measurement, set integration time

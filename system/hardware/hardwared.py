@@ -22,6 +22,7 @@ from openpilot.system.loggerd.config import get_available_percent
 from openpilot.system.statsd import statlog
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
+from openpilot.system.hardware.params_writer import HardwareParamsWriter
 from openpilot.system.hardware.fan_controller import FanController
 from openpilot.system.version import terms_version, training_version, get_build_metadata, terms_version_sp
 
@@ -49,16 +50,6 @@ THERMAL_BANDS = OrderedDict({
 
 # Override to highest thermal band when offroad and above this temp
 OFFROAD_DANGER_TEMP = 75
-
-prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
-
-
-
-def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_text: str | None=None):
-  if prev_offroad_states.get(offroad_alert, None) == (show_alert, extra_text):
-    return
-  prev_offroad_states[offroad_alert] = (show_alert, extra_text)
-  set_offroad_alert(offroad_alert, show_alert, extra_text)
 
 def touch_thread(end_event):
   count = 0
@@ -200,7 +191,8 @@ def hardware_thread(end_event, hw_queue) -> None:
   offroad_cycle_count = 0
 
   params = Params()
-  power_monitor = PowerMonitoring()
+  status_writer = HardwareParamsWriter(params, report=cloudlog.event)
+  power_monitor = PowerMonitoring(status_writer=status_writer)
 
   uptime_offroad: float = params.get("UptimeOffroad", return_default=True)
   uptime_onroad: float = params.get("UptimeOnroad", return_default=True)
@@ -330,13 +322,13 @@ def hardware_thread(end_event, hw_queue) -> None:
     is_unsupported_combo = TICI and HARDWARE.get_device_type() == "tici" and build_metadata.channel_type != "tici"
     startup_conditions["not_tici"] = not is_unsupported_combo
     onroad_conditions["not_tici"] = not is_unsupported_combo
-    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
+    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel, params=status_writer)
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.danger
     extra_text = f"{offroad_comp_temp:.1f}C"
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
-    set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
+    set_offroad_alert("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text, params=status_writer)
 
     # Handle offroad/onroad transition
     should_start = all(onroad_conditions.values())
@@ -344,13 +336,13 @@ def hardware_thread(end_event, hw_queue) -> None:
       should_start = should_start and all(startup_conditions.values())
 
     if should_start != should_start_prev or (count == 0):
-      params.put_bool("IsEngaged", False)
+      status_writer.put_bool("IsEngaged", False)
       engaged_prev = False
 
     if sm.updated['selfdriveState']:
       engaged = sm['selfdriveState'].enabled
       if engaged != engaged_prev:
-        params.put_bool("IsEngaged", engaged)
+        status_writer.put_bool("IsEngaged", engaged)
         engaged_prev = engaged
 
       try:
@@ -389,7 +381,7 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # GitHub runner auto off: 9V is used as the threshold because most desktop runners
     # will rarely exceed 5V so 9V is set as our buffer between desk use and car use.
-    params.put_bool_nonblocking("GithubRunnerSufficientVoltage", ((voltage or 0) and voltage > 9000))
+    status_writer.put_bool("GithubRunnerSufficientVoltage", ((voltage or 0) and voltage > 9000))
 
     power_monitor.calculate(voltage, onroad_conditions["ignition"])
     msg.deviceState.offroadPowerUsageUwh = power_monitor.get_power_used()
@@ -450,11 +442,11 @@ def hardware_thread(end_event, hw_queue) -> None:
       # save last one before going onroad
       if rising_edge_started:
         try:
-          params.put("LastOffroadStatusPacket", dat)
+          status_writer.put("LastOffroadStatusPacket", dat)
         except Exception:
           cloudlog.exception("failed to save offroad status")
 
-    params.put_bool_nonblocking("NetworkMetered", msg.deviceState.networkMetered)
+    status_writer.put_bool("NetworkMetered", msg.deviceState.networkMetered)
 
     now_ts = time.monotonic()
     if off_ts:
@@ -464,11 +456,13 @@ def hardware_thread(end_event, hw_queue) -> None:
     last_uptime_ts = now_ts
 
     if (count % int(60. / DT_HW)) == 0:
-      params.put("UptimeOffroad", uptime_offroad)
-      params.put("UptimeOnroad", uptime_onroad)
+      status_writer.put("UptimeOffroad", uptime_offroad)
+      status_writer.put("UptimeOnroad", uptime_onroad)
 
     count += 1
     should_start_prev = should_start
+
+  status_writer.close()
 
 
 def main():
