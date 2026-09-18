@@ -1,5 +1,10 @@
 # 3.7.8 minimap/SLA stall — September 16 investigation
 
+Follow-up: [September 18 SSH investigation](minimap-cpu-starvation-20260918.md)
+finds CPU 4 kernel workqueue starvation, including block-device work, coincident
+with further map publication stalls. The findings below describe the evidence
+available during the earlier read-only Astra investigation.
+
 ## Scope and identity
 
 The owner reported an approximately four-minute minimap freeze around 09:40
