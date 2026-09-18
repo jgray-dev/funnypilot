@@ -4,6 +4,19 @@ import threading
 from pathlib import Path
 
 from openpilot.selfdrive.controls.lib.triage_recorder import AsyncTriageRecorder, TriageRecorder
+from openpilot.selfdrive.controls.lib import triage_recorder
+
+
+def test_worker_configures_scheduling_before_disk_io(monkeypatch):
+  caller = threading.get_ident()
+  calls = []
+  monkeypatch.setattr(triage_recorder, 'configure_background_thread', lambda: calls.append(('configure', threading.get_ident())))
+  monkeypatch.setattr(TriageRecorder, 'write', lambda self, row: calls.append(('write', threading.get_ident())) or True)
+  recorder = AsyncTriageRecorder('scheduling')
+  recorder.write({'i': 1})
+  recorder.queue.join()
+  assert [kind for kind, _ in calls] == ['configure', 'write']
+  assert calls[0][1] == calls[1][1] != caller
 
 
 def test_blocked_disk_keeps_caller_nonblocking_and_queue_bounded(monkeypatch):

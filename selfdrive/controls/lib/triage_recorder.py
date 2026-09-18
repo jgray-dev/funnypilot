@@ -29,6 +29,8 @@ import copy
 import queue
 import threading
 
+from openpilot.common.thread_config import configure_background_thread
+
 TRIAGE_DIR = "/data/funnypilot_triage"
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024  # per file; one .1 backup is kept
 
@@ -94,12 +96,7 @@ class AsyncTriageRecorder:
       return False
 
   def _run(self):
-    # Linux threads inherit the caller's real-time policy. Disk diagnostics
-    # must not retain controlsd's priority while draining the queue.
-    try:
-      os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
-    except (AttributeError, OSError):
-      pass
+    configure_background_thread()
     while True:
       row = self.queue.get()
       try:

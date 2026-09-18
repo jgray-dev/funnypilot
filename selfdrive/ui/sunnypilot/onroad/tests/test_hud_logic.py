@@ -13,6 +13,10 @@ Covered:
     device that will not show you its settings screen
 """
 import math
+import json
+import os
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,6 +33,31 @@ to_ego_frame = _rm.to_ego_frame
 bearing_lerp = _rm.bearing_lerp
 edge_fade = _rm.edge_fade
 halo_spec = _ss.halo_spec
+
+
+def test_minimap_expires_and_recovers_shared_position(tmp_path, monkeypatch):
+  position = tmp_path / 'LastGPSPosition'
+  position.write_text(json.dumps({'latitude': 1.0, 'longitude': 2.0, 'bearing': 0.0}))
+  values = {'MapTargetVelocities': '[]', 'MapSpeedLimit': 0.0, 'NextMapSpeedLimit': None}
+  mem = SimpleNamespace(get_param_path=lambda key: str(position),
+                        get=lambda key: position.read_text() if key == 'LastGPSPosition' else values.get(key))
+  widget = _rm.RouteMap()
+  reasons = []
+  monkeypatch.setattr(widget, '_mem', lambda: mem)
+  monkeypatch.setattr(widget, '_why', reasons.append)
+  widget._poll(10.)
+  assert widget._have_fix
+  widget._raw = [('cached route',)]
+  widget._raw_corners = [('cached corner',)]
+  old = time.time() - 10.  # noqa: TID251 - filesystem wall time
+  os.utime(position, (old, old))
+  widget._poll(11.)
+  assert not widget._have_fix
+  assert widget._raw == [] and widget._raw_corners == []
+  assert 'stale' in reasons[-1]
+  os.utime(position, None)
+  widget._poll(12.)
+  assert widget._have_fix
 
 
 class _Rect:

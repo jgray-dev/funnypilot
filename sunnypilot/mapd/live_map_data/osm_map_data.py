@@ -17,17 +17,20 @@ from openpilot.sunnypilot.navd.helpers import Coordinate
 class OsmMapData(BaseMapData):
   def __init__(self):
     super().__init__()
-    self.mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else self.params
+    self.mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else Params()
 
   def update_location(self) -> None:
     location = self.sm['liveLocationKalman']
-    self.localizer_valid = (location.status == log.LiveLocationKalman.Status.valid) and location.positionGeodetic.valid
+    self.localizer_valid = bool(self.location_is_fresh() and location.gpsOK and
+                                location.status == log.LiveLocationKalman.Status.valid and location.positionGeodetic.valid and
+                                location.calibratedOrientationNED.valid)
 
     if self.localizer_valid:
       self.last_bearing = math.degrees(location.calibratedOrientationNED.value[2])
       self.last_position = Coordinate(location.positionGeodetic.value[0], location.positionGeodetic.value[1])
 
-    if self.last_position is None:
+    # Do not refresh the shared file's timestamp with a retained/stale fix.
+    if not self.localizer_valid:
       return
 
     params = {

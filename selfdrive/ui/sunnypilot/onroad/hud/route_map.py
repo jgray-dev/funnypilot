@@ -63,6 +63,7 @@ and this module is imported by a process that also draws the offroad screen.
 """
 import json
 import math
+import os
 import time
 
 import pyray as rl
@@ -89,6 +90,7 @@ RANGE_M = 400.0        # how far up the strip the route runs
 # twenty of them.
 BEHIND_M = 170.0       # keep this much of the road already driven, to fade out
 POLL_S = 1.0           # source data is 1 Hz; parsing faster buys nothing
+POSITION_MAX_AGE_S = 3.0
 WHY_REPEAT_S = 30.0    # how often an unchanged 'no route' reason repeats in the log
 MAX_POINTS = 400       # hard bound on how much JSON we will walk
 RING_M = (100.0, 200.0, 300.0)
@@ -669,6 +671,14 @@ class RouteMap:
 
     try:
       pos_raw = None
+      # A readable shared-memory value can survive a stopped publisher. Use
+      # wall time for filesystem mtimes; never mix them with monotonic `now`.
+      stamp = os.stat(mem.get_param_path("LastGPSPosition")).st_mtime
+      age = time.time() - stamp  # noqa: TID251 - filesystem wall time
+      if not 0.0 <= age <= POSITION_MAX_AGE_S:
+        self._raw, self._raw_corners, self._have_fix = [], [], False
+        self._why("LastGPSPosition stale - waiting on a fresh localizer fix")
+        return
       pos_raw = mem.get("LastGPSPosition")
       pos = json.loads(pos_raw) if pos_raw else None
       lat0 = float(pos["latitude"])

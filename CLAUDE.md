@@ -119,6 +119,16 @@ Investigation, fixes and activation state: `docs/astra-feedback-20260914.md`.
 - `system/hardware/tests/test_hardwared_storage.py`: native Params lock fault
   injection against the production hardware loop using isolated storage/transport.
 
+September 18 minimap update: `docs/minimap-fix-20260918.md`.
+- `selfdrived` uses housekeeping CPUs 0–3 at its existing priority; keep it off
+  CPU 4, where card/controlsd need headroom for kernel block-device workers.
+- `common/thread_config.py`: background workers must shed both inherited FIFO
+  scheduling and control-core affinity. Changing only priority can starve them.
+- `mapd_manager.py`: disk maintenance runs in one worker; live map publication
+  uses shared memory and fresh localizer input, without disk housekeeping.
+- `sunnypilot/mapd/tests/test_map_pipeline.py`: native private-Params lock fault
+  injection, source freshness/recovery, alert transitions and catch-up regression.
+
 Earlier follow-distance investigation: `docs/communication-3.7.7.md`.
 - `selfdrive/selfdrived/follow_distance.py`: main-loop button selection, revisioned
   background persistence/readback; stale Params reads cannot undo a gap request.

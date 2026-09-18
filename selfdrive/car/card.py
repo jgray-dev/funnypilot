@@ -9,6 +9,7 @@ from cereal import car, log, custom
 
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
+from openpilot.common.thread_config import configure_background_thread
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
 from opendbc.car import DT_CTRL, structs
@@ -308,6 +309,7 @@ class Car:
     self.CS_SP_prev = CS_SP
 
   def params_thread(self, evt):
+    configure_background_thread()
     while not evt.is_set():
       self.is_metric = self.params.get_bool("IsMetric")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl

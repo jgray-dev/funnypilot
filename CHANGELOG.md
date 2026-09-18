@@ -1,5 +1,20 @@
 ## 3.7.8 — 2026-09-16
 
+September 18 minimap reliability update:
+
+- Move selfdrived off saturated CPU 4 onto housekeeping CPUs 0–3, keeping its
+  existing real-time priority and message pacing. Give Params/diagnostic workers
+  normal scheduling and housekeeping affinity instead of inheriting core 4.
+- Separate map publication from filesystem housekeeping and alert persistence
+  in one bounded worker. Skip redundant alert writes/removals and missed-tick
+  catch-up bursts after a delay.
+- Reject stale/invalid localizer input for map publication, and expire old shared
+  minimap positions without adding alert banners. No controller gains, reader
+  lists, compiled schema, or Params keys change.
+- Native isolated Params-lock fault injection, freshness/recovery checks, and
+  worker-affinity tests pass. Onroad timing and freeze recurrence still require
+  drive validation. See docs/minimap-fix-20260918.md.
+
 - Fix deviceState publication stalling behind the shared Params disk lock, the
   failed service recorded in all four driving fault episodes on clean 3.7.7.
   Clearing an absent offroad alert previously acquired that lock every tick.

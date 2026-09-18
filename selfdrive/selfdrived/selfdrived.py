@@ -11,6 +11,7 @@ from msgq.visionipc import VisionIpcClient, VisionStreamType
 
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
+from openpilot.common.thread_config import HOUSEKEEPING_CPUS, configure_background_thread
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
@@ -601,6 +602,7 @@ class SelfdriveD(CruiseHelper):
     self.CS_prev = CS
 
   def params_thread(self, evt):
+    configure_background_thread()
     follow_sync_failed = False
     while not evt.is_set():
       self.is_metric = self.params.get_bool("IsMetric")
@@ -629,7 +631,11 @@ class SelfdriveD(CruiseHelper):
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  # card + controlsd already use ~78% of core 4 on C3X. Sharing it with
+  # selfdrived starved kernel block-device workers for minutes. Let the
+  # scheduler place this message-driven loop across the housekeeping cores;
+  # preserve its real-time priority and existing carState pacing.
+  config_realtime_process(list(HOUSEKEEPING_CPUS), Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 

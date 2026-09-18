@@ -10,21 +10,19 @@ import platform
 import os
 import glob
 import shutil
+import threading
+import time
 from datetime import datetime
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import Ratekeeper, config_realtime_process
+from openpilot.common.realtime import config_realtime_process
+from openpilot.common.thread_config import HOUSEKEEPING_CPUS, configure_background_thread
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.sunnypilot.mapd.live_map_data.osm_map_data import OsmMapData
 from openpilot.system.hardware.hw import Paths
 from openpilot.sunnypilot.mapd import MAPD_PATH
 from openpilot.sunnypilot.mapd.mapd_installer import VERSION, update_installed_version
-
-# PFEIFER - MAPD {{
-params = Params()
-mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else params
-# }} PFEIFER - MAPD
 
 
 def get_files_for_cleanup() -> list[str]:
@@ -55,7 +53,7 @@ def cleanup_old_osm_data(files_to_remove: list[str]) -> None:
       shutil.rmtree(file, ignore_errors=False)
 
 
-def request_refresh_osm_location_data(nations: list[str], states: list[str] | None = None) -> None:
+def request_refresh_osm_location_data(nations: list[str], states: list[str] | None = None, *, params, mem_params) -> None:
   params.put("OsmDownloadedDate", str(datetime.now().timestamp()))
   params.put_bool("OsmDbUpdatesCheck", False)
 
@@ -97,43 +95,70 @@ def filter_nations_and_states(nations: list[str], states: list[str] | None = Non
   return nations, states or []
 
 
-def update_osm_db() -> None:
+def update_osm_db(params, mem_params) -> None:
   if params.get_bool("OsmDbUpdatesCheck"):
     cleanup_old_osm_data(get_files_for_cleanup())
     country = params.get("OsmLocationName", return_default=True)
     state = params.get("OsmStateName", return_default=True)
     filtered_nations, filtered_states = filter_nations_and_states([country], [state])
-    request_refresh_osm_location_data(filtered_nations, filtered_states)
+    request_refresh_osm_location_data(filtered_nations, filtered_states, params=params, mem_params=mem_params)
 
-  if not mem_params.get("OSMDownloadBounds"):
+  if mem_params.get("OSMDownloadBounds") is None:
     mem_params.put("OSMDownloadBounds", "")
 
-  if not mem_params.get("LastGPSPosition"):
-    mem_params.put("LastGPSPosition", "{}")
+
+def maintenance_thread(stop_event):
+  """One worker owns disk IO; no queued jobs/threads accumulate during a stall."""
+  configure_background_thread()
+  initialized = False
+  last_alert = None
+  failing = False
+  while not stop_event.is_set():
+    started = time.monotonic()
+    try:
+      if not initialized:
+        params = Params()
+        mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else params
+        os.makedirs(Paths.mapd_root(), exist_ok=True)
+        if params.get("MapdVersion") != VERSION:
+          update_installed_version(VERSION, params)
+        initialized = True
+
+      show_alert = bool(get_files_for_cleanup() and params.get_bool("OsmLocal"))
+      if last_alert is None or show_alert != last_alert:
+        # In particular, do not lock Params to clear an already absent alert.
+        if show_alert or params.get("Offroad_OSMUpdateRequired") is not None:
+          set_offroad_alert("Offroad_OSMUpdateRequired", show_alert,
+                            "This alert will be cleared when new maps are downloaded.", params=params)
+        # Native Params ignores mutation return codes. Retry if readback failed.
+        last_alert = show_alert if bool(params.get("Offroad_OSMUpdateRequired")) == show_alert else None
+      update_osm_db(params, mem_params)
+      failing = False
+    except Exception:
+      if not failing:
+        cloudlog.exception("mapd maintenance failed; map publication remains independent")
+      failing = True
+    elapsed = time.monotonic() - started
+    if elapsed > 2.0:
+      cloudlog.event("mapd_maintenance_delayed", duration_s=round(elapsed, 3))
+    stop_event.wait(1.0)
 
 
-def main_thread():
-  update_installed_version(VERSION, params)
-  config_realtime_process([0, 1, 2, 3], 5)
-
-  rk = Ratekeeper(1, print_delay_threshold=None)
+def main_thread(stop_event=None):
+  stop_event = threading.Event() if stop_event is None else stop_event
+  config_realtime_process(list(HOUSEKEEPING_CPUS), 5)
   live_map_sp = OsmMapData()
-
-  # Create folder needed for OSM
+  worker = threading.Thread(target=maintenance_thread, args=(stop_event,), name="map-maintenance", daemon=True)
+  worker.start()
   try:
-    os.mkdir(Paths.mapd_root())
-  except FileExistsError:
-    pass
-  except PermissionError:
-    cloudlog.exception(f"mapd: failed to make {Paths.mapd_root()}")
-
-  while True:
-    show_alert = get_files_for_cleanup() and params.get_bool("OsmLocal")
-    set_offroad_alert("Offroad_OSMUpdateRequired", show_alert, "This alert will be cleared when new maps are downloaded.")
-
-    update_osm_db()
-    live_map_sp.tick()
-    rk.keep_time()
+    while not stop_event.is_set():
+      started = time.monotonic()
+      live_map_sp.tick()
+      # Resume at current time after a delay, never replay minutes of missed ticks.
+      stop_event.wait(max(0.0, 1.0 - (time.monotonic() - started)))
+  finally:
+    stop_event.set()
+    worker.join(timeout=0.1)
 
 
 def main():
