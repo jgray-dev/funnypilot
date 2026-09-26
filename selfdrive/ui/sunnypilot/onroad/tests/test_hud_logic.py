@@ -1304,3 +1304,24 @@ class TestAKnownCornerThatCostsNothing:
     """Above KNOWN_FREE_TH the ordinary ramp takes over, so no point on the
     ribbon is ever both 'free' and 'slowing'."""
     assert 0.0 < _rm.KNOWN_FREE_TH < 1.0
+
+
+def test_zone_progress_clock_positions_and_exact_boundary():
+  for metric in (False, True):
+    points = _ss.perimeter_points(155, 205, metric)
+    top, right, bottom, left, full = [points[i] for i in (0,24,48,72,96)]
+    assert abs(top[0]) < 1e-8 and top[1] < 0
+    assert right[0] > 0 and abs(right[1]) < 1e-8
+    assert abs(bottom[0]) < 1e-8 and bottom[1] > 0
+    assert left[0] < 0 and abs(left[1]) < 1e-8
+    assert full == pytest.approx(top)
+  for distance, fraction in [(400,0), (300,.25), (200,.5), (100,.75), (1,.9975), (0,1)]:
+    assert halo_spec(45,65,distance,True)[1] == pytest.approx(fraction)
+  assert halo_spec(45,65,float('nan'),True)[1] == 0
+
+
+def test_progress_projects_metres_only_from_a_fresh_map_fix():
+  assert _ss.zone_distance(100., 20., .5) == 90.
+  assert _ss.zone_distance(5., 20., .5) == 0.
+  for distance, speed, age in [(100.,20.,2.01), (100.,20.,-1.), (float('nan'),20.,1.)]:
+    assert _ss.zone_distance(distance, speed, age) is None

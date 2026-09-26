@@ -53,7 +53,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.long_status_dot import classify as
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import tokens as T
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import chrome
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud import side_signals, stations
-from openpilot.selfdrive.ui.sunnypilot.onroad.hud.speed_sign import SpeedSign
+from openpilot.selfdrive.ui.sunnypilot.onroad.hud.speed_sign import SpeedSign, zone_distance
 from openpilot.selfdrive.ui.sunnypilot.onroad.hud.route_map import RouteMap
 from openpilot.sunnypilot.selfdrive.controls.lib.long_v2.scc_shm import read_corner_warning_shm
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -430,7 +430,10 @@ class HudRendererSP(HudRenderer):
     active = slr.speed_limit_assist_state in (states.active, states.adapting)
     pre = slr.speed_limit_assist_state == states.preActive
 
-    ahead = slr.speed_limit_ahead if slr.speed_limit_ahead_valid else 0.0
+    sm = ui_state.sm
+    age = time.monotonic() - sm.recv_time['liveMapDataSP']
+    distance = zone_distance(slr.speed_limit_ahead_dist, sm['carState'].vEgo, age)
+    ahead = slr.speed_limit_ahead if slr.speed_limit_ahead_valid and sm.valid['liveMapDataSP'] and distance is not None else 0.0
     limit = slr.speed_limit_final_last
 
     # v3.6.0: NO SIGN WHEN THERE IS NOTHING TO PUT ON IT. The face used to draw
@@ -445,7 +448,7 @@ class HudRendererSP(HudRenderer):
     overspeed = bool(limit > 0 and round(limit) < round(slr.speed))
 
     self._sign.render(rect.x + SIGN_X, rect.y + Y_TOP,
-                      limit=limit, next_limit=ahead, dist_m=slr.speed_limit_ahead_dist,
+                      limit=limit, next_limit=ahead, dist_m=distance if distance is not None else 0.0,
                       sla_active=active, pre_active=pre,
                       offset_ratio=slr.sla_dynamic_offset, metric=ui_state.is_metric,
                       overspeed=overspeed, dt=1.0 / max(gui_app.target_fps, 1),

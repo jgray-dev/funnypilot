@@ -12,6 +12,7 @@ import time
 from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.corner_feedback import MAX_RULES, matches
 from openpilot.sunnypilot.navd import drive_index
+from openpilot.system.loggerd import drive_retention as retention
 
 PRE_SECONDS = 40
 POST_SECONDS = 40
@@ -103,15 +104,23 @@ class Capture:
           shutil.rmtree(p.parent)
       if sum(1 for p in self.events.iterdir() if p.is_dir()) >= MAX_PENDING:
         raise ValueError('Feedback storage is full; upload queued reports first')
-      # Same hard save as the web UI: full route, including later segments.
-      drive_index.set_route_saved(route, True, self.log_root)
       context = P.read_json(P.CORNER_CONTEXT, {})
       if not isinstance(context, dict) or not isinstance(context.get('t'), (float, int)) or not 0 <= now - context['t'] < 1:
         context = {}
-      segs = drive_index.route_segments(route, self.log_root)
+      retention.validate_route(route)
+      with retention.locked_saved(self.log_root):
+        segs = drive_index.route_segments(route, self.log_root)
+        if not segs:
+          raise FileNotFoundError('No recorded segments for this report')
+        segment = max(segs)
+        pins = retention.read_clip_pins(self.log_root)
+        pins[event_id] = [f'{route}--{n}' for n in range(max(0, segment-1), segment+2)]
+        if len(pins) > MAX_PENDING:
+          raise ValueError('Feedback protection is full; review interrupted captures')
+        retention.write_clip_pins(self.log_root, pins)
       event = dict(self.identity, id=event_id, route=route, created_at=time.time(), mono_time=cmd['started'],  # noqa: TID251 - cross-reboot event index
                    labels=[], state='capturing', corner=context, remedy='No map correction requested',
-                   segment_at_report=max(segs) if segs else 0, pre_seconds=PRE_SECONDS, post_seconds=POST_SECONDS)
+                   segment_at_report=segment, clip_only=True, pre_seconds=PRE_SECONDS, post_seconds=POST_SECONDS)
       # Retain the original corner and request identity even if mkdir, the
       # pre-roll, or initial metadata persistence fails. This is not an ack.
       self.active[event_id] = event
@@ -144,7 +153,7 @@ class Capture:
     self.active[event_id] = event
     self._initializing.pop(event_id, None)
     self._prerolled.discard(event_id)
-    message = event['remedy'] if 'unnecessary_slowdown' in event['labels'] else 'Drive saved. Capturing surrounding data.'
+    message = event['remedy'] if 'unnecessary_slowdown' in event['labels'] else 'Report saved. Capturing incident clip.'
     P.atomic_json(P.STATUS, {'id':event_id, 'labels':event['labels'], 'saved':True, 'message':message, 't':now})
     return event
 

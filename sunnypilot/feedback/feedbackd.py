@@ -10,6 +10,7 @@ import time
 
 from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.capture import Capture
+from openpilot.sunnypilot.feedback.clips import prepare_clip, release_uploaded_clip
 from openpilot.sunnypilot.feedback.carstate_shm import CarStateTapReader
 from openpilot.sunnypilot.feedback.control_tap import read_control
 from openpilot.sunnypilot.feedback.uploader import upload_event
@@ -237,21 +238,24 @@ def main():
   future = None
   next_upload = 0.0
   next_motion = 0.0
+  next_network = 0.0
 
   def upload_queued():
+    nonlocal next_network
     capture = capture_loop.capture
-    config = P.read_json(str(capture.root / 'cloud.json'), {})
-    if not config.get('token'):
-      return
+    config = P.read_json(str(capture.root / 'cloud.json'), {}) if upload_allowed else {}
     for path in sorted(capture.events.glob('*/event.json')):
-      if not upload_allowed:
-        break
       event = P.read_json(str(path), {})
+      if event.get('state') == 'uploaded':
+        release_uploaded_clip(path.parent)
       if event.get('state') != 'queued':
         continue
       try:
-        upload_event(path.parent, config, Paths.log_root(), allowed=lambda: upload_allowed)
+        prepare_clip(path.parent, Paths.log_root())
+        if upload_allowed and config.get('token') and time.monotonic() >= next_network:
+          upload_event(path.parent, config, Paths.log_root(), allowed=lambda: upload_allowed)
       except Exception as e:
+        next_network = time.monotonic() + 60
         event['upload_error'] = type(e).__name__  # never persist credentials/response bodies
         P.atomic_json(str(path), event, durable=True)
         break
@@ -275,9 +279,9 @@ def main():
         except Exception:
           cloudlog.exception('feedback upload worker failed')
         future = None
-      if upload_allowed and capture_loop.capture is not None and future is None and now >= next_upload:
+      if capture_loop.capture is not None and future is None and now >= next_upload:
         future = pool.submit(upload_queued)
-        next_upload = now + 60
+        next_upload = now + 5
   finally:
     upload_allowed = False
     capture_loop.close()

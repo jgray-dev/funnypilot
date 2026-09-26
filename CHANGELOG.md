@@ -1,3 +1,30 @@
+## 3.7.9 — 2026-09-26
+
+Based on 3.7.8 `d188a6a60`.
+
+- Upcoming speed zones fill the sign perimeter clockwise from 12 o'clock over
+  the last 400 metres. Constant thickness, no progress easing/pulse, and fresh
+  map-distance projection between updates. Stale map data hides the preview.
+- Report popup grows to 1020×510 with 480×100 label buttons and a larger Done
+  target; the closed 150×65 Report button stays unchanged.
+- Replace post-blinker wheel-centering release with a sustained fresh-model
+  consistency and measured-turn agreement gate. Keep the 0.67-second minimum,
+  longer configured delay, existing torque ramp and all engagement/fault gates.
+- Incident clips retain enclosing minute segments without saving the entire
+  drive; durable temporary pins prevent cleanup races. Upload acknowledgements
+  release local road artifacts; explicit saves and pending evidence survive.
+- Proactive storage cleanup checks each second and recovers from below 15%
+  free / 5 GiB to 20% / 7 GiB, preserving saved/recording/pinned exclusions.
+- Bound GPS modem reads, command response waits and assistance subprocess exit
+  so a silent modem cannot leave qcomgpsd indefinitely hung.
+- Restore existing bounded wheel-motion damping during ordinary request/output
+  mismatch. Two recent bite reports show this mismatch disabling damping during
+  oscillations. Keep integrator freeze, EPS/panda limits, model timing, gains and
+  credit bounds. Vehicle improvement remains unverified; no feedback closed as
+  fixed on the strength of open-loop replay.
+
+Investigation, feedback triage and validation: `docs/release-3.7.9.md`.
+
 ## 3.7.8 — 2026-09-16
 
 September 18 minimap reliability update:

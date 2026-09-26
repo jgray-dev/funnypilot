@@ -22,3 +22,22 @@ Save writes and deletion share an OS process lock, and saved metadata is
 atomically persisted beside the recordings. Unreadable metadata pauses cleanup
 instead of treating protected drives as disposable. No drive data is uploaded
 or copied when saving.
+
+
+## 3.7.9 pressure recovery and incident clips
+
+Check free space every second in deleter, without IPC subscriptions or blocking
+control/hardware publishers. Start cleanup below 15% free or 5 GiB, and continue
+until at least 20% and 7 GiB are free. Age scans remain at a 60-second cadence
+when there is no space pressure. At pressure, deletion drains one segment per
+100 ms; saved, recording, and incident-pinned segments remain hard exclusions.
+A disk consisting entirely of protected files cannot be automatically reclaimed.
+
+`.fp_feedback_pins.json` shares the save/deletion lock. Its per-report list pins
+only the three surrounding minute segments until `clip.json` and hardlinks are
+durable. Invalid protection metadata pauses deletion. Web deletion also honors
+pins. Explicit saved flags are never changed by report capture or upload.
+Interrupted clips resume on restart, and unacknowledged reports are retained.
+Unlinking a cloud-acknowledged report link cannot remove a saved original drive.
+Legacy automatic saves cannot be safely distinguished from explicit saves; they
+are not silently migrated/unsaved.

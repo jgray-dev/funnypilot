@@ -92,7 +92,7 @@ def try_setup_logs(diag, logs):
 
 @retry(attempts=3, delay=1.0)
 def at_cmd(cmd: str) -> str | None:
-  return subprocess.check_output(f"mmcli -m any --timeout 30 --command='{cmd}'", shell=True, encoding='utf8')
+  return subprocess.check_output(f"mmcli -m any --timeout 30 --command='{cmd}'", shell=True, encoding='utf8', timeout=35)
 
 def gps_enabled() -> bool:
   return "QGPS: 1" in at_cmd("AT+QGPS?")
@@ -132,7 +132,7 @@ def downloader_loop(event):
 @retry(attempts=5, delay=0.2, ignore_failure=True)
 def inject_assistance():
   cmd = f"mmcli -m any --timeout 30 --location-inject-assistance-data={ASSIST_DATA_FILE}"
-  subprocess.check_output(cmd, stderr=subprocess.PIPE, shell=True)
+  subprocess.check_output(cmd, stderr=subprocess.PIPE, shell=True, timeout=35)
   cloudlog.info("successfully loaded assistance data")
 
 @retry(attempts=5, delay=1.0)
@@ -235,6 +235,9 @@ def main() -> NoReturn:
 
   stop_download_event = Event()
   assist_fetch_proc = Process(target=downloader_loop, args=(stop_download_event,))
+  # A failed modem receive must not hang process exit joining an assistance
+  # downloader that is still retrying without Internet. Manager can restart us.
+  assist_fetch_proc.daemon = True
   assist_fetch_proc.start()
   def cleanup(sig, frame):
     cloudlog.warning("caught sig disabling quectel gps")

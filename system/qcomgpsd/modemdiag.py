@@ -1,4 +1,5 @@
 import select
+import time
 from serial import Serial
 from crcmod import mkCrcFun
 from struct import pack, unpack_from, calcsize
@@ -35,12 +36,21 @@ class ModemDiag:
     assert payload[-2:] == pack('<H', ModemDiag.ccitt_crc16(payload[:-2]))
     return payload[:-2]
 
-  def recv(self):
+  def recv(self, timeout=10.0):
     # self.serial.read_until makes tons of syscalls!
+    deadline = time.monotonic() + timeout
     raw_payload = [self.pend]
+    size = len(self.pend)
     while self.TRAILER_CHAR not in raw_payload[-1]:
-      select.select([self.serial.fd], [], [])
+      remaining = deadline - time.monotonic()
+      if remaining <= 0 or not select.select([self.serial.fd], [], [], remaining)[0]:
+        raise TimeoutError('modem diagnostic receive timed out')
       raw = self.serial.read(0x10000)
+      if not raw:
+        raise OSError('modem diagnostic port closed')
+      size += len(raw)
+      if size > 256 * 1024:
+        raise ValueError('oversized modem diagnostic frame')
       raw_payload.append(raw)
     raw_payload = b''.join(raw_payload)
     raw_payload, self.pend = raw_payload.split(self.TRAILER_CHAR, 1)
@@ -61,8 +71,12 @@ LOG_CONFIG_SUCCESS_S = 0
 
 def send_recv(diag, packet_type, packet_payload):
   diag.send(packet_type, packet_payload)
-  while 1:
-    opcode, payload = diag.recv()
+  deadline = time.monotonic() + 10.0
+  while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+      raise TimeoutError("modem command response timed out")
+    opcode, payload = diag.recv(timeout=remaining)
     if opcode != DIAG_LOG_F:
       break
   return opcode, payload

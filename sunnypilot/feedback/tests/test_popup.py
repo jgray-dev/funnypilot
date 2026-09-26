@@ -47,7 +47,12 @@ def test_taps_save_multiple_labels_without_submit_and_retry_after_done(monkeypat
       draw()
     application.gui_app.mouse_events=[]
 
+  draw()
+  assert popup.rect.width == 150 and popup.rect.height == 65
   tap('open')
+  draw()
+  assert popup.rect.width == 1020 and popup.rect.height == 510
+  assert all(r.height >= 72 for key, r in popup._buttons)
   assert sent[-1]==[]
   tap('steering_bite')
   tap('unnecessary_slowdown')

@@ -5,6 +5,7 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 import time
+import math
 
 import cereal.messaging as messaging
 from cereal import log, custom
@@ -55,7 +56,13 @@ class ControlsExt(ModelStateBase):
       self._param_update_time = time.monotonic()
 
   def get_lat_active(self, sm: messaging.SubMaster) -> bool:
-    if self.blinker_pause_lateral.update(sm['carState']):
+    cs, model = sm['carState'], sm['modelV2']
+    lp = sm['liveParameters']
+    measured = -self.VM.calc_curvature(math.radians(cs.steeringAngleDeg-lp.angleOffsetDeg), cs.vEgo, lp.roll)
+    if self.blinker_pause_lateral.update(cs, model=model, now=time.monotonic(),
+                                       received=sm.recv_time['modelV2'], stamp=sm.logMonoTime['modelV2'],
+                                       valid=sm.valid['modelV2'] and sm.alive['modelV2'] and sm.valid['liveParameters'],
+                                       measured_curvature=measured):
       return False
 
     ss_sp = sm['selfdriveStateSP']

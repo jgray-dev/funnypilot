@@ -8,7 +8,7 @@ from openpilot.sunnypilot.feedback import protocol as P
 from openpilot.sunnypilot.feedback.capture import Capture
 from openpilot.sunnypilot.feedback.corner_feedback import corrected_target
 from openpilot.sunnypilot.feedback.feedbackd import snapshot
-from openpilot.system.loggerd.drive_retention import read_saved
+from openpilot.system.loggerd.drive_retention import read_saved, pinned_segments
 
 ID = 'a' * 32
 ROUTE = '2026-09-05--10-00-00'
@@ -38,7 +38,8 @@ def test_capture_protects_route_and_all_labels_immediately(capture):
   for t in (70,81,99,100):
     capture.sample({'t':t,'angle':1.0})
   event = report(capture,['steering_bite'])
-  assert read_saved(capture.log_root) == {ROUTE}
+  assert read_saved(capture.log_root) == set()
+  assert pinned_segments(capture.log_root) == {ROUTE+'--0', ROUTE+'--1'}
   assert event['labels'] == ['steering_bite']
   report(capture,['late_braking'],102)
   capture.sample({'t':110,'angle':2.0})
@@ -94,7 +95,8 @@ def test_restart_keeps_captured_data_and_queues_interrupted_report(capture):
   Capture(str(capture.root),capture.log_root)
   event=P.read_json(str(capture.events / ID / 'event.json'))
   assert event['state']=='queued' and event['capture_interrupted']
-  assert read_saved(capture.log_root)=={ROUTE}
+  assert not read_saved(capture.log_root)
+  assert pinned_segments(capture.log_root)
 
 
 def test_late_or_malformed_commands_do_not_save(capture):

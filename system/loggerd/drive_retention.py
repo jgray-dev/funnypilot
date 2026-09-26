@@ -67,7 +67,11 @@ def locked_saved(root):
 
 def write_saved(root, routes):
   """Caller holds locked_saved. Replace atomically and persist before replying."""
-  raw = json.dumps({'version': 1, 'routes': sorted(routes)}) + '\n'
+  write_metadata(root, _MANIFEST, {'version': 1, 'routes': sorted(routes)})
+
+
+def write_metadata(root, name, data):
+  raw = json.dumps(data) + '\n'
   if len(raw) > _MAX_METADATA:
     raise ValueError('saved drive metadata is too large')
   fd, tmp = tempfile.mkstemp(prefix='.fp_saved_', dir=root)
@@ -76,7 +80,7 @@ def write_saved(root, routes):
       f.write(raw)
       f.flush()
       os.fsync(f.fileno())
-    os.replace(tmp, os.path.join(root, _MANIFEST))
+    os.replace(tmp, os.path.join(root, name))
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     try:
       os.fsync(directory)
@@ -121,3 +125,35 @@ def expired_routes(root, dirs, now=None):
   # only appropriate for scheduling the cleanup loop, not comparing mtimes.
   cutoff = (time.time() if now is None else now) - RETENTION_DAYS * 86400  # noqa: TID251
   return {route for route, modified in newest.items() if 0 < modified < cutoff and route not in active}
+
+
+_CLIP_PINS = '.fp_feedback_pins.json'
+
+
+def read_clip_pins(root):
+  """Caller holds locked_saved; corrupt incident protection also fails closed."""
+  try:
+    fd = os.open(os.path.join(root, _CLIP_PINS), os.O_RDONLY | os.O_NOFOLLOW)
+  except FileNotFoundError:
+    return {}
+  with os.fdopen(fd) as f:
+    raw = f.read(_MAX_METADATA+1)
+  if len(raw) > _MAX_METADATA:
+    raise ValueError('feedback pins too large')
+  pins = json.loads(raw)
+  if not isinstance(pins, dict) or len(pins) > 200:
+    raise ValueError('invalid feedback pins')
+  for event, names in pins.items():
+    if (not re.fullmatch('[a-f0-9]{32}', event) or not isinstance(names, list) or len(names) > 3 or
+        any(not isinstance(n, str) or segment_route(n) is None for n in names)):
+      raise ValueError('invalid feedback pin')
+  return pins
+
+
+def write_clip_pins(root, pins):
+  # Use the same durable, atomic writer and same lock as explicit route saves.
+  write_metadata(root, _CLIP_PINS, pins)
+
+
+def pinned_segments(root):
+  return {name for names in read_clip_pins(root).values() for name in names}

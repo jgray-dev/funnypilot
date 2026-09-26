@@ -192,7 +192,8 @@ def test_real_k5_neural_model_and_history_reset(controllers):
 
 @pytest.mark.parametrize('neural', [False, True])
 @pytest.mark.parametrize('direction', [-1.0, 1.0])
-def test_wheel_motion_softens_correction_without_moving_feedforward(controllers, monkeypatch, neural, direction):
+@pytest.mark.parametrize('limited', [False, True])
+def test_wheel_motion_softens_correction_without_moving_feedforward(controllers, monkeypatch, neural, direction, limited):
   current, cs, vm, params, _ = make_torque(controllers, neural=neural)
   reference, _, _, _, _ = make_torque(controllers, neural=neural)
   reference._motion_credit.correction_scale = lambda *args, **kwargs: 1.0
@@ -209,7 +210,7 @@ def test_wheel_motion_softens_correction_without_moving_feedforward(controllers,
     cs.steeringAngleDeg = -direction * round(3.3 + 0.05 * i, 1)
     previous_i = current.pid.i
     for ctrl in (current, reference):
-      ctrl.update(True, cs, vm, params, False, direction / cs.vEgo**2, None, False, 0.2)
+      ctrl.update(True, cs, vm, params, limited, direction / cs.vEgo**2, None, False, 0.2)
   assert current._motion_credit.credit > 0.0
   assert abs(current.pid.p) < abs(reference.pid.p)
   assert current.pid.f == reference.pid.f  # frictionless fixture isolates path FF

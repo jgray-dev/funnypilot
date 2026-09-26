@@ -260,6 +260,8 @@ class Controls(ControlsExt):
       't': time.monotonic(), 'frame': self.sm.frame,
       'model_t': self.sm.logMonoTime['modelV2'], 'model_updated': bool(self.sm.updated['modelV2']),
       'model_curvature': float(model_v2.action.desiredCurvature),
+      'blinker_paused': bool(self.blinker_pause_lateral._blinker_was_on),
+      'model_settle_samples': len(self.blinker_pause_lateral.model_settle.samples),
       'interpolated_curvature': float(new_desired_curvature), 'desired_curvature': float(self.desired_curvature),
       'lat_delay': float(lat_delay), 'angle_offset': float(lp.angleOffsetDeg), 'roll': float(lp.roll),
       'steer_limited': bool(self.steer_limited_by_safety), 'curvature_limited': bool(curvature_limited),

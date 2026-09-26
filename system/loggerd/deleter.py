@@ -2,6 +2,7 @@
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 from openpilot.system.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
@@ -11,7 +12,10 @@ from openpilot.system.loggerd.xattr_cache import getxattr
 from openpilot.system.loggerd import drive_retention
 
 MIN_BYTES = 5 * 1024 * 1024 * 1024
-MIN_PERCENT = 10
+MIN_PERCENT = 15
+RECOVER_PERCENT = 20
+RECOVER_BYTES = 7 * 1024**3
+PRESSURE_POLL_SECONDS = 1.0
 
 DELETE_LAST = ['boot', 'crash']
 
@@ -47,12 +51,12 @@ def get_preserved_segments(dirs_by_creation: list[str]) -> set[str]:
   return preserved
 
 
-def _clean_one(root, saved, low_space, preserved=(), archive_root=None):
+def _clean_one(root, saved, low_space, preserved=(), archive_root=None, pinned=()):
   dirs = listdir_by_creation(root)
   expired = drive_retention.expired_routes(root, dirs)
   for name in sorted(dirs, key=lambda d: (d in DELETE_LAST, d in preserved)):
     route = drive_retention.segment_route(name)
-    if route in saved or (not low_space and route not in expired):
+    if name in pinned or route in saved or (not low_space and route not in expired):
       continue
     path = os.path.join(root, name)
     if os.path.islink(path) or drive_retention.is_locked(path):
@@ -80,42 +84,60 @@ def _clean_one(root, saved, low_space, preserved=(), archive_root=None):
   return False
 
 
-def cleanup_once():
+def cleanup_once(pressure=None, expire=True):
   root = Paths.log_root()
   if not os.path.isdir(root):
     return False
   # One lock and one saved set for both disks. It also serializes manual web
   # deletion; a saved route is a hard exclusion, even below the free-space floor.
   with drive_retention.locked_saved(root) as saved:
-    low_space = (get_available_bytes(default=MIN_BYTES + 1) < MIN_BYTES or
-                 get_available_percent(default=MIN_PERCENT + 1) < MIN_PERCENT)
+    pinned = drive_retention.pinned_segments(root)
+    def pressured(kind):
+      # Hysteresis prevents hovering at the no-entry boundary. Persistent state
+      # belongs to the deleter thread, never the control/hardware publisher.
+      active = pressure is not None and pressure.get(kind, False)
+      low = (get_available_bytes(default=RECOVER_BYTES+1, path_type=kind) < (RECOVER_BYTES if active else MIN_BYTES) or
+             get_available_percent(default=RECOVER_PERCENT+1, path_type=kind) < (RECOVER_PERCENT if active else MIN_PERCENT))
+      if pressure is not None:
+        pressure[kind] = low
+      return low
+    low_space = pressured('internal')
     changed = False
     archive_root = None
     external = Paths.log_root_external()
     if Path(external).is_mount():
-      low_external = (get_available_bytes(default=MIN_BYTES + 1, path_type="external") < MIN_BYTES or
-                      get_available_percent(default=MIN_PERCENT + 1, path_type="external") < MIN_PERCENT)
-      changed = _clean_one(external, saved, low_external)
+      low_external = pressured('external')
+      changed = _clean_one(external, saved, low_external, pinned=pinned) if low_external or expire else False
       # Only archive when the external disk has room. Its saved data is never
       # evicted to make space for an internal unsaved recording.
       if (get_available_bytes(default=0, path_type="external") >= MIN_BYTES and
           get_available_percent(default=0, path_type="external") >= MIN_PERCENT):
         archive_root = external
+    if not low_space and not expire:
+      return changed
     preserved = get_preserved_segments(listdir_by_creation(root)) if low_space else set()
-    return _clean_one(root, saved, low_space, preserved, archive_root) or changed
+    return _clean_one(root, saved, low_space, preserved, archive_root, pinned) or changed
 
 
 def deleter_thread(exit_event: threading.Event):
+  pressure = {}
+  next_expiry = 0.0
+  next_error_log = 0.0
   while not exit_event.is_set():
     try:
-      changed = cleanup_once()
+      now = time.monotonic()
+      changed = cleanup_once(pressure, expire=now >= next_expiry)
+      if not changed and now >= next_expiry:
+        next_expiry = now + drive_retention.CLEANUP_INTERVAL
     except (OSError, ValueError):
       # Corrupt/unreadable save metadata must never silently mean "none saved".
-      cloudlog.exception("drive cleanup paused: cannot read retention state")
+      if time.monotonic() >= next_error_log:
+        cloudlog.exception("drive cleanup paused: cannot read retention state")
+        next_error_log = time.monotonic() + 60.0
       changed = False
-    # Drain eligible data one segment at a time. If everything is saved/locked,
-    # wait a full interval instead of busy-looping on an unreclaimable disk.
-    exit_event.wait(.1 if changed else drive_retention.CLEANUP_INTERVAL)
+    # Poll free space every second, including when everything was protected.
+    # No extra IPC reader, and no filesystem work in the driving health loop.
+    exit_event.wait(.1 if changed else PRESSURE_POLL_SECONDS)
 
 
 def main():

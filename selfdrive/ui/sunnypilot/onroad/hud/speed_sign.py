@@ -11,11 +11,9 @@ already permanently on screen, and it has an unused perimeter.
       cyan  SLA is active and satisfied (nothing pending)
       none  SLA off — plain sign, no halo
 
-  WEIGHT says how close it is. Thickness and bloom grow continuously from a
-  hairline at HALO_FAR_M to a solid ring at the boundary, so "a change is
-  coming" and "how soon" are one signal instead of two. `halo_spec()` is a pure
-  function of (distance, direction) and is unit-tested; the drawing below is
-  the only part that needs a screen.
+  The perimeter fills clockwise from twelve o'clock over the final 400 m.
+  Distance alone sets progress: no animation lag or confirmation pulse can
+  make the ring complete before the reported zone boundary.
 
   The upcoming limit slides in beneath at NEXT_SCALE, so "65 now, 45 soon"
   reads as two objects rather than a sentence.
@@ -47,12 +45,9 @@ TAB_H = 34
 SIDE_W = int(SIGN_W * NEXT_SCALE)
 
 HALO_FAR_M = 400.0     # where the halo first becomes visible
-HALO_MIN = 0.12        # proximity floor, so "confirmed but distant" still shows
-HALO_IDLE = 0.34       # weight when SLA is simply active with nothing pending
-HALO_W_MIN = 3.0       # px at proximity 0
-HALO_W_MAX = 11.0      # px at the boundary
+HALO_MIN = 0.0        # the faint track still marks a distant upcoming zone
+HALO_IDLE = 0.34       # idle active state (drawn as a quiet full outline)
 HALO_PAD = 13          # how far the halo sits outside the sign
-BLOOM_PAD = 11         # second, fainter pass
 
 # v3.5.4 — THESE WERE BYTE-IDENTICAL COPIES OF THREE TOKENS. tokens.py exists
 # precisely to stop "eleven widgets, eleven visual languages", and three of them
@@ -79,15 +74,33 @@ def halo_spec(next_limit: float, cur_limit: float, dist_m: float, sla_active: bo
   return None, 0.0
 
 
+def zone_distance(distance, speed, age):
+  """Project only a fresh map fix to now, in metres; unavailable stays absent."""
+  if not all(T.finite(x) for x in (distance, speed, age)) or distance < 0 or not 0 <= age <= 2.0:
+    return None
+  return max(0.0, distance - max(0.0, speed)*age)
+
+
+def perimeter_points(width, height, metric=False, steps=96):
+  """Clockwise sign outline, starting/ending at 12. No graphics or IO."""
+  half_w, half_h = width / 2 + HALO_PAD, height / 2 + HALO_PAD
+  points = []
+  for i in range(steps+1):
+    angle = 2 * math.pi * i / steps
+    dx, dy = math.sin(angle), -math.cos(angle)
+    if metric:
+      radius = min(width, height) / 2 + HALO_PAD
+    else:
+      # Superellipse provides a rounded plate outline outside all four corners.
+      radius = (abs(dx / half_w)**8 + abs(dy / half_h)**8)**(-1/8)
+    points.append((radius * dx, radius * dy))
+  return points
+
+
 class SpeedSign:
-  """Draws the sign column. Owns no state that survives a frame except the
-  pulse phase, so it cannot get stuck in a stale visual."""
+  """Distance-driven sign outline; only colour transitions are eased."""
 
   def __init__(self):
-    self._phase = 0.0
-    # v3.5.4: the halo used to JUMP the instant a zone was confirmed or lost.
-    # Weight is the signal, so a step in weight is a step in the message.
-    self._prox = T.Eased(0.0)
     self._tint = T.EasedColor(T.LAT_ONLY)
     self._tint_last = T.LAT_ONLY
 
@@ -105,32 +118,15 @@ class SpeedSign:
              sla_active: bool, pre_active: bool, offset_ratio: float,
              metric: bool, overspeed: bool, dt: float = 1 / 60.0,
              set_speed: float = 0.0) -> None:
-    self._phase = (self._phase + dt) % 4.0
-
     color, prox = halo_spec(next_limit, limit, dist_m, sla_active)
 
-    # preActive is the one moment SLA needs the driver to DO something, so it
-    # is the one moment the halo moves: a slow pulse plus a direction chevron.
-    if pre_active and color is not None:
-      prox = T.clamp(prox + 0.30 * (0.5 + 0.5 * math.sin(self._phase * math.pi)), 0.0, 1.0)
-
-    # Ease both channels. Fading the WEIGHT to zero is what lets the halo
-    # leave without a cut; the tint keeps easing underneath so a red->green
-    # change (a lower zone replaced by a higher one) cross-fades rather than
-    # snapping through the wrong colour.
-    # NOTE both easers must be stepped EXACTLY ONCE per frame — they read
-    # time.monotonic() internally, so a second call in the same frame sees
-    # dt ~= 0 and silently halves the effective rate.
-    shown_prox = self._prox.update(prox if color is not None else 0.0)
-    if color is not None:
-      shown_tint = self._tint.update(color)
-    else:
-      shown_tint = self._tint.update(self._tint_last)   # hold hue while fading out
+    # Ease colour only. Progress must reach 12 exactly at distance zero.
+    shown_tint = self._tint.update(color if color is not None else self._tint_last)
     self._tint_last = color if color is not None else self._tint_last
-
     sign_rect = rl.Rectangle(x, y, SIGN_W, SIGN_H)
-    if shown_prox > 0.01:
-      self._halo(sign_rect, shown_tint, shown_prox)
+    if color is not None:
+      pending = bool(next_limit and limit and abs(next_limit - limit) >= 1)
+      self._halo(sign_rect, shown_tint, prox if pending else 1.0, metric, pending)
 
     self._face(sign_rect, limit, metric, overspeed, primary=True)
 
@@ -152,18 +148,19 @@ class SpeedSign:
   # ── pieces ──────────────────────────────────────────────────────────────
 
   @staticmethod
-  def _halo(rect: rl.Rectangle, color: rl.Color, prox: float) -> None:
-    w = T.lerp(HALO_W_MIN, HALO_W_MAX, prox)
-    a = T.lerp(0.55, 1.0, prox)
-
-    ring = rl.Rectangle(rect.x - HALO_PAD, rect.y - HALO_PAD,
-                        rect.width + HALO_PAD * 2, rect.height + HALO_PAD * 2)
-    # bloom first (larger, very transparent), then the ring on top. Two passes
-    # is what makes it read as light rather than as a second border.
-    bloom = rl.Rectangle(ring.x - BLOOM_PAD, ring.y - BLOOM_PAD,
-                         ring.width + BLOOM_PAD * 2, ring.height + BLOOM_PAD * 2)
-    rl.draw_rectangle_rounded_lines_ex(bloom, T.R_PLATE, 12, w * 2.4, T.with_alpha(color, a * 0.20))
-    rl.draw_rectangle_rounded_lines_ex(ring, T.R_PLATE, 12, w, T.with_alpha(color, a))
+  def _halo(rect: rl.Rectangle, color: rl.Color, prox: float, metric=False, pending=True) -> None:
+    points = perimeter_points(rect.width, rect.height, metric)
+    x, y = rect.x + rect.width / 2, rect.y + rect.height / 2
+    for a, b in zip(points, points[1:], strict=False):
+      rl.draw_line_ex((x+a[0], y+a[1]), (x+b[0], y+b[1]), 5.0, T.with_alpha(color, 0.18))
+    end = T.clamp(prox, 0.0, 1.0) * (len(points)-1)
+    for i, (a, b) in enumerate(zip(points, points[1:], strict=False)):
+      fraction = min(1.0, end-i)
+      if fraction <= 0:
+        break
+      rl.draw_line_ex((x+a[0], y+a[1]),
+                      (x+a[0]+(b[0]-a[0])*fraction, y+a[1]+(b[1]-a[1])*fraction),
+                      5.0, T.with_alpha(color, 1.0 if pending else 0.6))
 
   @staticmethod
   def _face(rect: rl.Rectangle, limit: float, metric: bool, overspeed: bool, primary: bool) -> None:

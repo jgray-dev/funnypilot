@@ -313,6 +313,9 @@ def delete_route(route: str, root: str | None = None) -> tuple[int, int]:
     if route in saved:
       raise drive_retention.SavedDriveError('Unsave this drive before deleting it.')
     segments = route_segments(route, root)
+    pinned = drive_retention.pinned_segments(root)
+    if any(f'{route}--{seg}' in pinned for seg in segments):
+      raise drive_retention.ActiveDriveError('An incident clip is still being captured. Try again shortly.')
     # Check the whole drive first: do not partially delete a recording in use.
     for seg in segments:
       path = _safe_segment_dir(root, f"{route}--{seg}")

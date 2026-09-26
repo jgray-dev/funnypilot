@@ -167,13 +167,13 @@ def test_save_and_cleanup_share_a_process_lock(cleaner, tmp_path):
   assert finished.is_set() and not failures and old.exists()
 
 
-def test_no_candidates_waits_a_full_minute(cleaner, tmp_path, monkeypatch):
+def test_no_candidates_keeps_checking_pressure_each_second(cleaner, tmp_path, monkeypatch):
   segment(tmp_path)
   drives.set_route_saved(OLD, True, str(tmp_path))
   monkeypatch.setattr(cleaner, 'get_available_bytes', lambda **kw: 0)
   waits = []
   cleaner.deleter_thread(NS(is_set=lambda: bool(waits), wait=waits.append))
-  assert waits == [60.0]
+  assert waits == [1.0]
 
 
 def test_save_api_persists_and_protects_delete(cleaner, tmp_path):
@@ -203,3 +203,84 @@ def test_save_api_persists_and_protects_delete(cleaner, tmp_path):
       assert not old.exists()
 
   asyncio.run(exercise())
+
+
+def test_pressure_starts_early_and_drains_to_recovery_floor(cleaner, tmp_path, monkeypatch):
+  for n in range(5):
+    segment(tmp_path, OLD, n, age=0)
+  free = [14.9]
+  monkeypatch.setattr(cleaner, 'get_available_percent', lambda **kw: free[0])
+  pressure = {}
+  assert cleaner.cleanup_once(pressure)
+  free[0] = 17.
+  assert cleaner.cleanup_once(pressure)  # still recovering, not hovering at 15%
+  free[0] = 20.
+  assert not cleaner.cleanup_once(pressure)
+  assert not pressure['internal']
+
+
+def test_clip_survives_original_drive_cleanup_and_explicit_save_is_untouched(cleaner, tmp_path, monkeypatch):
+  from openpilot.sunnypilot.feedback.capture import Capture
+  from openpilot.sunnypilot.feedback.clips import prepare_clip
+  from openpilot.sunnypilot.feedback import protocol as P
+  from openpilot.sunnypilot.feedback.uploader import describe_file
+  for name in ('STATUS', 'CORNER_CONTEXT', 'CORNER_RULES'):
+    monkeypatch.setattr(P, name, str(tmp_path / name))
+  for n in range(3):
+    segment(tmp_path, OLD, n, age=0)
+  event_id = 'a'*32
+  cap = Capture(tmp_path / 'feedback', str(tmp_path))
+  event = cap.report(dict(id=event_id, labels=['steering_bite'], started=100., sent=101.), OLD, 101.)
+  assert event['clip_only'] and not retention.read_saved(str(tmp_path))
+  assert retention.pinned_segments(str(tmp_path)) == {f'{OLD}--{n}' for n in (1,2,3)}
+  with pytest.raises(retention.ActiveDriveError):
+    drives.delete_route(OLD, str(tmp_path))
+  cap.finish(141.)
+  latest = tmp_path / f'{OLD}--2'
+  (latest / 'rlog.lock').touch()
+  directory = cap.events / event_id
+  assert not prepare_clip(directory, str(tmp_path))
+  assert retention.pinned_segments(str(tmp_path))
+  (latest / 'rlog.lock').unlink()
+  # An explicit save made during capture must remain saved after finalization.
+  drives.set_route_saved(OLD, True, str(tmp_path))
+  assert prepare_clip(directory, str(tmp_path))
+  assert retention.read_saved(str(tmp_path)) == {OLD}
+  assert not retention.pinned_segments(str(tmp_path))
+  clip_file = directory / 'segment-2-qcamera.ts'
+  before = describe_file(clip_file)
+  assert os.path.samefile(clip_file, latest / 'qcamera.ts')
+  drives.set_route_saved(OLD, False, str(tmp_path))
+  drives.delete_route(OLD, str(tmp_path))
+  assert not latest.exists()
+  assert describe_file(clip_file) == before
+
+
+@pytest.mark.parametrize('failure', ['link', 'metadata'])
+def test_failed_clip_keeps_pins_and_retries_without_losing_data(cleaner, tmp_path, monkeypatch, failure):
+  from openpilot.sunnypilot.feedback import clips, protocol as P
+  segment(tmp_path, OLD, age=0)
+  directory = tmp_path / 'event'
+  directory.mkdir()
+  event_id = 'b'*32
+  P.atomic_json(str(directory / 'event.json'), dict(id=event_id, state='queued', clip_only=True, route=OLD, segment_at_report=0))
+  with retention.locked_saved(str(tmp_path)):
+    retention.write_clip_pins(str(tmp_path), {event_id: [OLD+'--0', OLD+'--1']})
+  def fail(*a, **kw):
+    raise OSError('injected no space')
+  with monkeypatch.context() as fault:
+    fault.setattr(clips.os if failure == 'link' else P, 'link' if failure == 'link' else 'atomic_json', fail)
+    with pytest.raises(OSError):
+      clips.prepare_clip(directory, str(tmp_path))
+  assert retention.pinned_segments(str(tmp_path))
+  assert clips.prepare_clip(directory, str(tmp_path))
+  assert not retention.pinned_segments(str(tmp_path))
+
+
+def test_corrupt_clip_pins_pause_deletion(cleaner, tmp_path, monkeypatch):
+  old = segment(tmp_path)
+  (tmp_path / retention._CLIP_PINS).write_text('{')
+  monkeypatch.setattr(cleaner, 'get_available_percent', lambda **kw: 0.)
+  with pytest.raises(ValueError):
+    cleaner.cleanup_once()
+  assert old.exists()

@@ -96,7 +96,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.8"
+EXPECTED_VERSION = "3.7.9"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -155,7 +155,7 @@ _CODE_MARKERS = [
   ("_OVERRIDE_MIN_SCALE", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "override softening"),
   ("class OverrideGate", "/data/openpilot/selfdrive/controls/lib/override_gate.py", "override gate"),
   ("v3.2.3st", "/data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py", "brake chime fix"),
-  ("UNWIND_SETTLE_TIME", "/data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py", "blinker unwind"),
+  ("class ModelSettle", "/data/openpilot/sunnypilot/selfdrive/controls/lib/model_settle.py", "model-stable post-blinker reactivation"),
   ("class AccelJerkShaper", "/data/openpilot/selfdrive/controls/lib/long_shaping.py", "long output shaper"),
   ("v3.3.3", "/data/openpilot/selfdrive/controls/lib/longitudinal_planner.py", "long planner + SLA gas gate"),
   ("class CurveSpeedCap", "/data/openpilot/sunnypilot/selfdrive/controls/lib/long_v2/curve_cap.py", "SCC v2 curve cap"),

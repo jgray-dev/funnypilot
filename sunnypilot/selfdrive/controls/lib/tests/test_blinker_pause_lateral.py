@@ -5,6 +5,7 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 from cereal import car
+from types import SimpleNamespace as NS
 
 from openpilot.common.constants import CV
 from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import BlinkerPauseLateral
@@ -13,7 +14,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import Bl
 class TestBlinkerPauseLateral:
 
   def setup_method(self):
-    self.blinker_pause_lateral = BlinkerPauseLateral()
+    self.blinker_pause_lateral = BlinkerPauseLateral(NS(get_bool=lambda k: False))
     self._reset_states()
 
   def _reset_states(self):
@@ -35,7 +36,7 @@ class TestBlinkerPauseLateral:
         # exercises pure speed/blinker gating, not the post-blinker settle hold
         # (covered separately below).
         self.blinker_pause_lateral._blinker_was_on = False
-        self.blinker_pause_lateral._unwind_settle_timer = 0.0
+        self.blinker_pause_lateral.model_settle.reset()
         self.blinker_pause_lateral.blinker_off_timer = 0.0
 
         self.CS.leftBlinker = left
@@ -54,58 +55,6 @@ class TestBlinkerPauseLateral:
       (True, True): False
     }
     self._test_should_blinker_pause_lateral(expected_results)
-
-  def test_unwind_settle_hold(self):
-    # v3.2.1e: after the blinker turns off, lateral stays paused until the wheel
-    # has been within UNWIND_THRESHOLD_DEG of center continuously for
-    # UNWIND_SETTLE_TIME, then re-engages.
-    from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import (
-      UNWIND_SETTLE_TIME, UNWIND_THRESHOLD_DEG,
-    )
-    self.CS.vEgo = 4.5  # below min speed
-
-    # blinker on → paused
-    self.CS.leftBlinker = True
-    assert self.blinker_pause_lateral.update(self.CS) is True
-
-    # blinker off but wheel still past threshold → stays paused, no settle yet
-    self.CS.leftBlinker = False
-    self.CS.steeringAngleDeg = UNWIND_THRESHOLD_DEG + 5.0
-    for _ in range(int((UNWIND_SETTLE_TIME + 0.5) / 0.01)):
-      assert self.blinker_pause_lateral.update(self.CS) is True
-
-    # wheel near center → held for the first part of the settle window
-    self.CS.steeringAngleDeg = 0.0
-    assert self.blinker_pause_lateral.update(self.CS) is True
-    # keep centered past the settle time → eventually re-engages (returns False)
-    released = False
-    for _ in range(int(UNWIND_SETTLE_TIME / 0.01) + 5):
-      if self.blinker_pause_lateral.update(self.CS) is False:
-        released = True
-        break
-    assert released
-
-  def test_unwind_settle_resets_on_excursion(self):
-    # Crossing center briefly (the middle of an S-curve, wheel passing through
-    # 0° on its way to the opposite lock) must NOT release the pause.
-    from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import (
-      UNWIND_SETTLE_TIME,
-    )
-    self.CS.vEgo = 4.5
-    self.CS.leftBlinker = True
-    self.blinker_pause_lateral.update(self.CS)
-    self.CS.leftBlinker = False
-
-    # near center for almost the full settle window
-    self.CS.steeringAngleDeg = 0.0
-    for _ in range(int(UNWIND_SETTLE_TIME / 0.01) - 5):
-      assert self.blinker_pause_lateral.update(self.CS) is True
-    # excursion to the other half of the S resets the settle timer
-    self.CS.steeringAngleDeg = 40.0
-    assert self.blinker_pause_lateral.update(self.CS) is True
-    # back near center: a brief moment is not enough — still paused
-    self.CS.steeringAngleDeg = 0.0
-    assert self.blinker_pause_lateral.update(self.CS) is True
 
   def test_above_min_speed_blinker(self):
     self.CS.vEgo = 13.4  # ~30 MPH
@@ -189,3 +138,35 @@ class TestBlinkerPauseLateral:
       (True, True): False
     }
     self._test_should_blinker_pause_lateral(expected_results)
+
+  def test_no_model_cannot_unlock_even_with_straight_wheel(self):
+    self.CS.vEgo = 4.5
+    self.CS.leftBlinker = True
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.CS.leftBlinker = False
+    for _ in range(300):
+      assert self.blinker_pause_lateral.update(self.CS)
+
+  def test_curve_release_and_new_signal_restarts_dwell(self):
+    from cereal import log
+    model = log.ModelDataV2.new_message()
+    model.action.desiredCurvature = .01
+    model.orientationRate.t = [0., .5, 1.]
+    model.orientationRate.z = [.05]*3
+    self.CS.vEgo = 5.
+    self.CS.steeringAngleDeg = 35.  # explicitly not a near-center wheel
+    self.CS.leftBlinker = True
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.CS.leftBlinker = False
+    for i in range(15):
+      now = 1+i*.05
+      paused = self.blinker_pause_lateral.update(self.CS, model=model, now=now, received=now,
+                                                stamp=i+1, valid=True, measured_curvature=.01)
+      assert paused == (i < 14)
+    self.CS.leftBlinker = True
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.CS.vEgo = 30.  # accelerating above threshold cannot release a turn
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.blinker_pause_lateral.enabled = False
+    assert not self.blinker_pause_lateral.update(self.CS)
+    assert not self.blinker_pause_lateral._blinker_was_on

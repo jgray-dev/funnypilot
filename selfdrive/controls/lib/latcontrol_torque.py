@@ -191,10 +191,14 @@ class LatControlTorque(LatControl):
     measured_rate = -VM.calc_curvature(math.radians(wheel_rate), CS.vEgo, 0.0) * CS.vEgo ** 2
     preview_frames = min(int(PREVIEW_TIME / self.dt), delay_frames - 1)
     reference_travel = self.lat_accel_request_buffer[-delay_frames + preview_frames] - setpoint
+    # A request/output mismatch also occurs during ordinary actuator slew and
+    # transport lag. Cancelling motion credit on that flag switched off this
+    # bounded damping during the recorded corner oscillations. Keep the flag
+    # for integrator freeze below; all EPS/panda limits still apply downstream.
     motion_scale = self._motion_credit.correction_scale(
       error, measured_rate, reference_travel, preview_frames * self.dt, CS.vEgo,
       enabled=active and not (CS.steeringPressed or self._handback.soft_integrator or self._bump_damper.active or
-                              self._eps_governor.driver_limited or steer_limited_by_safety or curvature_limited))
+                              self._eps_governor.driver_limited or curvature_limited))
     error *= motion_scale
 
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))

@@ -1,13 +1,17 @@
 # Real-time driving feedback
 
 On the C3X driving screen, tap **Report** (or the existing sidebar bookmark
-flag). A small popup offers Steering bite, Steering wander, Unneeded slowdown,
+flag). A large popup with 100-pixel-high label buttons offers Steering bite, Steering wander, Unneeded slowdown,
 Late braking, Harsh braking, and Slow response. Tap any number of labels;
 each tap saves immediately. Done closes it, or it closes after 15 seconds.
 Selections retry until acknowledged even if the popup closes. Driving alerts
 hide the popup. No keyboard, confirmation, or cloud connection is required.
 
-The whole route is saved using the same protection as the web Drives page.
+From 3.7.9, reporting does **not** mark the whole drive saved. Only the three
+minute segments enclosing the incident are temporarily pinned against cleanup.
+Once closed, their road video and logs are retained in the report through
+hardlinks; ordinary retention can then remove the unsaved drive without losing
+the report. Explicit saves made in the web Drives page remain unchanged.
 The capture includes roughly 40 seconds before and after the report, the
 software commit/branch/version/dirty state, controller and actuator samples (up to 100 Hz),
 lead/governor data, torque parameters, and the matching steering triage lines.
@@ -68,7 +72,11 @@ request has a bounded timeout; it does not run in UI or control processes.
 Files are split into checksummed 4 MiB parts; a file is capped at 128 MiB and
 an event at 512 MiB. R2 checks each part's SHA-256, and D1 marks the event
 complete only after every declared part exists. A lost response can be retried.
-Original routes remain saved until the owner unsaves them. Local completed
+After cloud acknowledgement, the incident's local road-video/log links are
+released; metadata and telemetry remain in the bounded report history. Queued
+clips are never discarded. Before 3.7.9, reports permanently saved the route;
+those existing saves remain until the owner unsaves them, because the old
+metadata cannot distinguish an automatic save from an explicit owner save. Local completed
 report history is pruned as needed to retain at most 200 reports; unuploaded
 reports are not discarded to make space. At most three captures run at once.
 

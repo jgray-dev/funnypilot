@@ -29,7 +29,7 @@ class FeedbackPopup:
     self.until = self.started + 15
     self.labels, self._ack = [], []
     self.saved = False
-    self.message = 'Saving drive...'
+    self.message = 'Saving clip...'
     self._send_at = 0.0
     self._send()
 
@@ -47,7 +47,7 @@ class FeedbackPopup:
   def layout(self, parent):
     scale = min(parent.width / 1920, parent.height / 1080)
     opened = time.monotonic() < self.until
-    w, h = (760, 300) if opened else (150, 65)
+    w, h = (1020, 510) if opened else (150, 65)
     self.rect = rl.Rectangle(parent.x + parent.width - (w + 35)*scale,
                              parent.y + parent.height - (h + 125)*scale, w*scale, h*scale)
     return scale, opened
@@ -70,23 +70,23 @@ class FeedbackPopup:
     r = self.rect
     T.plate(r)
     font = gui_app.font(FontWeight.MEDIUM)
-    size = max(16, int(27*scale))
+    size = max(16, int((34 if opened else 27)*scale))
     self._buttons = []
     if not opened:
       T.text_centered(font, 'Report', r.x+r.width/2, r.y+17*scale, size, T.WHITE)
       self._buttons.append(('open', r))
     else:
       T.text_at(font, 'What felt wrong? Select any.', r.x+18*scale, r.y+14*scale, size, T.WHITE)
-      done = rl.Rectangle(r.x+r.width-100*scale, r.y+5*scale, 95*scale, 50*scale)
-      T.text_centered(font, 'Done', done.x+done.width/2, done.y+10*scale, size, T.MUTED)
+      done = rl.Rectangle(r.x+r.width-170*scale, r.y+8*scale, 150*scale, 72*scale)
+      T.text_centered(font, 'Done', done.x+done.width/2, done.y+18*scale, size, T.MUTED)
       self._buttons.append(('done', done))
       for index, (key, label) in enumerate(P.LABELS.items()):
         x, y = index % 2, index // 2
-        chip = rl.Rectangle(r.x+(14+x*370)*scale, r.y+(64+y*57)*scale, 360*scale, 49*scale)
+        chip = rl.Rectangle(r.x+(20+x*500)*scale, r.y+(96+y*116)*scale, 480*scale, 100*scale)
         rl.draw_rectangle_rounded(chip, T.R_CHIP, 8, T.LAT_ONLY if key in self.labels else T.HAIRLINE)
-        T.text_centered(font, label, chip.x+chip.width/2, chip.y+10*scale, size, T.INK if key in self.labels else T.WHITE)
+        T.text_centered(font, label, chip.x+chip.width/2, chip.y+30*scale, size, T.INK if key in self.labels else T.WHITE)
         self._buttons.append((key, chip))
-      T.text_at(font, self.message[:70], r.x+18*scale, r.y+252*scale, max(14, int(20*scale)), T.MUTED)
+      T.text_at(font, self.message[:70], r.x+18*scale, r.y+466*scale, max(14, int(20*scale)), T.MUTED)
     for event in gui_app.mouse_events:
       if event.slot != 0:
         continue

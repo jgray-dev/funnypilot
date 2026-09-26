@@ -5,6 +5,7 @@ import time
 import requests
 
 from openpilot.sunnypilot.feedback import protocol as P
+from openpilot.sunnypilot.feedback.clips import release_uploaded_clip
 from openpilot.sunnypilot.navd import drive_index as D
 from openpilot.system.loggerd.drive_retention import is_locked
 
@@ -36,22 +37,29 @@ def upload_event(event_dir, config, log_root=D.REALDATA_ROOT, allowed=lambda: Tr
   if (directory / 'triage.jsonl').exists():
     files['triage.jsonl'] = directory / 'triage.jsonl'
   missing = []
-  # Entire enclosing minute segments retain playable video and capnp logs.
-  # Never parse/re-encode road video, and never upload cabin video or audio.
-  n = event['segment_at_report']
-  for seg in range(max(0, n-1), n+2):
-    path = D.segment_path(event['route'], seg, log_root)
-    if path is None or not Path(path).is_dir():
-      missing.append(f'segment {seg}')
-      continue
-    if is_locked(path):
-      return False  # immutable files only; revisit when loggerd closes them
-    for name in ('qlog.zst', 'qcamera.ts', 'rlog.zst'):
-      p = Path(path) / name
-      if p.is_file() and not p.is_symlink():
-        files[f'segment-{seg}-{name}'] = p
-      else:
-        missing.append(f'segment {seg}: {name}')
+  if event.get('clip_only'):
+    clip = P.read_json(str(directory / 'clip.json'))
+    if clip is None:
+      return False
+    missing.extend(clip['missing'])
+    files.update({name: directory / name for name in clip['files']})
+  else:
+    # Entire enclosing minute segments retain playable video and capnp logs.
+    # Never parse/re-encode road video, and never upload cabin video or audio.
+    n = event['segment_at_report']
+    for seg in range(max(0, n-1), n+2):
+      path = D.segment_path(event['route'], seg, log_root)
+      if path is None or not Path(path).is_dir():
+        missing.append(f'segment {seg}')
+        continue
+      if is_locked(path):
+        return False  # immutable files only; revisit when loggerd closes them
+      for name in ('qlog.zst', 'qcamera.ts', 'rlog.zst'):
+        p = Path(path) / name
+        if p.is_file() and not p.is_symlink():
+          files[f'segment-{seg}-{name}'] = p
+        else:
+          missing.append(f'segment {seg}: {name}')
   manifest = dict(event)
   manifest.pop('state', None)
   manifest['artifacts'] = []
@@ -105,6 +113,7 @@ def upload_event(event_dir, config, log_root=D.REALDATA_ROOT, allowed=lambda: Tr
     send('POST', base + '/complete')
   event.update(state='uploaded', uploaded_at=time.time(), upload_error='')  # noqa: TID251 - durable timestamp
   P.atomic_json(str(directory / 'event.json'), event, durable=True)
+  release_uploaded_clip(directory)
   # Local report metadata stays, while this derived copy no longer needs space.
   # The owner's saved drive is deliberately not unsaved by upload completion.
   return True

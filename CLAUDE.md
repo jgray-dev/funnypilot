@@ -63,14 +63,26 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.8 — Key Files
+## Current version: 3.7.9 — Key Files
 
-Based on clean 3.7.7 `daef46d950d30a9d9993951d40b78c6d09833e9c`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.8 `d188a6a60cf3096839357f038ebe05a07ec4217c`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. Current deployment/validation
-status: `docs/communication-3.7.8.md`.
+verification limits: `docs/engagement-3.7.5.md`. 3.7.9 is source-only until separately installed; evidence and validation limits:
+`docs/release-3.7.9.md`.
+
+- `model_settle.py`: fresh, distinct model frames must agree through the minimum
+  0.67 s (or longer configured delay); handover also checks current curvature.
+  Do not substitute a straight-wheel timer or unlock on stale/invalid plans.
+- `feedback/clips.py`: pin incident segments under the retention lock, retain
+  closed files before unpinning, release road artifacts only after cloud ack.
+  Never infer old saved routes were automatic and silently unsave them.
+- `loggerd/deleter.py`: pressure starts at 15% free / 5 GiB; recovery ends at
+  20% / 7 GiB. Saved/recording/pinned exclusions and corrupt-metadata pause stay.
+- `qcomgpsd/modemdiag.py`: receive and command-response deadlines permit manager
+  restart after modem silence. This is recovery hardening, not a proven RCA for
+  the owner's isolated GPS-unavailable event.
 
 - **Reader budget rule.** Never add a `carState` or `deviceState` subscriber:
   normal C3X driving has 14 and 12 readers, and deviceState reaches 15 with

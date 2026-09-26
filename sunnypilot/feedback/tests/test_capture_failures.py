@@ -10,7 +10,7 @@ import pytest
 
 from openpilot.sunnypilot.feedback import capture as C
 from openpilot.sunnypilot.feedback import protocol as P
-from openpilot.system.loggerd.drive_retention import read_saved
+from openpilot.system.loggerd.drive_retention import read_saved, pinned_segments
 
 ID = 'a' * 32
 ROUTE = '2026-09-05--10-00-00'
@@ -88,7 +88,8 @@ def test_initial_report_failure_retries_its_directory_and_original_corner(cap, m
     with pytest.raises(OSError):
       report(cap, ['unnecessary_slowdown'])
   assert cap.active[ID]['labels'] == []
-  assert read_saved(cap.log_root) == {ROUTE}
+  assert not read_saved(cap.log_root)
+  assert pinned_segments(cap.log_root)
   P.atomic_json(P.CORNER_CONTEXT, dict(t=101, governing=True, lat=40., lon=-77., bearing=90.))
   report(cap, ['unnecessary_slowdown'])
   assert cap.active[ID]['corner']['lat'] == 38.
