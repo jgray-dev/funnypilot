@@ -8,7 +8,7 @@ from opendbc.car.lateral import FRICTION_THRESHOLD, get_friction
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
-from openpilot.selfdrive.controls.lib.lat_handback import LatHandback, PRESS_SCALE
+from openpilot.selfdrive.controls.lib.lat_handback import LatHandback
 from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
 from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper
 from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME
@@ -89,29 +89,8 @@ class LatControlTorque(LatControl):
     self._inactive_saw_blinker  = False
     self._reengage_start_time   = -1e9
 
-    # FunnyPilot v3.2.3st: driver-override softening. The v3.2.2 interpolation
-    # sends firmer, more consistent curvature commands, so manually pushing the
-    # wheel away now meets more resistance. When the driver is actively applying
-    # torque we scale the TOTAL output torque down to _OVERRIDE_MIN_SCALE so it
-    # takes less force to retake the wheel. Panda hardware torque limits remain
-    # the safety backstop; exact no-op (scale 1.0) with no intervention.
-    # v3.2.8: the raw CS.steeringPressed trigger caused a bite-then-loosen limit
-    # cycle — wheel-inertia reaction torque during hard bites can latch
-    # steeringPressed with no driver involved, cutting torque, which released the
-    # bar, which restored torque, at a few Hz. The trigger is gated by
-    # OverrideGate (see override_gate.py): it engages only after a SUSTAINED
-    # press (0.4 s) and releases only after a sustained let-go (0.3 s), so it can
-    # never alternate against the controller's own output.
-    # v3.4.9: OverrideGate fixed the CHATTER but nothing scheduled the RETURN —
-    # the release was a 0.15 s first-order step, identical whether the model was
-    # 0.1 or 3 m/s^2 away from what the driver had just established. That step
-    # is the reported "as soon as it takes control it jumps too far right",
-    # once per corner. LatHandback (lat_handback.py) now owns the whole scale:
-    # same floor on the way in, and a return RAMP whose duration is scheduled
-    # by the desired-vs-actual lateral-accel divergence — 1.6 s when the two
-    # are close (nothing to correct, so no reason to snatch), 0.45 s when they
-    # are far apart (an evasive move genuinely needs authority back).
-    self._OVERRIDE_MIN_SCALE  = PRESS_SCALE  # total-torque floor while the driver presses
+    # Handback distinguishes bounded comfort softening from strong opposing
+    # driver force. It schedules a gradual return; the EPS governor is last.
     self._override_scale      = 1.0
     self._handback            = LatHandback(self.dt)
 
@@ -251,7 +230,11 @@ class LatControlTorque(LatControl):
       # measures is the delayed desired lat accel against the RAW measurement —
       # the same two numbers the error is built from, undamped, so the schedule
       # reflects the road and not the bump damper.
-      self._override_scale = self._handback.update(CS.steeringPressed, setpoint, raw_measurement)
+      self._override_scale = self._handback.update(CS.steeringPressed, setpoint, raw_measurement,
+                                                  CS.steeringTorque, self._eps_governor.last_out)
+      self.feedback_diagnostics.update(handback_takeover=self._handback.takeover,
+                                       handback_target=self._handback.press_target,
+                                       handback_ramping=self._handback.ramping)
 
       # v3.4.9: while the driver is actually in charge, BLEED the integrator
       # rather than merely freezing it. A frozen integrator still holds

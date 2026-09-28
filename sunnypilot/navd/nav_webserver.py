@@ -96,7 +96,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.9"
+EXPECTED_VERSION = "3.7.10"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -152,7 +152,10 @@ _CODE_MARKERS = [
   ("v3.3.8", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC blended mode restore"),
   ("v3.3.6", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
   ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
-  ("_OVERRIDE_MIN_SCALE", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "override softening"),
+  ("NUDGE_SCALE = 0.85", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "graded driver handover"),
+  ("MAX_PREDICTED_JERK", "/data/openpilot/sunnypilot/selfdrive/controls/lib/model_settle.py", "time-aligned curve consistency"),
+  ("ENGAGEMENT_OFFSET_KPH", "/data/openpilot/selfdrive/car/cruise.py", "fresh SET offset"),
+  ("_enable_button_age", "/data/openpilot/selfdrive/car/cruise.py", "retained RES intent"),
   ("class OverrideGate", "/data/openpilot/selfdrive/controls/lib/override_gate.py", "override gate"),
   ("v3.2.3st", "/data/openpilot/opendbc_repo/opendbc/car/hyundai/carcontroller.py", "brake chime fix"),
   ("class ModelSettle", "/data/openpilot/sunnypilot/selfdrive/controls/lib/model_settle.py", "model-stable post-blinker reactivation"),

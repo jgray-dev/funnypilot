@@ -1,14 +1,8 @@
-"""FunnyPilot v3.4.9 — LatHandback invariants (import-light, stdlib only).
+"""Bounded comfort/yield scheduling; physical EPS limits are tested separately."""
+import pytest
 
-The reported defect is a LIMIT CYCLE through a corner: grab, loosen, the model
-takes control and bites, grab again. v3.2.8's OverrideGate stopped the
-softening from chattering; nothing scheduled its RETURN, so handback was the
-same near-step regardless of how far apart the two desires were.
-
-Each test names the mutation it guards.
-"""
 from openpilot.selfdrive.controls.lib.lat_handback import (
-  LatHandback, PRESS_SCALE, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM,
+  LatHandback, PRESS_SCALE, NUDGE_SCALE, TAKEOVER_TORQUE, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM,
   INTEGRATOR_FREEZE_FRAC,
 )
 from openpilot.selfdrive.controls.lib.override_gate import ENGAGE_TIME, RELEASE_TIME
@@ -52,11 +46,10 @@ class TestNoInterventionIsAnExactNoOp:
     assert not hb.soft_integrator
 
 
-class TestPressBehaviourUnchanged:
-  def test_dwell_hysteresis_still_rejects_inertia_blips(self):
-    """MUTATION: drop OverrideGate. A hard self-steer bite can latch
-    steeringPressed for ~0.1-0.25 s with no driver involved; that must never
-    engage the softening (the v3.2.8 bite-then-loosen limit cycle)."""
+class TestComfortPressHysteresis:
+  def test_dwell_hysteresis_rejects_brief_threshold_crossings(self):
+    """Short threshold crossings alone do not engage comfort softening.
+    Their physical cause cannot be inferred from the boolean."""
     hb = LatHandback(DT)
     for _ in range(6):
       run(hb, int(0.2 / DT), True, 2.0, 1.0)
@@ -66,7 +59,7 @@ class TestPressBehaviourUnchanged:
 
   def test_sustained_press_reaches_the_floor(self):
     hb = LatHandback(DT)
-    run(hb, int((ENGAGE_TIME + 1.0) / DT), True, 3.0, 1.0)
+    run(hb, int((ENGAGE_TIME + 1.0) / DT), True, 4.0, 1.0)
     assert hb.engaged
     assert abs(hb.scale - PRESS_SCALE) < 0.01
 
@@ -78,21 +71,19 @@ class TestPressBehaviourUnchanged:
 
 
 class TestReturnIsScheduledByDivergence:
-  def test_small_gap_gets_the_long_ramp(self):
+  def test_small_gap_gets_the_normal_ramp(self):
     """MUTATION: use a fixed release time constant (the v3.2.3st behaviour).
 
-    This is the reported corner: the driver has settled the car on the line
-    they want, so the two desires are close and there is nothing to correct
-    urgently. Snatching authority back here is what bites."""
+    A small gap retains the existing slow return. This checks the schedule,
+    not a physical cause of the reported corner oscillation."""
     hb = LatHandback(DT)
     press_and_release(hb, 1.0, 1.0 - DIVERGE_LOW / 2)
     assert abs(hb.ramp_duration - T_SOFT) < 1e-9
     frames, _ = ramp_to_full(hb, 1.0, 1.0)
     assert abs(frames * DT - T_SOFT) < 0.05
 
-  def test_large_gap_gets_the_short_ramp(self):
-    """The evasive case: the car is far off the model's path and dawdling
-    there is the wrong trade."""
+  def test_large_gap_gets_the_longer_ramp(self):
+    """Greater disagreement must not accelerate the return toward the model."""
     hb = LatHandback(DT)
     press_and_release(hb, 3.5, 3.5 - DIVERGE_HIGH * 1.5)
     assert abs(hb.ramp_duration - T_FIRM) < 1e-9
@@ -100,11 +91,11 @@ class TestReturnIsScheduledByDivergence:
     assert abs(frames * DT - T_FIRM) < 0.05
 
   def test_duration_is_monotone_in_the_gap(self):
-    prev = 1e9
+    prev = 0.0
     for gap in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 4.0):
       hb = LatHandback(DT)
       press_and_release(hb, gap, 0.0)
-      assert hb.ramp_duration <= prev + 1e-9
+      assert hb.ramp_duration >= prev - 1e-9
       prev = hb.ramp_duration
     assert abs(prev - T_FIRM) < 1e-9
 
@@ -135,16 +126,14 @@ class TestReturnIsScheduledByDivergence:
 
 class TestDivergenceMeasurement:
   def test_peak_is_held_across_the_press(self):
-    """MUTATION: sample the gap only at the release instant. The driver in the
-    reported scenario has ALIGNED the car by the time they relax, so an
-    instantaneous sample would read ~0 and would schedule the wrong ramp for a
-    genuinely evasive intervention."""
+    """MUTATION: sample the gap only at the release instant. A driver may align the car just before release; a single instantaneous
+    sample would erase the earlier disagreement."""
     hb = LatHandback(DT)
     run(hb, int(0.6 / DT), True, 4.0, 0.5)   # 3.5 m/s^2 apart mid-press
     run(hb, int(0.1 / DT), True, 1.0, 1.0)   # aligned right before letting go
     run(hb, int(RELEASE_TIME / DT) + 1, False, 1.0, 1.0)
     assert hb.divergence > DIVERGE_HIGH * 0.5
-    assert hb.ramp_duration < T_SOFT
+    assert hb.ramp_duration > T_SOFT
 
   def test_stale_spikes_bleed_away(self):
     """MUTATION: pure max-hold with no bleed. A single spike at the start of a
@@ -190,7 +179,7 @@ class TestReEngagementAndReset:
     for _ in range(10):
       hb.update(False, 2.0, 1.0)
     assert hb.ramping
-    run(hb, int((ENGAGE_TIME + 0.5) / DT), True, 2.0, 1.0)
+    run(hb, int((ENGAGE_TIME + 0.5) / DT), True, 4.0, 1.0)
     assert not hb.ramping and hb.engaged
     assert abs(hb.scale - PRESS_SCALE) < 0.02
 
@@ -212,3 +201,57 @@ class TestReEngagementAndReset:
     assert hb.scale == 1.0
     assert not hb.engaged and not hb.ramping and not hb.soft_integrator
     assert hb.update(False, 2.0, 1.0) == 1.0
+
+
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_small_correction_preserves_more_assistance(direction):
+  hb = LatHandback(DT)
+  for _ in range(200):
+    hb.update(True, direction*1.0, direction*.8, direction*155.)
+  assert .82 < hb.scale <= NUDGE_SCALE
+  assert hb.soft_integrator and not hb.takeover
+  # Relaxing force without releasing must not start adding torque again.
+  before = hb.scale
+  run(hb, 100, True, 1.0, 1.0)
+  assert hb.scale <= before
+
+
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_strong_force_yields_without_comfort_dwell_and_latches(direction):
+  hb = LatHandback(DT)
+  assert hb.update(False, 1.0, 1.0, direction*TAKEOVER_TORQUE, -direction*.5) == 0.0
+  assert hb.engaged and hb.takeover and hb.soft_integrator
+  for _ in range(20):
+    assert hb.update(False, 1.0, 1.0, 0.0) == 0.0
+  for _ in range(15):
+    hb.update(False, 1.0, 1.0, 0.0)
+  assert hb.ramping and hb.ramp_duration == T_FIRM
+  assert hb.scale < .01
+
+
+def test_short_nudge_stops_return_immediately():
+  hb = LatHandback(DT)
+  press_and_release(hb, 2.0, 1.0)
+  run(hb, 30, False, 2.0, 1.0)
+  before = hb.scale
+  for _ in range(20):
+    assert hb.update(True, 2.0, 1.0) == before
+  hb.update(False, 2.0, 1.0)
+  assert 0.0 <= hb.scale-before < .001
+
+
+@pytest.mark.parametrize('field', range(3))
+@pytest.mark.parametrize('bad', [float('nan'), float('inf')])
+def test_invalid_inputs_yield_without_nan_output(field, bad):
+  hb = LatHandback(DT)
+  values = [1., 1., 0.]
+  values[field] = bad
+  assert hb.update(False, *values) == 0.0
+  assert hb.soft_integrator
+
+
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_force_aiding_the_current_torque_does_not_trigger_full_yield(direction):
+  hb = LatHandback(DT)
+  hb.update(True, 1.0, 1.0, direction*TAKEOVER_TORQUE, direction*.5)
+  assert not hb.takeover and hb.scale == 1.0

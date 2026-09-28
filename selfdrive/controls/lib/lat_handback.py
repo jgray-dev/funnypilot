@@ -1,77 +1,31 @@
-"""FunnyPilot v3.4.9 — LatHandback: give authority back on a schedule set by the gap.
+"""Bounded driver handover, with gentler assistance during small corrections.
 
-THE REPORTED CYCLE (right-hand turn, lateral engaged):
-  model asks for more right than the driver wants -> driver holds the wheel out
-  -> steeringPressed latches -> the override softening cuts total torque to 60%
-  -> the driver settles the car on the line they want and relaxes their grip
-  -> softening releases -> torque returns to 100% in ~0.15 s WITH THE MODEL'S
-     DESIRE UNCHANGED and a frozen integrator still holding pre-override state
-  -> the wheel bites right again -> the driver grabs it again.
-Once per corner, repeatedly.
+Small tracking disagreement and moderate hand force retain partial assistance.
+Large disagreement reduces it further; a full-scale opposing K5 driver force
+requests zero assistance until release. This is a heuristic, not an inference of intent.
+EPS, CarController and Panda driver limits always have final authority.
 
-The v3.2.8 OverrideGate fixed the WRONG half of this. Its dwell hysteresis
-stopped the softening from CHATTERING against wheel-inertia blips, and it did.
-But it says nothing about the return: the release is a first-order filter with
-a 0.15 s time constant, i.e. essentially a step, and it is the same step
-whether the controller was 0.1 m/s^2 away from what the driver had established
-or 3 m/s^2 away. The size of that step IS the bite.
-
-THE FIX: the return is a RAMP, and the ramp's duration is scheduled by the
-DIVERGENCE between what the model wants and what the car is actually doing at
-the moment the driver lets go, measured in lateral acceleration:
-
-    small gap (the corner case)   -> T_SOFT (1.6 s). There is almost nothing to
-                                     correct, so taking a long time to take it
-                                     costs nothing and removes the bite
-                                     entirely.
-    large gap (an evasive move)   -> T_FIRM (0.45 s). The car is far off the
-                                     model's path; dawdling there is the wrong
-                                     trade, so authority comes back briskly.
-
-Interpolated continuously between, and shaped with a smoothstep so the torque
-has no corner at either end of the ramp. The DIVERGENCE is peak-held with a
-slow bleed across the press, so a driver who happens to be momentarily aligned
-at the instant of release still gets the ramp their actual intervention earned.
-
-The second half of the bite is the INTEGRATOR. It is frozen while the driver
-presses (CS.steeringPressed), so at handback it still holds whatever it wound
-up to before the intervention — mid-corner, that is a demand for more right.
-`soft_integrator` keeps it frozen through the first half of the ramp and
-latcontrol bleeds it toward zero while the driver is actually in charge, so
-the returning authority is feedforward plus a live proportional term rather
-than a stored one.
-
-What is deliberately unchanged: the driver ALWAYS wins physically (panda
-driver-torque limits and the EPS clamp are untouched); this module only ever
-scales the controller's request DOWN, never up; and with no intervention at
-all it is an exact no-op (scale == 1.0 on every frame).
-
-Import-light (stdlib only) so it tests without the openpilot environment.
+Repeated short presses pause the return immediately. Greater disagreement earns
+more time to return, never a faster pull toward the model's previous path.
 """
+import math
+
 from openpilot.selfdrive.controls.lib.override_gate import OverrideGate
+from openpilot.selfdrive.controls.lib.eps_limit import STEER_MAX, DRIVER_ALLOWANCE, DRIVER_FACTOR, DRIVER_MULTIPLIER
 
-# Total-torque floor while a sustained driver press is in progress. Same value
-# and same meaning as the v3.2.3st constant this replaces.
 PRESS_SCALE = 0.6
-PRESS_TAU = 0.15  # s, first-order approach to the floor when a press engages
-
-# Divergence schedule, in m/s^2 of lateral acceleration between the delayed
-# desired lat accel and what the car is measured to be doing.
-DIVERGE_LOW = 0.4    # at or below: nothing meaningful to correct
-DIVERGE_HIGH = 2.5   # at or above: treat as evasive, return authority briskly
-T_SOFT = 1.6         # s, ramp duration at DIVERGE_LOW
-T_FIRM = 0.45        # s, ramp duration at DIVERGE_HIGH
-
-# Peak-hold bleed on the divergence measurement, m/s^2 per second. Fast enough
-# that a stale spike from earlier in a long press does not dominate, slow
-# enough that a momentary alignment right before release does not erase the
-# intervention that just happened.
+NUDGE_SCALE = 0.85
+PRESS_TAU = 0.15
+DIVERGE_LOW = 0.4
+DIVERGE_HIGH = 2.5
+T_SOFT = 1.6
+T_FIRM = 2.5  # greater disagreement: slower handback
 DIVERGE_BLEED = 2.0
-
-# The integrator stays frozen for this fraction of the ramp. Past it the error
-# is small enough that letting the integrator work again is what finishes the
-# correction rather than what causes a bite.
 INTEGRATOR_FREEZE_FRAC = 0.5
+# Same K5 sensor units as the existing EPS mirror, not steering-wheel Nm.
+# At this force the hardware's opposing-torque allowance reaches zero.
+TAKEOVER_TORQUE = (STEER_MAX / DRIVER_MULTIPLIER + DRIVER_ALLOWANCE) / DRIVER_FACTOR
+NUDGE_TORQUE = 150.0  # K5 steeringPressed threshold
 
 
 def _smoothstep(u: float) -> float:
@@ -106,6 +60,8 @@ class LatHandback:
     self._div_hold = 0.0
     self._ramp_t = 0.0
     self._ramp_s0 = 1.0
+    self.takeover = False
+    self.press_target = NUDGE_SCALE
 
   @property
   def soft_integrator(self) -> bool:
@@ -113,10 +69,22 @@ class LatHandback:
     error the driver's own intervention created."""
     return self.engaged or (self.ramping and self.progress < INTEGRATOR_FREEZE_FRAC)
 
-  def update(self, pressed: bool, desired_lat_accel: float, measured_lat_accel: float) -> float:
+  def update(self, pressed: bool, desired_lat_accel: float, measured_lat_accel: float,
+             driver_torque: float = 0.0, actuator_torque: float = 0.0) -> float:
+    valid = all(math.isfinite(x) for x in (desired_lat_accel, measured_lat_accel, driver_torque, actuator_torque))
+    # Strong force bypasses the comfort dwell. Latch the yield until the normal
+    # release hysteresis completes; force fluctuations cannot restore torque.
+    opposing = driver_torque * actuator_torque < 0.0
+    if not valid or (abs(driver_torque) >= TAKEOVER_TORQUE and (opposing or self.takeover)):
+      self.takeover = True
+      pressed = True
+      self._gate.engaged = True
     engaged = self._gate.update(bool(pressed))
-
-    gap = abs(float(desired_lat_accel) - float(measured_lat_accel))
+    gap = abs(desired_lat_accel - measured_lat_accel) if valid else DIVERGE_HIGH
+    force = abs(driver_torque) if valid else TAKEOVER_TORQUE
+    severity = max(_interp(gap, DIVERGE_LOW, DIVERGE_HIGH, 0.0, 1.0),
+                   _interp(force, NUDGE_TORQUE, TAKEOVER_TORQUE, 0.0, 1.0))
+    self.press_target = 0.0 if self.takeover else NUDGE_SCALE + (PRESS_SCALE-NUDGE_SCALE)*severity
     if engaged:
       # peak-hold with a bleed, so the schedule reflects the intervention and
       # not just the instant the driver happened to relax
@@ -129,7 +97,8 @@ class LatHandback:
       self._div_hold = gap
     elif self.engaged and not engaged:
       # RELEASE EDGE: schedule the return from the gap the driver left behind
-      self.divergence = self._div_hold
+      self.divergence = max(self._div_hold, DIVERGE_HIGH if self.takeover else 0.0)
+      self.takeover = False
       self.ramp_duration = _interp(self.divergence, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM)
       self._ramp_s0 = self.scale
       self._ramp_t = 0.0
@@ -143,8 +112,18 @@ class LatHandback:
       # first-order approach to the floor: engaging is allowed to be quick,
       # it is the RETURN that has to be scheduled
       alpha = self.dt / max(self.dt, PRESS_TAU)
-      self.scale += (PRESS_SCALE - self.scale) * alpha
+      # Once yielded, do not increase assistance while the driver still holds
+      # the wheel. A calmer measurement alone is not a release request.
+      self.scale += (min(self.scale, self.press_target) - self.scale) * alpha
+      if self.takeover:
+        self.scale = 0.0  # the downstream EPS governor still enforces torque slew
     elif self.ramping:
+      if pressed:
+        # Even a press shorter than the comfort dwell must stop reapplication.
+        self._ramp_s0 = self.scale
+        self._ramp_t = 0.0
+        self.progress = 0.0
+        return self.scale
       self._ramp_t += self.dt
       self.progress = min(self._ramp_t / max(self.ramp_duration, self.dt), 1.0)
       self.scale = self._ramp_s0 + (1.0 - self._ramp_s0) * _smoothstep(self.progress)

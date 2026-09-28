@@ -1,28 +1,9 @@
-"""FunnyPilot v3.2.8 — driver-override gate.
+"""Comfort-softening dwell and release hysteresis.
 
-Fixes the "bite then loosen" lateral oscillation. The v3.2.3st override
-softening scaled TOTAL steering torque to 60% the instant CS.steeringPressed
-latched. But steeringPressed is just torsion-bar torque over a threshold
-(HKG: 150 counts for 5 frames) — and a hard steering bite can cross that
-WITHOUT a driver override: the wheel rim's own inertia (or a lightly resting
-hand) resists the rapid acceleration and twists the bar. That closes a limit
-cycle: full torque -> wheel accelerates -> bar twists -> "pressed" -> torque
-cut to 60% + integrator frozen -> wheel decelerates -> bar relaxes ->
-"pressed" clears -> full torque bites again, at a few Hz.
-
-The gate breaks the cycle with dwell-time hysteresis:
-  * ENGAGE only after steeringPressed has been continuously true for
-    ENGAGE_TIME. Inertia blips during a bite last ~0.1-0.25 s and alternate
-    with releases, so they never qualify. A real takeover is a sustained
-    press and engages after ENGAGE_TIME (the driver still always wins
-    physically — panda driver-torque limits and the EPS are unaffected).
-  * RELEASE only after steeringPressed has been continuously false for
-    RELEASE_TIME, so a genuine override doesn't flicker at the threshold.
-
-Either way the softening can no longer alternate frame-to-frame: it is
-engaged (sustained fight -> steady 60%) or it is off (steady 100%).
-
-Import-light (stdlib only) so tests run without the openpilot environment.
+Short steeringPressed crossings alone cannot establish driver intent or their
+physical cause. This gate avoids repeated comfort scaling on those crossings;
+strong opposing torque bypasses it in LatHandback. EPS/Panda limits remain
+independent and do not wait for this comfort dwell.
 """
 
 ENGAGE_TIME = 0.4   # s of continuous steeringPressed before softening engages

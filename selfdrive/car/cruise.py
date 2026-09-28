@@ -15,6 +15,8 @@ V_CRUISE_UNSET = 255
 V_CRUISE_INITIAL = 40
 V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 105
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # round here to avoid rounding errors incrementing set speed
+ENGAGEMENT_OFFSET_KPH = 2.0 * CV.MPH_TO_KPH
+ENABLE_BUTTON_MAX_FRAMES = 100  # card runs at 100 Hz; bound cross-process intent
 
 ButtonEvent = car.CarState.ButtonEvent
 ButtonType = car.CarState.ButtonEvent.Type
@@ -38,6 +40,8 @@ class VCruiseHelper(VCruiseHelperSP):
     self.v_cruise_kph_last = 0
     self.button_timers = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0}
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
+    self._enable_button = None
+    self._enable_button_age = 0
 
   @property
   def v_cruise_initialized(self):
@@ -45,6 +49,20 @@ class VCruiseHelper(VCruiseHelperSP):
 
   def update_v_cruise(self, CS, enabled, is_metric):
     self.v_cruise_kph_last = self.v_cruise_kph
+    # The button release passes through selfdrived/controlsd before enabled
+    # comes back to card. CS_prev may no longer contain that one-frame edge.
+    # Retain only recent disabled-state intent; this never creates an enable
+    # event or bypasses the normal state machine's refusal/fault checks.
+    self._enable_button_age = min(self._enable_button_age + 1, ENABLE_BUTTON_MAX_FRAMES + 1)
+    if self._enable_button_age > ENABLE_BUTTON_MAX_FRAMES or not CS.cruiseState.available:
+      self._enable_button = None
+    for button in CS.buttonEvents:
+      if button.type in (ButtonType.cancel, ButtonType.mainCruise):
+        self._enable_button = None
+      elif (not enabled and CS.cruiseState.available and not button.pressed and
+            button.type in (ButtonType.accelCruise, ButtonType.resumeCruise, ButtonType.decelCruise, ButtonType.setCruise)):
+        self._enable_button = button.type.raw
+        self._enable_button_age = 0
 
     self.get_minimum_set_speed(is_metric)
 
@@ -140,6 +158,8 @@ class VCruiseHelper(VCruiseHelperSP):
         self.button_change_states[b.type.raw] = {"standstill": CS.cruiseState.standstill, "enabled": enabled}
 
   def initialize_v_cruise(self, CS, experimental_mode: bool, dynamic_experimental_control: bool) -> None:
+    intent = self._enable_button
+    self._enable_button = None
     # initializing is handled by the PCM
     if self.CP.pcmCruise:
       return
@@ -150,9 +170,16 @@ class VCruiseHelper(VCruiseHelperSP):
     else:
       initial = V_CRUISE_INITIAL
 
-    if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
+    buttons = [b.type for b in CS.buttonEvents if b.type in
+               (ButtonType.accelCruise, ButtonType.resumeCruise, ButtonType.decelCruise, ButtonType.setCruise)]
+    if buttons:
+      intent = buttons[-1]
+    if intent in (ButtonType.accelCruise, ButtonType.resumeCruise) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
     else:
-      self.v_cruise_kph = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
+      # Apply the owner's offset once to a newly captured speed. RES restores
+      # the already-corrected target above, so repeated resumes cannot ratchet it.
+      self.v_cruise_kph = float(np.clip(round(max(CS.vEgo * CV.MS_TO_KPH, initial)) + ENGAGEMENT_OFFSET_KPH,
+                                        self.v_cruise_min, V_CRUISE_MAX))
 
     self.v_cruise_cluster_kph = self.v_cruise_kph

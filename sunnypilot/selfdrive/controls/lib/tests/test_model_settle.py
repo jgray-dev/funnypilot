@@ -73,3 +73,25 @@ def test_maneuver_or_corrupt_trajectory_cannot_unlock(field, value):
   gate=ModelSettle()
   for i in range(30):
     assert not tick(gate,i,model=m)
+
+
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_coherent_gentle_curve_transition_unlocks_at_minimum_dwell(direction):
+  gate = ModelSettle()
+  for i in range(15):
+    # Every frame predicts the same evolving turn. Neither the future path nor
+    # the current wheel is straight, and the one-second horizon changes by .7.
+    accel = direction * (0.2 + .7*i*.05)
+    m = model(accel)
+    m.orientationRate.z = [(accel+direction*.7*t)/10 for t in m.orientationRate.t]
+    ready = tick(gate, i, model=m, measured_curvature=accel/100)
+    assert ready == (i == 14)
+
+
+def test_abrupt_future_turn_and_action_path_disagreement_do_not_unlock():
+  for rates, action in (([.0, .08, .16], .0), ([.0]*3, .8)):
+    gate = ModelSettle()
+    m = model(action)
+    m.orientationRate.z = rates
+    for i in range(30):
+      assert not tick(gate, i, model=m, measured_curvature=action/100)

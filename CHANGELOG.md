@@ -1,3 +1,21 @@
+## 3.7.10 — 2026-09-28
+
+Based on clean 3.7.9 `7eed85d6b`. GitHub source release; device validation pending.
+
+- Post-blinker reengagement compares model plans at matching future times,
+  allowing coherent gentle curves without requiring a flat one-second path.
+  Keep the 0.67 s minimum, configured delay, freshness and handover bounds.
+- Small driver corrections retain up to 85% assistance instead of a uniform
+  60%. Greater disagreement/force yields more; strong opposing force uses the
+  existing physical zero-authority threshold. Return takes 1.6–2.5 s, with
+  larger disagreement returning more slowly. A new press pauses restoration.
+- Fresh SET adds 2 mph within the existing set-speed bounds. RES restores the
+  corrected saved speed. Retain recent RES/SET intent across the asynchronous
+  enable response so RES cannot be mistaken for a fresh SET.
+- Add handover target/yield/return diagnostics through the existing feedback tap.
+
+Evidence, test coverage and vehicle-validation limits: `docs/release-3.7.10.md`.
+
 ## 3.7.9 — 2026-09-26
 
 Based on 3.7.8 `d188a6a60`.

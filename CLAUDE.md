@@ -63,18 +63,26 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.9 — Key Files
+## Current version: 3.7.10 — Key Files
 
-Based on clean 3.7.8 `d188a6a60cf3096839357f038ebe05a07ec4217c`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.9 `7eed85d6b3bde13f01946b5e0e1a4b9cc742603b`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. 3.7.9 is source-only until separately installed; evidence and validation limits:
-`docs/release-3.7.9.md`.
+verification limits: `docs/engagement-3.7.5.md`. 3.7.10 is source-only until separately installed; evidence and validation limits:
+`docs/release-3.7.10.md` (previous release: `docs/release-3.7.9.md`).
 
 - `model_settle.py`: fresh, distinct model frames must agree through the minimum
   0.67 s (or longer configured delay); handover also checks current curvature.
-  Do not substitute a straight-wheel timer or unlock on stale/invalid plans.
+  Compare overlapping plans at the same future instant; gentle curve evolution
+  is valid. Do not unlock on stale/invalid plans or remove the handover limits.
+- `lat_handback.py`: small corrections retain up to 85% assistance; larger
+  interventions yield more. Strong opposing K5 force latches zero request until
+  release. EPS/Panda bounds/slew remain authoritative. Intent is not knowable
+  from a torque threshold; road validation remains required.
+- `selfdrive/car/cruise.py`: fresh SET adds 2 mph; RES restores the saved target.
+  Retained button intent only selects that target AFTER the ordinary enable
+  response. It must never generate engagement or bypass no-entry conditions.
 - `feedback/clips.py`: pin incident segments under the retention lock, retain
   closed files before unpinning, release road artifacts only after cloud ack.
   Never infer old saved routes were automatic and silently unsave them.

@@ -239,3 +239,39 @@ def test_motion_credit_is_bounded_and_does_not_soften_a_planned_ramp():
   for i in range(10):
     motion.observe(0.1 if i else 0.0, i * DT)
     assert motion.rate_deg == 0.0  # one encoder tick is not ongoing motion
+
+
+@pytest.mark.parametrize('neural', [False, True])
+@pytest.mark.parametrize('direction', [-1.0, 1.0])
+def test_nudge_and_full_driver_yield_use_real_controller_and_eps(controllers, neural, direction):
+  ctrl, cs, vm, params, _ = make_torque(controllers, neural=neural)
+  def step():
+    return ctrl.update(True, cs, vm, params, False, direction*.00025, None, False, .2)
+  cs.steeringPressed = True
+  cs.steeringTorque = direction*155.
+  for _ in range(200):
+    output, _, state = step()
+    assert state.active and math.isfinite(output)
+  assert .82 < ctrl._override_scale <= .85
+  assert ctrl.pid.i == 0.0
+  assert output*direction < 0.0
+  # Opposing force reaches the EXISTING physical zero-authority threshold.
+  # Full yield must not wait another .4 seconds or flip latActive off/on.
+  cs.steeringTorque = direction*250.
+  step()
+  assert ctrl._handback.takeover and ctrl._override_scale == 0.0
+  for _ in range(60):
+    output, _, state = step()
+    assert state.active
+  assert output == 0.0
+  cs.steeringTorque = 0.0
+  cs.steeringPressed = False
+  previous = output
+  for _ in range(80):
+    output, _, state = step()
+    assert abs(output-previous) <= 3/384 + 1e-9
+    previous = output
+  assert ctrl._handback.ramping
+  assert 0.0 < ctrl._override_scale < .2
+  tick(ctrl, cs, vm, params, active=False)
+  assert ctrl.pid.i == 0.0 and not ctrl._handback.takeover
