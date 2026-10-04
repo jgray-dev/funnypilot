@@ -2,7 +2,7 @@
 import pytest
 
 from openpilot.selfdrive.controls.lib.lat_handback import (
-  LatHandback, PRESS_SCALE, NUDGE_SCALE, TAKEOVER_TORQUE, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM,
+  LatHandback, PRESS_SCALE, NUDGE_SCALE, DRIVER_ZERO_ALLOWANCE, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM,
   INTEGRATOR_FREEZE_FRAC,
 )
 from openpilot.selfdrive.controls.lib.override_gate import ENGAGE_TIME, RELEASE_TIME
@@ -209,7 +209,7 @@ def test_small_correction_preserves_more_assistance(direction):
   for _ in range(200):
     hb.update(True, direction*1.0, direction*.8, direction*155.)
   assert .82 < hb.scale <= NUDGE_SCALE
-  assert hb.soft_integrator and not hb.takeover
+  assert hb.soft_integrator and not hb.input_fault
   # Relaxing force without releasing must not start adding torque again.
   before = hb.scale
   run(hb, 100, True, 1.0, 1.0)
@@ -217,16 +217,15 @@ def test_small_correction_preserves_more_assistance(direction):
 
 
 @pytest.mark.parametrize('direction', [-1, 1])
-def test_strong_force_yields_without_comfort_dwell_and_latches(direction):
+def test_finite_force_never_latches_comfort_assistance_at_zero(direction):
   hb = LatHandback(DT)
-  assert hb.update(False, 1.0, 1.0, direction*TAKEOVER_TORQUE, -direction*.5) == 0.0
-  assert hb.engaged and hb.takeover and hb.soft_integrator
-  for _ in range(20):
-    assert hb.update(False, 1.0, 1.0, 0.0) == 0.0
-  for _ in range(15):
-    hb.update(False, 1.0, 1.0, 0.0)
-  assert hb.ramping and hb.ramp_duration == T_FIRM
-  assert hb.scale < .01
+  for i in range(500):
+    # Driver continues guiding through a direction change. There is deliberately
+    # no quiet release; the scalar must still leave useful assistance available.
+    desired = 1. if i < 100 else -1.
+    assert PRESS_SCALE <= hb.update(True, desired, desired*.9, direction*400.) <= 1.0
+    assert not hb.input_fault
+  assert hb.scale == pytest.approx(PRESS_SCALE)
 
 
 def test_short_nudge_stops_return_immediately():
@@ -253,5 +252,5 @@ def test_invalid_inputs_yield_without_nan_output(field, bad):
 @pytest.mark.parametrize('direction', [-1, 1])
 def test_force_aiding_the_current_torque_does_not_trigger_full_yield(direction):
   hb = LatHandback(DT)
-  hb.update(True, 1.0, 1.0, direction*TAKEOVER_TORQUE, direction*.5)
-  assert not hb.takeover and hb.scale == 1.0
+  hb.update(True, 1.0, 1.0, direction*DRIVER_ZERO_ALLOWANCE)
+  assert not hb.input_fault and hb.scale == 1.0

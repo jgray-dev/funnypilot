@@ -363,15 +363,14 @@ class TestDrivingIsThePriority:
     assert fn is not None, f"{name} not found — re-point this guard"
     return ast.unparse(fn)
 
-  def test_the_expensive_endpoints_check_whether_we_are_driving(self):
-    for name in ("handle_drive_download", "handle_drive_timeline"):
-      assert "_onroad" in self._handler(name), f"{name} would compete with the car"
+  def test_timeline_parsing_retains_its_separate_onroad_budget(self):
+    assert "_onroad" in self._handler("handle_drive_timeline")
 
   def test_cheap_endpoints_are_not_gated(self):
     # Anti-vacuous, and a real requirement: listing drives and serving an
     # already-encoded file are a directory scan and a sendfile. Refusing those
     # while driving would be caution with no beneficiary.
-    for name in ("handle_drives", "handle_drive_file", "handle_drive_playlist"):
+    for name in ("handle_drives", "handle_drive_file", "handle_drive_playlist", "handle_drive_download"):
       assert "_onroad" not in self._handler(name)
 
   def test_onroad_fails_toward_not_driving(self):

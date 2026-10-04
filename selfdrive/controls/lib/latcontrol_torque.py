@@ -11,7 +11,7 @@ from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.lat_handback import LatHandback
 from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
 from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper
-from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME
+from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME, transfer_motion_credit
 from openpilot.common.pid import PIDController
 
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
@@ -89,8 +89,8 @@ class LatControlTorque(LatControl):
     self._inactive_saw_blinker  = False
     self._reengage_start_time   = -1e9
 
-    # Handback distinguishes bounded comfort softening from strong opposing
-    # driver force. It schedules a gradual return; the EPS governor is last.
+    # Handback only softens comfort. Directional physical driver authority
+    # belongs to the EPS governor, applied last, without a software zero latch.
     self._override_scale      = 1.0
     self._handback            = LatHandback(self.dt)
 
@@ -178,6 +178,7 @@ class LatControlTorque(LatControl):
       error, measured_rate, reference_travel, preview_frames * self.dt, CS.vEgo,
       enabled=active and not (CS.steeringPressed or self._handback.soft_integrator or self._bump_damper.active or
                               self._eps_governor.driver_limited or curvature_limited))
+    friction_error = error
     error *= motion_scale
 
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
@@ -189,12 +190,16 @@ class LatControlTorque(LatControl):
     ff -= self.torque_params.latAccelOffset
     # v3.3.8: the jerk-lookahead term also replays the delay buffer, so its
     # contribution to the friction relay is damped by the same factor.
-    friction_input = error + damp * JERK_GAIN * desired_lateral_jerk
+    friction_input_raw = friction_error + damp * JERK_GAIN * desired_lateral_jerk
+    # Jerk can ask for an unwind while tracking error still asks for more turn.
+    # Reusing reduced error here could amplify or reverse the friction request.
+    friction_input = transfer_motion_credit(friction_input_raw, friction_error, self._motion_credit.credit)
     friction = get_friction(friction_input, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
     ff += friction
     self.feedback_diagnostics = {
       'neural': bool(neural), 'error_raw': float(setpoint - raw_measurement),
       'error_corrected': float(error), 'friction_input': float(friction_input), 'friction': float(friction),
+      'friction_input_raw': float(friction_input_raw),
       'friction_coefficient': float(self.torque_params.friction), 'laf': float(self.torque_params.latAccelFactor),
       'offset': float(self.torque_params.latAccelOffset), 'bump_scale': float(damp),
       'future_accel': float(future_desired_lateral_accel), 'setpoint': float(setpoint),
@@ -231,8 +236,8 @@ class LatControlTorque(LatControl):
       # the same two numbers the error is built from, undamped, so the schedule
       # reflects the road and not the bump damper.
       self._override_scale = self._handback.update(CS.steeringPressed, setpoint, raw_measurement,
-                                                  CS.steeringTorque, self._eps_governor.last_out)
-      self.feedback_diagnostics.update(handback_takeover=self._handback.takeover,
+                                                  CS.steeringTorque)
+      self.feedback_diagnostics.update(handback_input_fault=self._handback.input_fault,
                                        handback_target=self._handback.press_target,
                                        handback_ramping=self._handback.ramping)
 

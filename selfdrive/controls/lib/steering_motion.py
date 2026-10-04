@@ -85,3 +85,16 @@ class SteeringMotionCredit:
     self.credit = speed_weight * credit_limit * surplus / (abs(error) + surplus + 1e-9)
     self.scale = 1.0 - self.credit / abs(error)
     return self.scale
+
+
+def transfer_motion_credit(value: float, reference_error: float, credit: float) -> float:
+  """Spend existing credit only on a correction in the same direction.
+
+  Friction includes jerk preview and can oppose the tracking error during an
+  unwind. Reducing that error before adding jerk amplifies the opposite request.
+  Credit must neither increase magnitude, reverse sign, nor exceed its budget.
+  """
+  if not all(math.isfinite(x) for x in (value, reference_error, credit)) or value*reference_error <= 0.0:
+    return value
+  reduction = min(max(credit, 0.0), MAX_ACCEL_CREDIT, (1.0-MIN_CORRECTION_SCALE)*abs(value))
+  return value-math.copysign(reduction, value)

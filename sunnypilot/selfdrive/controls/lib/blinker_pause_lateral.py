@@ -46,7 +46,10 @@ class BlinkerPauseLateral:
     if not self._blinker_was_on:
       return False
     # Once paused, crossing the speed threshold cannot unlock a signalled turn.
-    if CS.leftBlinker or CS.rightBlinker or CS.steeringPressed or not model_state:
+    # Guiding a curve can keep steeringPressed true even when the model agrees
+    # with the driver's path. Judge handover from model/vehicle agreement, not
+    # a hands-off interval. Directional EPS/Panda override remains downstream.
+    if CS.leftBlinker or CS.rightBlinker or not model_state:
       self.model_settle.reset()
       return True
     if self.model_settle.update(speed=CS.vEgo, delay=self.reengage_delay, **model_state):

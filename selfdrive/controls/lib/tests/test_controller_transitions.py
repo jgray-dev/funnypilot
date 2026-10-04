@@ -255,23 +255,40 @@ def test_nudge_and_full_driver_yield_use_real_controller_and_eps(controllers, ne
   assert .82 < ctrl._override_scale <= .85
   assert ctrl.pid.i == 0.0
   assert output*direction < 0.0
-  # Opposing force reaches the EXISTING physical zero-authority threshold.
-  # Full yield must not wait another .4 seconds or flip latActive off/on.
+  # Physical opposing authority still reaches zero, but comfort must not latch
+  # BOTH directions off. The original report crosses into a bend in the other
+  # direction while the driver continues holding the wheel.
   cs.steeringTorque = direction*250.
-  step()
-  assert ctrl._handback.takeover and ctrl._override_scale == 0.0
   for _ in range(60):
     output, _, state = step()
     assert state.active
   assert output == 0.0
-  cs.steeringTorque = 0.0
-  cs.steeringPressed = False
-  previous = output
-  for _ in range(80):
-    output, _, state = step()
-    assert abs(output-previous) <= 3/384 + 1e-9
-    previous = output
-  assert ctrl._handback.ramping
-  assert 0.0 < ctrl._override_scale < .2
+  assert ctrl._override_scale >= .6 and not ctrl._handback.input_fault
+  for _ in range(100):
+    output, _, state = ctrl.update(True, cs, vm, params, False, -direction*.00025, None, False, .2)
+  assert output*direction > 0.0  # assistance in the driver's direction, no release required
+  assert state.active and ctrl.pid.i == 0.0
   tick(ctrl, cs, vm, params, active=False)
-  assert ctrl.pid.i == 0.0 and not ctrl._handback.takeover
+  assert ctrl.pid.i == 0.0 and not ctrl._handback.input_fault
+
+
+@pytest.mark.parametrize('direction', [-1.0, 1.0])
+@pytest.mark.parametrize('jerk', [-.25, -.10])
+def test_motion_credit_cannot_amplify_or_reverse_unwind_friction(controllers, direction, jerk):
+  ctrl, cs, vm, params, _ = make_torque(controllers)
+  ctrl.torque_params.friction = .1
+  ctrl.lat_accel_request_buffer.extend([direction*.1] * ctrl.lat_accel_request_buffer_len)
+  # Isolate a measured correction already earning credit, with a model jerk
+  # preview asking to unwind. Execute the production friction/PID/output path.
+  def credit(*args, **kwargs):
+    ctrl._motion_credit.credit = .06
+    return .4
+  ctrl._motion_credit.correction_scale = credit
+  ctrl.jerk_filter.update = lambda value: direction*jerk/.3
+  ctrl.update(True, cs, vm, params, False, direction*.00025, None, False, .2)
+  d = ctrl.feedback_diagnostics
+  raw = direction*(.1+jerk)
+  assert abs(d['friction_input']) <= abs(raw) + 1e-12
+  assert d['friction_input']*raw >= 0.0
+  assert d['error_corrected'] == pytest.approx(direction*.04)
+  assert d['future_accel'] == pytest.approx(direction*.1)

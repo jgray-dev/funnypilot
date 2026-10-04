@@ -17,12 +17,11 @@ import time
 import struct
 import concurrent.futures
 import functools
-import tarfile
 
 import aiohttp
 from aiohttp import web
 
-from openpilot.sunnypilot.navd import drive_index
+from openpilot.sunnypilot.navd import drive_index, drive_download
 from openpilot.sunnypilot.feedback import protocol as feedback_protocol
 
 # ── logging, deliberately lazy (v3.6.9) ─────────────────────────────────────
@@ -96,7 +95,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.10"
+EXPECTED_VERSION = "3.7.11"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -152,6 +151,9 @@ _CODE_MARKERS = [
   ("v3.3.8", "/data/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py", "MPC blended mode restore"),
   ("v3.3.6", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
   ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
+  ("self.input_fault", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "force does not latch zero assistance"),
+  ("transfer_motion_credit", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "sign-preserving friction credit"),
+  ("def tar_chunks", "/data/openpilot/sunnypilot/navd/drive_download.py", "active-recording export snapshots"),
   ("NUDGE_SCALE = 0.85", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "graded driver handover"),
   ("MAX_PREDICTED_JERK", "/data/openpilot/sunnypilot/selfdrive/controls/lib/model_settle.py", "time-aligned curve consistency"),
   ("ENGAGEMENT_OFFSET_KPH", "/data/openpilot/selfdrive/car/cruise.py", "fresh SET offset"),
@@ -946,15 +948,9 @@ async def handle_index(request: web.Request) -> web.Response:
 #     scheduler will give it. The default executor is sized to CPU count, which
 #     on this SoC means a single browser tab could put every core on log
 #     parsing while the car is deciding when to brake.
-#   * IT MUST NOT DO EXPENSIVE WORK WHILE DRIVING AT ALL. `_onroad()` reads the
-#     same `IsOnroad` param manager sets, and the two genuinely expensive
-#     endpoints — the first-time timeline parse and a multi-gigabyte download —
-#     refuse with a 503 and an explanation rather than competing. Serving an
-#     already-indexed drive stays allowed, because that is a sendfile and a
-#     cached JSON read.
-#
-# THE REFUSAL IS THE FEATURE. A dashboard that quietly degrades the car to stay
-# responsive has the priority backwards.
+#   * Requested video/data exports remain available on-road. Their bounded,
+#     uncompressed snapshot reads share the one background worker. Timeline
+#     decompression retains its separate on-road parse budget.
 # ════════════════════════════════════════════════════════════════════════════
 
 def _nice_worker() -> None:
@@ -962,6 +958,8 @@ def _nice_worker() -> None:
   ThreadPoolExecutor whose initializer raises becomes permanently BROKEN, so
   every later `_run` fails. Losing the nice value costs a little scheduler
   priority; losing the pool costs the whole Drives section."""
+  from openpilot.common.thread_config import configure_background_thread
+  configure_background_thread()
   try:
     os.nice(10)
   except Exception:
@@ -979,24 +977,16 @@ async def _run(fn, *args):
 
 
 def _onroad() -> bool:
-  """Is the car driving? False on any doubt.
+  """Restrict background timeline parsing; requested exports do not use this.
 
-  FAILING TOWARD 'NOT DRIVING' IS THE RIGHT DIRECTION HERE and it is worth
-  saying why, because the instinct is the opposite. This flag gates whether the
-  dashboard may do expensive work; reading it wrong in the cautious direction
-  means the owner cannot download a drive from their driveway because Params is
-  unreadable, which is a bug they cannot diagnose. Reading it wrong the other
-  way costs one CPU-second on a niced thread. The car's own protection is the
-  single worker and the nice level, not this.
+  If Params is unavailable, the one-worker scheduling and parse budget remain
+  in force. Reading this optional status must not break the web dashboard.
   """
   try:
     from openpilot.common.params import Params
     return bool(Params().get_bool("IsOnroad"))
   except Exception:
     return False
-
-
-_BUSY_MSG = "The car is driving. This waits until you are parked — driving comes first."
 
 
 @web.middleware
@@ -1054,7 +1044,6 @@ def _bg(coro):
 # ════════════════════════════════════════════════════════════════════════════
 
 TIMELINE_SEGMENTS_PER_CALL = 4
-_DOWNLOAD_CHUNK = 256 * 1024
 
 
 def _route_arg(request: web.Request) -> str:
@@ -1189,12 +1178,10 @@ async def handle_drive_download(request: web.Request) -> web.StreamResponse:
   many gigabytes go out.
   """
   route = _route_arg(request)
-  if _onroad():
-    raise web.HTTPServiceUnavailable(text=_BUSY_MSG)
   what = request.query.get("what", "all")
   if what not in ("video", "data", "all"):
     raise web.HTTPBadRequest(text="what must be video, data or all")
-  segs = drive_index.route_segments(route)
+  segs = await _run(drive_index.route_segments, route)
   if not segs:
     raise web.HTTPNotFound(text="no such drive")
 
@@ -1210,30 +1197,20 @@ async def handle_drive_download(request: web.Request) -> web.StreamResponse:
   })
   await resp.prepare(request)
 
-  def _hdr(name: str, size: int) -> bytes:
-    info = tarfile.TarInfo(name)
-    info.size = size
-    info.mtime = int(time.time())  # noqa: TID251 - tar headers are wall clock
-    return info.tobuf()
-
-  for s in segs:
-    d = drive_index.segment_path(route, s)
-    if d is None:
-      continue
-    for fname in wanted:
-      path = os.path.join(d, fname)
-      if not os.path.isfile(path):
-        continue
-      size = os.path.getsize(path)
-      await resp.write(_hdr(f"{route}--{s}/{fname}", size))
-      with open(path, "rb") as fh:
-        while chunk := fh.read(_DOWNLOAD_CHUNK):
-          await resp.write(chunk)
-      pad = (-size) % 512
-      if pad:
-        await resp.write(b"\0" * pad)
-  await resp.write(b"\0" * 1024)   # tar end-of-archive
-  await resp.write_eof()
+  chunks = drive_download.tar_chunks(route, segs, wanted, drive_index.segment_path)
+  try:
+    while (chunk := await _run(next, chunks, None)) is not None:
+      await resp.write(chunk)
+    await resp.write_eof()
+  except (Exception, asyncio.CancelledError):
+    # A truncated archive must fail visibly, not look like a successful export.
+    resp.force_close()
+    if request.transport is not None:
+      request.transport.close()
+    raise
+  finally:
+    # Same single worker: close cannot race an in-flight read after cancellation.
+    await _run(chunks.close)
   return resp
 
 

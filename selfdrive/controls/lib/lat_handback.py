@@ -1,12 +1,9 @@
-"""Bounded driver handover, with gentler assistance during small corrections.
+"""Bounded comfort softening without a latched driver-takeover classifier.
 
-Small tracking disagreement and moderate hand force retain partial assistance.
-Large disagreement reduces it further; a full-scale opposing K5 driver force
-requests zero assistance until release. This is a heuristic, not an inference of intent.
-EPS, CarController and Panda driver limits always have final authority.
-
-Repeated short presses pause the return immediately. Greater disagreement earns
-more time to return, never a faster pull toward the model's previous path.
+A finite driver-force sample must never latch all assistance off. EPS and Panda
+already enforce directional driver authority each frame. A software zero latch
+also suppressed assistance in the driver's direction after a corner reversal.
+Only invalid handback inputs latch zero until a valid, quiet release.
 """
 import math
 
@@ -24,7 +21,7 @@ DIVERGE_BLEED = 2.0
 INTEGRATOR_FREEZE_FRAC = 0.5
 # Same K5 sensor units as the existing EPS mirror, not steering-wheel Nm.
 # At this force the hardware's opposing-torque allowance reaches zero.
-TAKEOVER_TORQUE = (STEER_MAX / DRIVER_MULTIPLIER + DRIVER_ALLOWANCE) / DRIVER_FACTOR
+DRIVER_ZERO_ALLOWANCE = (STEER_MAX / DRIVER_MULTIPLIER + DRIVER_ALLOWANCE) / DRIVER_FACTOR
 NUDGE_TORQUE = 150.0  # K5 steeringPressed threshold
 
 
@@ -60,7 +57,7 @@ class LatHandback:
     self._div_hold = 0.0
     self._ramp_t = 0.0
     self._ramp_s0 = 1.0
-    self.takeover = False
+    self.input_fault = False
     self.press_target = NUDGE_SCALE
 
   @property
@@ -70,21 +67,20 @@ class LatHandback:
     return self.engaged or (self.ramping and self.progress < INTEGRATOR_FREEZE_FRAC)
 
   def update(self, pressed: bool, desired_lat_accel: float, measured_lat_accel: float,
-             driver_torque: float = 0.0, actuator_torque: float = 0.0) -> float:
-    valid = all(math.isfinite(x) for x in (desired_lat_accel, measured_lat_accel, driver_torque, actuator_torque))
-    # Strong force bypasses the comfort dwell. Latch the yield until the normal
-    # release hysteresis completes; force fluctuations cannot restore torque.
-    opposing = driver_torque * actuator_torque < 0.0
-    if not valid or (abs(driver_torque) >= TAKEOVER_TORQUE and (opposing or self.takeover)):
-      self.takeover = True
+             driver_torque: float = 0.0) -> float:
+    valid = all(math.isfinite(x) for x in (desired_lat_accel, measured_lat_accel, driver_torque))
+    # Sensor force is not proof of intent. Physical opposing-torque limits
+    # remain immediate and directional; comfort softening never latches zero.
+    if not valid:
+      self.input_fault = True
       pressed = True
       self._gate.engaged = True
     engaged = self._gate.update(bool(pressed))
     gap = abs(desired_lat_accel - measured_lat_accel) if valid else DIVERGE_HIGH
-    force = abs(driver_torque) if valid else TAKEOVER_TORQUE
+    force = abs(driver_torque) if valid else DRIVER_ZERO_ALLOWANCE
     severity = max(_interp(gap, DIVERGE_LOW, DIVERGE_HIGH, 0.0, 1.0),
-                   _interp(force, NUDGE_TORQUE, TAKEOVER_TORQUE, 0.0, 1.0))
-    self.press_target = 0.0 if self.takeover else NUDGE_SCALE + (PRESS_SCALE-NUDGE_SCALE)*severity
+                   _interp(force, NUDGE_TORQUE, DRIVER_ZERO_ALLOWANCE, 0.0, 1.0))
+    self.press_target = 0.0 if self.input_fault else NUDGE_SCALE + (PRESS_SCALE-NUDGE_SCALE)*severity
     if engaged:
       # peak-hold with a bleed, so the schedule reflects the intervention and
       # not just the instant the driver happened to relax
@@ -97,8 +93,8 @@ class LatHandback:
       self._div_hold = gap
     elif self.engaged and not engaged:
       # RELEASE EDGE: schedule the return from the gap the driver left behind
-      self.divergence = max(self._div_hold, DIVERGE_HIGH if self.takeover else 0.0)
-      self.takeover = False
+      self.divergence = max(self._div_hold, DIVERGE_HIGH if self.input_fault else 0.0)
+      self.input_fault = False
       self.ramp_duration = _interp(self.divergence, DIVERGE_LOW, DIVERGE_HIGH, T_SOFT, T_FIRM)
       self._ramp_s0 = self.scale
       self._ramp_t = 0.0
@@ -115,7 +111,7 @@ class LatHandback:
       # Once yielded, do not increase assistance while the driver still holds
       # the wheel. A calmer measurement alone is not a release request.
       self.scale += (min(self.scale, self.press_target) - self.scale) * alpha
-      if self.takeover:
+      if self.input_fault:
         self.scale = 0.0  # the downstream EPS governor still enforces torque slew
     elif self.ramping:
       if pressed:

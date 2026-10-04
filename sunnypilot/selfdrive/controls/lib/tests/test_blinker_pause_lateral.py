@@ -170,3 +170,40 @@ class TestBlinkerPauseLateral:
     self.blinker_pause_lateral.enabled = False
     assert not self.blinker_pause_lateral.update(self.CS)
     assert not self.blinker_pause_lateral._blinker_was_on
+
+  def test_guiding_a_consistent_curve_does_not_require_releasing_the_wheel(self):
+    from cereal import log
+    model = log.ModelDataV2.new_message()
+    model.action.desiredCurvature = .004
+    model.orientationRate.t = [0., .5, 1.]
+    model.orientationRate.z = [.04]*3
+    self.CS.vEgo = 8.
+    self.CS.leftBlinker = True
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.CS.leftBlinker = False
+    self.CS.vEgo = 10.
+    self.CS.steeringPressed = True
+    self.CS.steeringTorque = -190.
+    self.CS.steeringAngleDeg = -15.
+    for i in range(15):
+      now = 1+i*.05
+      paused = self.blinker_pause_lateral.update(self.CS, model=model, now=now, received=now,
+                                                stamp=i+1, valid=True, measured_curvature=.004)
+      assert paused == (i < 14)
+
+  def test_driver_and_model_disagreement_still_prevents_handover(self):
+    from cereal import log
+    model = log.ModelDataV2.new_message()
+    model.action.desiredCurvature = .004
+    model.orientationRate.t = [0., .5, 1.]
+    model.orientationRate.z = [.04]*3
+    self.CS.vEgo = 8.
+    self.CS.leftBlinker = True
+    assert self.blinker_pause_lateral.update(self.CS)
+    self.CS.leftBlinker = False
+    self.CS.vEgo = 10.
+    self.CS.steeringPressed = True
+    for i in range(30):
+      now = 1+i*.05
+      assert self.blinker_pause_lateral.update(self.CS, model=model, now=now, received=now,
+                                               stamp=i+1, valid=True, measured_curvature=-.004)

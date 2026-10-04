@@ -1,3 +1,19 @@
+## 3.7.11 — 2026-10-04
+
+Based on clean 3.7.10 `71d40983c`. Source release; vehicle validation pending.
+
+- Fix the force-triggered handback latch identified in both new steering-wander
+  reports. Guiding pressure no longer holds assistance at zero after the model
+  and driver change direction. Physical directional override limits remain.
+- Correct friction-credit sign handling during corner unwind. Damping tracking
+  error cannot amplify or reverse the jerk-preview friction correction.
+- Post-signal handover uses model/vehicle agreement without a steering-pressure
+  veto. Keep the 0.67 s minimum, model freshness and bounded curvature checks.
+- Enable requested video/data downloads on-road. Snapshot growing file sizes,
+  stream reads through the background worker and close/abort cleanly on failure.
+
+Evidence, regression checks and limits: `docs/release-3.7.11.md`.
+
 ## 3.7.10 — 2026-09-28
 
 Based on clean 3.7.9 `7eed85d6b`. GitHub source release; device validation pending.

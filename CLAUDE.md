@@ -63,23 +63,31 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.10 — Key Files
+## Current version: 3.7.11 — Key Files
 
-Based on clean 3.7.9 `7eed85d6b3bde13f01946b5e0e1a4b9cc742603b`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.10 `71d40983c946861a570c6adedb7e5506544c23ef`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. 3.7.10 is source-only until separately installed; evidence and validation limits:
-`docs/release-3.7.10.md` (previous release: `docs/release-3.7.9.md`).
+verification limits: `docs/engagement-3.7.5.md`. 3.7.11 is source-only until separately installed; evidence and validation limits:
+`docs/release-3.7.11.md` (previous release: `docs/release-3.7.10.md`).
 
 - `model_settle.py`: fresh, distinct model frames must agree through the minimum
   0.67 s (or longer configured delay); handover also checks current curvature.
   Compare overlapping plans at the same future instant; gentle curve evolution
-  is valid. Do not unlock on stale/invalid plans or remove the handover limits.
-- `lat_handback.py`: small corrections retain up to 85% assistance; larger
-  interventions yield more. Strong opposing K5 force latches zero request until
-  release. EPS/Panda bounds/slew remain authoritative. Intent is not knowable
-  from a torque threshold; road validation remains required.
+  is valid. Guiding pressure alone must not reset the dwell; model/vehicle
+  agreement decides the handover. Stale/invalid/maneuvering plans stay blocked.
+- `lat_handback.py`: finite driver torque must not latch all assistance at zero.
+  The 3.7.10 latch suppressed even torque agreeing with the driver's new turn.
+  Comfort retains a 60–85% scale; directional EPS/Panda limits remain final.
+  Only invalid inputs latch zero pending valid release. Do not infer intent
+  from a torque threshold or reintroduce a hands-off recovery requirement.
+- `steering_motion.transfer_motion_credit`: friction has jerk preview and may
+  oppose tracking error during unwind. Credit must not amplify it, reverse its
+  sign, or exceed the existing budget. Do not filter model knots to fix this.
+- `navd/drive_download.py`: on-road exports are available. Snapshot each open
+  file's size, stream bounded chunks on the background worker, close on cancel,
+  and abort visibly on truncation. Never read a growing file past its tar size.
 - `selfdrive/car/cruise.py`: fresh SET adds 2 mph; RES restores the saved target.
   Retained button intent only selects that target AFTER the ordinary enable
   response. It must never generate engagement or bypass no-entry conditions.
