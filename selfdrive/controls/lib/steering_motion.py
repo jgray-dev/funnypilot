@@ -71,20 +71,27 @@ class SteeringMotionCredit:
     Reference travel is future delayed setpoint minus current delayed setpoint,
     not a derivative of the model's next update. That future is already known.
     """
-    self.scale, self.credit = 1.0, 0.0
-    if (not enabled or not all(math.isfinite(x) for x in (error, measured_rate, reference_travel, preview_time, v_ego)) or
-        preview_time <= 0.0 or preview_time > PREVIEW_TIME + 1e-9 or v_ego <= 5.0 or error * measured_rate <= 0.0):
-      return self.scale
-
-    direction = math.copysign(1.0, error)
-    surplus = max(0.0, direction * (measured_rate * preview_time - reference_travel))
-    speed_weight = min((v_ego - 5.0) / 5.0, 1.0)
-    credit_limit = min(MAX_ACCEL_CREDIT, (1.0 - MIN_CORRECTION_SCALE) * abs(error))
-    # Smoothly spend only part of the demonstrated surplus; no hard switch
-    # between full feedback and its floor as the wheel approaches the target.
-    self.credit = speed_weight * credit_limit * surplus / (abs(error) + surplus + 1e-9)
-    self.scale = 1.0 - self.credit / abs(error)
+    self.credit = motion_credit(error, measured_rate, reference_travel, preview_time, v_ego, enabled)
+    self.scale = 1.0 - self.credit / abs(error) if self.credit > 0.0 else 1.0
     return self.scale
+
+
+def motion_credit(error: float, measured_rate: float, reference_travel: float,
+                  preview_time: float, v_ego: float, enabled: bool = True) -> float:
+  """Credit for one correction channel, in lateral-acceleration units.
+
+  Tracking error and jerk-preview friction can request opposite directions.
+  Each must earn credit from wheel motion into ITS request, never inherit the
+  other channel's sign decision. Both use the same bounded surplus-travel rule.
+  """
+  if (not enabled or not all(math.isfinite(x) for x in (error, measured_rate, reference_travel, preview_time, v_ego)) or
+      preview_time <= 0.0 or preview_time > PREVIEW_TIME + 1e-9 or v_ego <= 5.0 or error * measured_rate <= 0.0):
+    return 0.0
+  direction = math.copysign(1.0, error)
+  surplus = max(0.0, direction * (measured_rate * preview_time - reference_travel))
+  speed_weight = min((v_ego - 5.0) / 5.0, 1.0)
+  credit_limit = min(MAX_ACCEL_CREDIT, (1.0 - MIN_CORRECTION_SCALE) * abs(error))
+  return speed_weight * credit_limit * surplus / (abs(error) + surplus + 1e-9)
 
 
 def transfer_motion_credit(value: float, reference_error: float, credit: float) -> float:

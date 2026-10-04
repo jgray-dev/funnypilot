@@ -11,7 +11,7 @@ from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.lat_handback import LatHandback
 from openpilot.selfdrive.controls.lib.eps_limit import EpsTorqueGovernor
 from openpilot.selfdrive.controls.lib.bump_damper import BumpDamper
-from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME, transfer_motion_credit
+from openpilot.selfdrive.controls.lib.steering_motion import SteeringMotionCredit, PREVIEW_TIME, motion_credit, transfer_motion_credit
 from openpilot.common.pid import PIDController
 
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
@@ -174,10 +174,10 @@ class LatControlTorque(LatControl):
     # transport lag. Cancelling motion credit on that flag switched off this
     # bounded damping during the recorded corner oscillations. Keep the flag
     # for integrator freeze below; all EPS/panda limits still apply downstream.
+    motion_enabled = active and not (CS.steeringPressed or self._handback.soft_integrator or self._bump_damper.active or
+                                    self._eps_governor.driver_limited or curvature_limited)
     motion_scale = self._motion_credit.correction_scale(
-      error, measured_rate, reference_travel, preview_frames * self.dt, CS.vEgo,
-      enabled=active and not (CS.steeringPressed or self._handback.soft_integrator or self._bump_damper.active or
-                              self._eps_governor.driver_limited or curvature_limited))
+      error, measured_rate, reference_travel, preview_frames * self.dt, CS.vEgo, enabled=motion_enabled)
     friction_error = error
     error *= motion_scale
 
@@ -191,15 +191,25 @@ class LatControlTorque(LatControl):
     # v3.3.8: the jerk-lookahead term also replays the delay buffer, so its
     # contribution to the friction relay is damped by the same factor.
     friction_input_raw = friction_error + damp * JERK_GAIN * desired_lateral_jerk
-    # Jerk can ask for an unwind while tracking error still asks for more turn.
-    # Reusing reduced error here could amplify or reverse the friction request.
-    friction_input = transfer_motion_credit(friction_input_raw, friction_error, self._motion_credit.credit)
+    # Jerk preview can oppose the tracking error. Earn credit against the full
+    # friction request: the wheel may already be closing that request while
+    # moving AWAY from the delayed proportional target. Sharing its credit
+    # left this high-gain channel undamped in the 3.7.11 bite recording.
+    friction_credit = motion_credit(friction_input_raw, measured_rate, reference_travel,
+                                    preview_frames * self.dt, CS.vEgo, enabled=motion_enabled and not neural)
+    # Preserve already-earned same-direction damping; this fills the missing
+    # friction-direction case without restoring any previously removed bite.
+    if not neural and friction_input_raw * friction_error > 0.0:
+      friction_credit = max(friction_credit, self._motion_credit.credit)
+    friction_input = transfer_motion_credit(friction_input_raw, friction_input_raw, friction_credit)
+    friction_credit = abs(friction_input_raw - friction_input)
     friction = get_friction(friction_input, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
     ff += friction
     self.feedback_diagnostics = {
       'neural': bool(neural), 'error_raw': float(setpoint - raw_measurement),
       'error_corrected': float(error), 'friction_input': float(friction_input), 'friction': float(friction),
       'friction_input_raw': float(friction_input_raw),
+      'friction_motion_credit': float(friction_credit), 'measured_accel_rate': float(measured_rate),
       'friction_coefficient': float(self.torque_params.friction), 'laf': float(self.torque_params.latAccelFactor),
       'offset': float(self.torque_params.latAccelOffset), 'bump_scale': float(damp),
       'future_accel': float(future_desired_lateral_accel), 'setpoint': float(setpoint),
@@ -258,7 +268,7 @@ class LatControlTorque(LatControl):
       # error is still the driver's own doing.
       freeze_integrator = (steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5 or
                           self._eps_governor.driver_limited or self._bump_damper.active or
-                          self._handback.soft_integrator or self._motion_credit.credit > 0.001)
+                          self._handback.soft_integrator or self._motion_credit.credit > 0.001 or friction_credit > 0.001)
       output_torque = 0.0
       if not neural:
         output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)

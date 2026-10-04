@@ -31,7 +31,10 @@ and contribution, effective torque tuning, bump/override/lane-change scales, and
 requested versus applied torque. From 3.7.10 the controller tap also includes
 the handback target, full-yield latch and return-ramp state. In 3.7.11 the
 force-triggered latch is removed; the tap instead reports an input-fault latch
-and the unmodified friction input for sign/credit comparisons. Every copied service has its original publish
+and the unmodified friction input for sign/credit comparisons. From 3.7.12 the
+tap also records friction-specific motion credit, measured acceleration rate,
+signal-off elapsed time and whether model consistency or timeout released the
+pause. Every copied service has its original publish
 and receive timestamp and validity. Missing/stale diagnostic taps are explicit.
 Communication-fault transitions, exact failed services, receive ages, recovery
 duration and the last gap-button edge are also retained in the bounded

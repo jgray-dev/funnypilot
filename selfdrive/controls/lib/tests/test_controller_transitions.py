@@ -292,3 +292,55 @@ def test_motion_credit_cannot_amplify_or_reverse_unwind_friction(controllers, di
   assert d['friction_input']*raw >= 0.0
   assert d['error_corrected'] == pytest.approx(direction*.04)
   assert d['future_accel'] == pytest.approx(direction*.1)
+
+
+@pytest.mark.parametrize('direction', [-1., 1.])
+@pytest.mark.parametrize('rate', [0., -4., 4.])
+def test_friction_earns_motion_credit_independently_of_tracking_error(controllers, direction, rate):
+  ctrl, cs, vm, params, _ = make_torque(controllers)
+  ctrl.torque_params.friction = .1
+  ctrl.lat_accel_request_buffer.extend([direction*.1] * ctrl.lat_accel_request_buffer_len)
+  # Current acceleration .2 overshoots the delayed .1 target, but jerk preview
+  # asks for +.2 friction. The wheel can be closing that friction request even
+  # while moving away from proportional error. Mirror both directions.
+  vm.calc_curvature = lambda angle, speed, roll: -angle/40.
+  cs.steeringAngleDeg = math.degrees(direction*.02)
+  ctrl._motion_credit.observe = lambda angle, now: direction*rate
+  ctrl.jerk_filter.update = lambda value: direction
+  _, _, state = ctrl.update(True, cs, vm, params, False, direction*.00025, None, False, .2)
+  d = ctrl.feedback_diagnostics
+  assert d['error_raw'] == pytest.approx(-direction*.1)
+  assert d['friction_input_raw'] == pytest.approx(direction*.2)
+  assert d['future_accel'] == pytest.approx(direction*.1)
+  if rate > 0.:
+    assert ctrl._motion_credit.credit == 0.
+    assert .35*abs(d['friction_input_raw']) <= abs(d['friction_input']) < abs(d['friction_input_raw'])
+    assert 0. < d['friction_motion_credit'] <= .12
+    assert state.i == 0.  # new friction-only damping must freeze integration
+  else:
+    assert d['friction_input'] == pytest.approx(d['friction_input_raw'])
+
+
+def test_blinker_release_keeps_gradual_torque_return(controllers, monkeypatch):
+  ctrl, cs, vm, params, _ = make_torque(controllers)
+  clock = [10.]
+  monkeypatch.setattr(controllers['latcontrol_torque'].time, 'monotonic', lambda: clock[0])
+  cs.leftBlinker = True
+  tick(ctrl, cs, vm, params, active=False)
+  cs.leftBlinker = False
+  # A timeout release must still start the pre-existing three-second ramp.
+  clock[0] += .67
+  output, _, _ = tick(ctrl, cs, vm, params)
+  assert ctrl._reengage_start_time == clock[0]
+  assert output == pytest.approx(-ctrl.pid.control / 2.75 * .15)
+  captured = []
+  real_governor = ctrl._eps_governor.update
+  def capture(request, driver):
+    captured.append(request)
+    return real_governor(request, driver)
+  ctrl._eps_governor.update = capture
+  for i in range(1, 301):
+    clock[0] = 10.67 + i*.01
+    output, _, _ = tick(ctrl, cs, vm, params)
+    assert captured[-1] == pytest.approx(-ctrl.pid.control / 2.75 * (.15+.85*i/300))
+    assert output == ctrl._eps_governor.last_out

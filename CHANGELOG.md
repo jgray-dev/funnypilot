@@ -1,3 +1,20 @@
+## 3.7.12 — 2026-10-04
+
+Based on clean 3.7.11 `f7e393810`. Source release; vehicle validation pending.
+
+- Bound the post-blinker comfort pause: consistent curved predictions can
+  release after 0.30 s; otherwise fall back after 0.67 s from signal-off.
+  Both respect a longer configured delay. Model disagreement cannot restart
+  the timeout; fresh valid model data and ordinary engagement gates remain.
+- Address a remaining friction-damping gap in the new 3.7.11 steering-bite
+  recording. Jerk-preview friction earns its own signed wheel-motion credit
+  even when tracking error points the other way. Keep existing damping/bounds,
+  path timing, physical steering limits and the gradual handover torque ramp.
+- Record friction-specific credit, measured acceleration rate, signal-off
+  elapsed time and model/timeout release reason in the existing feedback tap.
+
+Evidence, regression checks and limits: `docs/release-3.7.12.md`.
+
 ## 3.7.11 — 2026-10-04
 
 Based on clean 3.7.10 `71d40983c`. Source release; vehicle validation pending.

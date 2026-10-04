@@ -95,7 +95,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.11"
+EXPECTED_VERSION = "3.7.12"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -152,6 +152,8 @@ _CODE_MARKERS = [
   ("v3.3.6", "/data/openpilot/selfdrive/controls/controlsd.py", "controlsd smoother wiring"),
   ("v3.3.2", "/data/openpilot/sunnypilot/modeld_v2/modeld.py", "EMA smoothing revert"),
   ("self.input_fault", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "force does not latch zero assistance"),
+  ("friction_motion_credit", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "independent friction-motion damping"),
+  ("FALLBACK_SECONDS = 0.67", "/data/openpilot/sunnypilot/selfdrive/controls/lib/blinker_pause_lateral.py", "bounded post-signal comfort pause"),
   ("transfer_motion_credit", "/data/openpilot/selfdrive/controls/lib/latcontrol_torque.py", "sign-preserving friction credit"),
   ("def tar_chunks", "/data/openpilot/sunnypilot/navd/drive_download.py", "active-recording export snapshots"),
   ("NUDGE_SCALE = 0.85", "/data/openpilot/selfdrive/controls/lib/lat_handback.py", "graded driver handover"),

@@ -63,28 +63,31 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.11 — Key Files
+## Current version: 3.7.12 — Key Files
 
-Based on clean 3.7.10 `71d40983c946861a570c6adedb7e5506544c23ef`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.11 `f7e393810c8478969d7afd1722b82e92c05d4b8e`. Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. 3.7.11 is source-only until separately installed; evidence and validation limits:
-`docs/release-3.7.11.md` (previous release: `docs/release-3.7.10.md`).
+verification limits: `docs/engagement-3.7.5.md`. 3.7.12 is source-only until separately installed; evidence and validation limits:
+`docs/release-3.7.12.md` (previous release: `docs/release-3.7.11.md`).
 
-- `model_settle.py`: fresh, distinct model frames must agree through the minimum
-  0.67 s (or longer configured delay); handover also checks current curvature.
-  Compare overlapping plans at the same future instant; gentle curve evolution
-  is valid. Guiding pressure alone must not reset the dwell; model/vehicle
-  agreement decides the handover. Stale/invalid/maneuvering plans stay blocked.
+- `model_settle.py` / `blinker_pause_lateral.py`: consistency permits early
+  release after 0.30 s; signal-off fallback is 0.67 s (both honor a longer
+  configured delay). Prediction disagreement cannot restart the timeout.
+  Preserve freshness/validity, model-maneuver exclusion, ordinary engagement
+  gates and the existing three-second torque ramp. Pressure/angle are not vetoes.
 - `lat_handback.py`: finite driver torque must not latch all assistance at zero.
   The 3.7.10 latch suppressed even torque agreeing with the driver's new turn.
   Comfort retains a 60–85% scale; directional EPS/Panda limits remain final.
   Only invalid inputs latch zero pending valid release. Do not infer intent
   from a torque threshold or reintroduce a hands-off recovery requirement.
-- `steering_motion.transfer_motion_credit`: friction has jerk preview and may
-  oppose tracking error during unwind. Credit must not amplify it, reverse its
-  sign, or exceed the existing budget. Do not filter model knots to fix this.
+- `steering_motion.motion_credit`: tracking error and jerk-preview friction
+  earn signed wheel-motion credit independently. The 3.7.11 bite clip exposes
+  friction that kept pushing despite surplus motion while tracking error had
+  the opposite sign. Preserve prior same-direction damping, the 0.12 m/s²
+  budget and 35% correction floor; no filtering of model knots. This closes
+  a measured damping gap, not a vehicle-validated cure for all oscillation.
 - `navd/drive_download.py`: on-road exports are available. Snapshot each open
   file's size, stream bounded chunks on the background worker, close on cancel,
   and abort visibly on truncation. Never read a growing file past its tar size.

@@ -16,9 +16,9 @@ def tick(gate, i, **kw):
 
 def test_fresh_curved_plan_requires_full_dwell():
   gate = ModelSettle()
-  for i in range(14):
+  for i in range(6):
     assert not tick(gate, i)
-  assert tick(gate, 14)
+  assert tick(gate, 6)
 
 
 @pytest.mark.parametrize('bad', [dict(valid=False), dict(received=0.), dict(received=100.),
@@ -26,12 +26,12 @@ def test_fresh_curved_plan_requires_full_dwell():
   dict(model=model(float('nan'))), dict(model=model(3.))])
 def test_invalid_or_disagreeing_data_resets_dwell(bad):
   gate = ModelSettle()
-  for i in range(14):
+  for i in range(6):
     assert not tick(gate, i)
-  assert not tick(gate, 14, **bad)
-  for i in range(15, 29):
+  assert not tick(gate, 6, **bad)
+  for i in range(7, 13):
     assert not tick(gate, i)
-  assert tick(gate, 29)
+  assert tick(gate, 13)
 
 
 def test_duplicates_stall_and_slow_drift_never_satisfy_dwell():
@@ -41,7 +41,7 @@ def test_duplicates_stall_and_slow_drift_never_satisfy_dwell():
     assert not tick(gate, 0, now=1+i*.01)
   gate.reset()
   for i in range(40):
-    accel = .5+(i % 20)*.04
+    accel = .5+(i % 20)*.08
     assert not tick(gate, i, model=model(accel), measured_curvature=accel/100)
 
 
@@ -51,12 +51,12 @@ def test_configured_delay_and_missing_frames():
     assert not tick(gate, i, delay=2.)
   assert tick(gate, 40, delay=2.)
   gate.reset()
-  for i in range(13):
+  for i in range(5):
     assert not tick(gate, i)
   assert not tick(gate, 20)  # gap restarts the dwell
-  for i in range(21, 34):
+  for i in range(21, 26):
     assert not tick(gate, i)
-  assert tick(gate, 34)
+  assert tick(gate, 26)
 
 
 def test_ten_second_user_delay_is_not_shortened():
@@ -78,14 +78,14 @@ def test_maneuver_or_corrupt_trajectory_cannot_unlock(field, value):
 @pytest.mark.parametrize('direction', [-1, 1])
 def test_coherent_gentle_curve_transition_unlocks_at_minimum_dwell(direction):
   gate = ModelSettle()
-  for i in range(15):
+  for i in range(7):
     # Every frame predicts the same evolving turn. Neither the future path nor
     # the current wheel is straight, and the one-second horizon changes by .7.
     accel = direction * (0.2 + .7*i*.05)
     m = model(accel)
     m.orientationRate.z = [(accel+direction*.7*t)/10 for t in m.orientationRate.t]
     ready = tick(gate, i, model=m, measured_curvature=accel/100)
-    assert ready == (i == 14)
+    assert ready == (i == 6)
 
 
 def test_abrupt_future_turn_and_action_path_disagreement_do_not_unlock():
