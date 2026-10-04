@@ -11,14 +11,15 @@ and history live on the version branches.
   `a`, `b`, `e` and `st` denote separate cuts, not interchangeable aliases.
   Compare numeric components (3.7.10 > 3.7.2); a suffixed cut follows its bare
   version. Newest does not mean vehicle-tested or appropriate for every task.
-- Current development version: **`funnypilot-3.7.11`**, release commit
-  `f7e393810`, based on clean 3.7.10 `71d40983c`. Fixes the force-triggered
-  zero-assistance latch confirmed in steering-wander reports, sign handling of
-  unwind friction credit, and the steering-pressure veto on stable curved
-  post-signal handover. Enables bounded video/data exports during recording.
-  All 287 targeted host regressions pass; vehicle validation remains pending.
-  Read `docs/release-3.7.11.md` for evidence and limits. GitHub source release
-  only; pushing does not install this version on a device.
+- Current development version: **`funnypilot-3.7.12`**, release commit
+  `8044d1fe6`, based on clean 3.7.11 `f7e393810`. Consistent model plans may
+  release the post-signal pause after 0.30 s, with a 0.67 s comfort fallback
+  (longer configured delay and ordinary health/engagement gates remain).
+  Independent friction-direction motion credit addresses a damping gap in
+  the new steering-bite recording; physical symptom validation is pending.
+  All 302 targeted host regressions pass. Read `docs/release-3.7.12.md` for
+  evidence and limits. GitHub source release only; pushing does not install
+  this version on a device.
 - The user's requested version takes precedence over this pointer. If already
   working on a version branch, do not switch away or discard changes just to
   follow the newest branch. For device diagnosis, match its actual branch/hash;
@@ -42,7 +43,7 @@ and history live on the version branches.
 3. Choose the requested branch, or the current-development branch above if none
    was specified. Read its guidance **before** editing:
    ```bash
-   BRANCH=funnypilot-3.7.11  # replace if a different version was requested
+   BRANCH=funnypilot-3.7.12  # replace if a different version was requested
    git show "funnypilot/$BRANCH:CLAUDE.md"
    ```
 4. If no local branch of that name exists:
