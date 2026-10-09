@@ -151,7 +151,7 @@ class SelfdriveD(CruiseHelper):
 
     # Optional capture/remote diagnostics must not refuse engagement or disable
     # a drive on IO failure. Manager still supervises and logs these processes.
-    self.ignored_processes = {'mapd', 'funnypilot_feedback', 'funnypilot_astra'}
+    self.ignored_processes = {'mapd', 'funnypilot_feedback', 'funnypilot_astra', 'funnypilot_harvest'}
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote

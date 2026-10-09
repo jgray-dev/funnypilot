@@ -95,7 +95,7 @@ _FEEL_FILES = [
 ]
 
 # Expected version for the running branch (used by /api/diagnostics).
-EXPECTED_VERSION = "3.7.12"
+EXPECTED_VERSION = "3.7.13"
 
 # FunnyPilot v3.5.8 — FLASH-TIME HOUSEKEEPING.
 #
@@ -350,11 +350,12 @@ _CODE_MARKERS = [
   ("class Capture", "/data/openpilot/sunnypilot/feedback/capture.py", "durable surrounding feedback capture"),
   ("PENALTY_RELIEF = 0.10", "/data/openpilot/sunnypilot/feedback/corner_feedback.py", "bounded per-corner feedback relief"),
   ("def upload_event", "/data/openpilot/sunnypilot/feedback/uploader.py", "private resumable feedback uploads"),
+  ("def upload_segment", "/data/openpilot/sunnypilot/harvest/uploader.py", "checksummed drive harvesting uploads"),
   ("ss.alertType in QUIET_ALERT_TYPES", "/data/openpilot/selfdrive/ui/onroad/alert_renderer.py", "engagement and calibration faults visible"),
   ("def model_overlay_ready", "/data/openpilot/selfdrive/ui/onroad/model_status.py", "calibrated model overlay readiness"),
   ("def availability_message", "/data/openpilot/selfdrive/ui/onroad/availability.py", "blocking faults visible without an engage request"),
   ("super()._render(self._content_rect)", "/data/openpilot/selfdrive/ui/onroad/augmented_road_view.py", "camera and lane projection share viewport"),
-  ("self.ignored_processes = {'mapd', 'funnypilot_feedback', 'funnypilot_astra'}", "/data/openpilot/selfdrive/selfdrived/selfdrived.py",
+  ("self.ignored_processes = {'mapd', 'funnypilot_feedback', 'funnypilot_astra', 'funnypilot_harvest'}", "/data/openpilot/selfdrive/selfdrived/selfdrived.py",
    "optional feedback/Astra health does not gate driving"),
   ('PythonProcess("funnypilot_astra", "sunnypilot.astra_link.daemon", always_run, restart_if_crash=True)',
    "/data/openpilot/system/manager/process_config.py", "optional Astra supervision"),

@@ -1,3 +1,18 @@
+## 3.7.13 — 2026-10-09
+
+Based on clean 3.7.12 `8044d1fe6`. Source release; not installed, no driving-behavior change.
+
+- Add drive harvesting for training your own models: `funnypilot_harvest` uploads
+  every closed one-minute segment (road + wide-road video, rlog, qlog, qcamera) to a
+  private R2 bucket through the new `funnypilot-drives` Worker. Parked on Wi-Fi only,
+  16 MiB SHA-256-verified parts, resumable, no msgq subscriber, inert until the device
+  has a `cloud.json`. Cabin camera and audio are never read or accepted.
+- Deleter: unharvested drives outlive the 7-day expiry for up to 30 days while linked;
+  under free-space pressure harvested segments are removed first. Pressure still deletes.
+- `tools/drives_cloud.py`: stats, listing and checksum-verified download.
+
+Design, costs, provisioning and the machine-learning plan: `docs/harvest-3.7.13.md`.
+
 ## 3.7.12 — 2026-10-04
 
 Based on clean 3.7.11 `f7e393810`. Source release; vehicle validation pending.

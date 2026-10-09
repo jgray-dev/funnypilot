@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "funnypilot-drives",
+  "main": "src/index.ts",
+  "account_id": "831514824c4a5fba9c759e88c09ff40c",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "secrets": {"required": ["UPLOAD_TOKEN"]},
+  "observability": {"enabled": true, "head_sampling_rate": 0.05},
+  "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "funnypilot-drives"}],
+  "d1_databases": [{"binding": "DB", "database_name": "funnypilot-drives", "database_id": "bc0ad43c-2294-4620-93fb-ffed2086d0b3", "migrations_dir": "migrations"}]
+}

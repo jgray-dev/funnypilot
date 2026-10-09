@@ -63,15 +63,23 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.12 — Key Files
+## Current version: 3.7.13 — Key Files
 
-Based on clean 3.7.11 `f7e393810c8478969d7afd1722b82e92c05d4b8e`. Preserves the fix for the 3.7.1a
+Based on clean 3.7.12 `8044d1fe658d0f2b49bb4c47e3990e200beab912` (3.7.11 `f7e393810c8478969d7afd1722b82e92c05d4b8e` before it). Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report
 recorder's carState subscription was the 16th, which evicted every reader
 (liveCalibration/livePose invalid, no engagement). Census, mechanism and
-verification limits: `docs/engagement-3.7.5.md`. 3.7.12 is source-only until separately installed; evidence and validation limits:
-`docs/release-3.7.12.md` (previous release: `docs/release-3.7.11.md`).
+verification limits: `docs/engagement-3.7.5.md`. 3.7.13 is source-only until separately installed; it adds drive harvesting for model
+training (`docs/harvest-3.7.13.md`). Previous release notes: `docs/release-3.7.12.md`.
 
+- `sunnypilot/harvest/{harvestd,segments,uploader,retention}.py`: uploads every closed
+  segment (road/wide video + rlog/qlog/qcamera; never cabin video or audio) to the
+  `funnypilot-drives` Worker while parked on Wi-Fi. Holds NO msgq subscription. Idle
+  until `/data/funnypilot_harvest/cloud.json` exists. The `user.fp_harvested` xattr is
+  the only ledger. `deleter.py` waits up to 30 days for the cloud copy before 7-day
+  expiry, and spends harvested segments first under pressure; free-space pressure always
+  still deletes. Worker/source: `cloud/drives`; training-side CLI: `tools/drives_cloud.py`.
+  `funnypilot_harvest` is in selfdrived's ignored processes. Never gate driving on it.
 - `model_settle.py` / `blinker_pause_lateral.py`: consistency permits early
   release after 0.30 s; signal-off fallback is 0.67 s (both honor a longer
   configured delay). Prediction disagreement cannot restart the timeout.

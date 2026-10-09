@@ -10,6 +10,7 @@ from openpilot.system.loggerd.config import get_available_bytes, get_available_p
 from openpilot.system.loggerd.uploader import listdir_by_creation
 from openpilot.system.loggerd.xattr_cache import getxattr
 from openpilot.system.loggerd import drive_retention
+from openpilot.sunnypilot.harvest import retention as harvest
 
 MIN_BYTES = 5 * 1024 * 1024 * 1024
 MIN_PERCENT = 15
@@ -51,10 +52,15 @@ def get_preserved_segments(dirs_by_creation: list[str]) -> set[str]:
   return preserved
 
 
-def _clean_one(root, saved, low_space, preserved=(), archive_root=None, pinned=()):
+def _clean_one(root, saved, low_space, preserved=(), archive_root=None, pinned=(), harvesting=False):
   dirs = listdir_by_creation(root)
   expired = drive_retention.expired_routes(root, dirs)
-  for name in sorted(dirs, key=lambda d: (d in DELETE_LAST, d in preserved)):
+  if harvesting:
+    expired -= harvest.awaiting_harvest(root, dirs, expired)
+  # Under pressure, spend what the cloud already has before what it lacks.
+  def delete_order(d):
+    return (d in DELETE_LAST, d in preserved, harvesting and low_space and harvest.unharvested_last(root, d))
+  for name in sorted(dirs, key=delete_order):
     route = drive_retention.segment_route(name)
     if name in pinned or route in saved or (not low_space and route not in expired):
       continue
@@ -102,6 +108,7 @@ def cleanup_once(pressure=None, expire=True):
         pressure[kind] = low
       return low
     low_space = pressured('internal')
+    harvesting = harvest.linked()
     changed = False
     archive_root = None
     external = Paths.log_root_external()
@@ -116,7 +123,7 @@ def cleanup_once(pressure=None, expire=True):
     if not low_space and not expire:
       return changed
     preserved = get_preserved_segments(listdir_by_creation(root)) if low_space else set()
-    return _clean_one(root, saved, low_space, preserved, archive_root, pinned) or changed
+    return _clean_one(root, saved, low_space, preserved, archive_root, pinned, harvesting) or changed
 
 
 def deleter_thread(exit_event: threading.Event):
