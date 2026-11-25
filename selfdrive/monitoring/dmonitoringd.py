@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+import time
+
 import cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
 from openpilot.selfdrive.monitoring.helpers import DriverMonitoring
+
+STUB_PERIOD_S = 0.05
 
 
 def dmonitoringd_thread():
@@ -16,11 +20,19 @@ def dmonitoringd_thread():
   DM = DriverMonitoring(rhd_saved=params.get_bool("IsRhdDetected"), always_on=params.get_bool("AlwaysOnDM"))
   demo_mode=False
 
+  last_stub = 0.0
+
   # 20Hz <- dmonitoringmodeld
   while True:
-    sm.update()
+    sm.update(50)
     if not sm.updated['driverStateV2']:
-      # iterate when model has new output
+      # FunnyPilot 3.7.14: dmonitoringmodeld no longer runs onroad. Publish an un-stepped
+      # (no events, full awareness) state at 20 Hz so subscribers stay fed; DM.run_step
+      # is never called here, so nothing can alert or lock out.
+      now = time.monotonic()
+      if now - last_stub >= STUB_PERIOD_S:
+        last_stub = now
+        pm.send('driverMonitoringState', DM.get_state_packet(valid=True))
       continue
 
     valid = sm.all_checks()

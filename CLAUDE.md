@@ -63,7 +63,11 @@
   memory, retries and logs bounded. Saved drives are hard deletion exclusions;
   corrupt retention metadata must pause deletion, not mean "nothing saved".
 
-## Current version: 3.7.13 — Key Files
+## Current version: 3.7.14 — Key Files
+
+3.7.14 (Python-only, based on clean 3.7.13 `b584e001f`) disables ESC-off and driver-monitoring
+disengagements, stops `dmonitoringmodeld` outside driver view and tapers lateral torque
+10→0 mph; see `CHANGELOG.md`. The 3.7.13 notes below still apply.
 
 Based on clean 3.7.12 `8044d1fe658d0f2b49bb4c47e3990e200beab912` (3.7.11 `f7e393810c8478969d7afd1722b82e92c05d4b8e` before it). Preserves the fix for the 3.7.1a
 engagement regression: msgq allows 15 readers per service, and the Report

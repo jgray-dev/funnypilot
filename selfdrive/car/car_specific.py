@@ -113,8 +113,9 @@ class CarSpecificEvents:
       events.add(EventName.reverseGear)
     if not CS.cruiseState.available:
       events.add(EventName.wrongCarMode)
-    if CS.espDisabled:
-      events.add(EventName.espDisabled)
+    # FunnyPilot 3.7.14: ESC/TCS-off no longer disengages or blocks engagement.
+    # if CS.espDisabled:
+    #   events.add(EventName.espDisabled)
     if CS.espActive:
       events.add(EventName.espActive)
     if CS.stockFcw:

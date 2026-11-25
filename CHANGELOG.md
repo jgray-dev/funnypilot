@@ -1,3 +1,18 @@
+## 3.7.14 — 2026-11-25
+
+Based on clean 3.7.13 `b584e001f`. Python-only; same AGNOS (16), no schema, Params or compiled-code change.
+
+- ESC/TCS-off (`espDisabled`) no longer raises a soft-disable or a no-entry. Seatbelt
+  was already removed from `car_specific.py` in earlier releases. `espActive` is untouched.
+- Driver monitoring is off in practice and its compute is freed: `dmonitoringmodeld`
+  now runs only while driver view is open. `dmonitoringd` publishes an un-stepped default
+  `driverMonitoringState` at 20 Hz so modeld (`isRHD`), the UI and controlsd stay fed;
+  `DM.run_step` is never called, so nothing can alert or lock out. No new subscribers.
+- Low-speed torque taper is now 100% at 10 mph, 50% at 5 mph, 0% at 0 mph (was 0-15 mph).
+  Unchanged: applied before the EPS governor, so EPS/Panda limits stay final.
+- Not verified on the car: whether ESC-off makes the K5 set `accFaulted`
+  (`TCS13.ACCEnable != 0`), which would still disengage.
+
 ## 3.7.13 — 2026-10-09
 
 Based on clean 3.7.12 `8044d1fe6`. Source release; not installed, no driving-behavior change.

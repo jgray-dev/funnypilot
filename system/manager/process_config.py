@@ -18,6 +18,9 @@ WEBCAM = os.getenv("USE_WEBCAM") is not None
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
 
+def driver_view_only(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return params.get_bool("IsDriverViewEnabled")
+
 def notcar(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and CP.notCar
 
@@ -123,7 +126,10 @@ procs = [
   PythonProcess("timed", "system.timed", always_run, enabled=not PC),
 
   PythonProcess("modeld", "selfdrive.modeld.modeld", and_(only_onroad, is_stock_model)),
-  PythonProcess("dmonitoringmodeld", "selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC)),
+  # FunnyPilot 3.7.14: driver monitoring is disabled. The DM model only runs while
+  # driver view is open (mounting/calibration); dmonitoringd keeps publishing a
+  # default driverMonitoringState so consumers (modeld isRHD, UI, controlsd) stay fed.
+  PythonProcess("dmonitoringmodeld", "selfdrive.modeld.dmonitoringmodeld", driver_view_only, enabled=(WEBCAM or not PC)),
 
   PythonProcess("sensord", "system.sensord.sensord", only_onroad, enabled=not PC),
   PythonProcess("ui", "selfdrive.ui.ui", always_run, restart_if_crash=True),

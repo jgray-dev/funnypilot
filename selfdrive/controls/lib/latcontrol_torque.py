@@ -321,10 +321,12 @@ class LatControlTorque(LatControl):
       reengage_scale = self._REENGAGE_RAMP_START + (1.0 - self._REENGAGE_RAMP_START) * reengage_progress
       output_torque *= reengage_scale
 
-      # FunnyPilot: Smooth stopping - Reduce torque linearly from 0-15mph
+      # FunnyPilot 3.7.14: smooth stopping — torque scales linearly from 100% at
+      # 10 mph to 50% at 5 mph to 0% at 0 mph (the K5 clunks when it is asked for
+      # torque while rolling to a stop). Was 0-15 mph before 3.7.14.
       speed_mph = CS.vEgo * 2.23694
-      if speed_mph < 15.0:
-        torque_scale = max(0.0, speed_mph / 15.0)
+      if speed_mph < 10.0:
+        torque_scale = max(0.0, speed_mph / 10.0)
         output_torque *= torque_scale
 
       # FunnyPilot v3.2.3st driver-override softening, v3.2.8 gated, v3.4.9
