@@ -104,16 +104,14 @@ class CarSpecificEvents:
 
     if CS.doorOpen:
       events.add(EventName.doorOpen)
-    if CS.seatbeltUnlatched:
-      events.add(EventName.seatbeltNotLatched)
+    # FunnyPilot: seatbelt check removed
     if CS.gearShifter != GearShifter.drive and CS.gearShifter not in CI.DRIVABLE_GEARS:
       events.add(EventName.wrongGear)
     if CS.gearShifter == GearShifter.reverse:
       events.add(EventName.reverseGear)
     if not CS.cruiseState.available:
       events.add(EventName.wrongCarMode)
-    if CS.espDisabled:
-      events.add(EventName.espDisabled)
+    # FunnyPilot: ESC/TCS-off (espDisabled) check removed
     if CS.espActive:
       events.add(EventName.espActive)
     if CS.stockFcw:
