@@ -8,6 +8,8 @@ Based on clean 3.7.13 `b584e001f`. Python-only; same AGNOS (16), no schema, Para
   now runs only while driver view is open. `dmonitoringd` publishes an un-stepped default
   `driverMonitoringState` at 20 Hz so modeld (`isRHD`), the UI and controlsd stay fed;
   `DM.run_step` is never called, so nothing can alert or lock out. No new subscribers.
+- `circular_alerts` (green light, lead departing, standstill timer) now waits on a fresh
+  `driverMonitoringState` instead of `driverStateV2`, which no longer flows onroad.
 - Low-speed torque taper is now 100% at 10 mph, 50% at 5 mph, 0% at 0 mph (was 0-15 mph).
   Unchanged: applied before the EPS governor, so EPS/Panda limits stay final.
 - Not verified on the car: whether ESC-off makes the K5 set `accFaulted`
